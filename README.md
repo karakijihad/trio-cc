@@ -9,7 +9,7 @@ both agents working side by side in a live browser window.
 Three participants, and the third one is you. Trio automates the handoff, not
 the judgement.
 
-> **Status: v0.3.0.** Install: `/plugin marketplace add karakijihad/trio-cc` then
+> **Status: v0.4.0.** Install: `/plugin marketplace add karakijihad/trio-cc` then
 > `/plugin install trio@trio-cc`, `/reload-plugins`, `/trio`.
 > Verified against Codex CLI 0.146.0.
 
@@ -154,8 +154,9 @@ unparseable output can never resolve `clean`.
 `Docs/Audit/codex/YYYY-MM-DD/audit-N.md` (Codex's findings, as reported) and
 `Docs/Audit/claude/YYYY-MM-DD/audit-N.md` (the reconciliation, the
 disagreement table, the open findings). `N` counts up per day; nothing is
-overwritten. If `Docs/Audit` doesn't exist in the project, promotion is
-skipped — the raw run still sits under `.trio/runs/`.
+overwritten. If `Docs/Audit` doesn't exist in the project, the run offers to
+create it once and promotes itself if you say yes — the raw run sits under
+`.trio/runs/` either way.
 
 **The event log** — both agents append every step to one file,
 `.trio/runs/<runId>/events.jsonl`. The viewer just tails it; killing the
@@ -248,6 +249,7 @@ Every key in `.trio/config.json`, with its default:
 | `converge.blockOn`              | `["critical","major"]` | Severities that must have zero open findings before a run can converge.                                                                                                |
 | `converge.requireNoNewFindings` | `true`                 | A pass with a brand-new finding can't converge either, even with nothing blocking open.                                                                                |
 | `artifacts.promoteTo`           | `Docs/Audit`           | Where finished audits are promoted on completion, if the directory exists.                                                                                             |
+| `artifacts.offerToCreate`       | `true`                 | Whether a finished run offers to create `artifacts.promoteTo` when it is missing. Declining the offer sets this false; nothing asks again.                             |
 
 Config lives at `.trio/config.json` in the project root — change it with
 `/trio:config set <key> <value>` or by editing the file directly. `.trio/` is
@@ -267,11 +269,31 @@ nothing to your home directory and nothing outside the project.
   when a run finishes: Codex's findings, and Claude's adjudication with the
   disagreements. `N` increments; nothing is ever overwritten.
 
-**Promotion is skipped silently when `Docs/Audit/` does not exist.** That is
-deliberate — Trio does not create directory trees in your repo uninvited. If
-you finished a run and found no promoted files, that is why: run
-`mkdir -p Docs/Audit` once, and every later run lands there. Point it
-somewhere else with `/trio:config set artifacts.promoteTo <path>`.
+**Promotion needs `Docs/Audit/` to exist, and Trio will not create it behind
+your back.** So the first time a run finishes in a project without one, Claude
+tells you what the verdict was and then asks once:
+
+```
+Nothing was promoted — this project has no Docs/Audit/.
+  Create it and write this audit there?   [ yes / no ]
+```
+
+**Yes** creates the directory _and_ promotes the run you just watched — you
+get that audit, not just the next one. **No** is remembered
+(`artifacts.offerToCreate` goes false) and you are never asked again. Either
+way the raw run is already on disk under `.trio/runs/<runId>/`, so nothing is
+lost by declining.
+
+Changed your mind later? `/trio:config set artifacts.offerToCreate true`, or
+just promote any finished run by hand:
+
+```
+trio promote                 # the most recent finished run
+trio promote <runId> --create   # create the directory too
+```
+
+Point promotion somewhere else with
+`/trio:config set artifacts.promoteTo <path>`.
 
 ---
 

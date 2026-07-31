@@ -128,6 +128,14 @@ export function renderReconciliation({ runId, passes, date, verdict }) {
   ].join("\n");
 }
 
+// Where promotion would write, and whether that place exists yet. The run
+// result carries this so Claude can offer to create it instead of the
+// operator finding out later that nothing was promoted.
+export function promoteTarget(root, config) {
+  const path = config.artifacts.promoteTo;
+  return { path, absolute: join(root, path), exists: existsSync(join(root, path)) };
+}
+
 export function promote({
   root,
   config,

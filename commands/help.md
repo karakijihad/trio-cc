@@ -30,7 +30,7 @@ Explain that one thing in depth, in Trio's own terms, using the reference
 below. Topics include a command name, a concept (`lens`, `finding`, `pass`,
 `reconciler`, `convergence`, `verdict`, `promotion`, `model`, `view`), a lens
 name (`auditor`, `security`, `tester`, `simplifier`, `consistency`), or a
-config key (`enabled`, `maxIterations`, `codex.parallel`,
+config key (`enabled`, `maxIterations`, `codex.parallel`, `artifacts.offerToCreate`,
 `codex.lenses`, `view.mode`, `view.port`, `view.autoOpen`,
 `converge.blockOn`, `converge.requireNoNewFindings`,
 `artifacts.promoteTo`). If the topic doesn't match anything below, say so and
@@ -74,9 +74,10 @@ name the closest match.
 - **Promotion** — on finish, audits render to
   `Docs/Audit/codex/YYYY-MM-DD/audit-N.md` (Codex's findings) and
   `Docs/Audit/claude/YYYY-MM-DD/audit-N.md` (the reconciliation and
-  disagreement table). `N` increments; nothing overwritten. **Silently skipped
-  if `Docs/Audit` doesn't exist** — Trio does not create directory trees
-  uninvited, so `mkdir -p Docs/Audit` once is what turns promotion on. Raw
+  disagreement table). `N` increments; nothing overwritten. Needs
+  `Docs/Audit` to exist — Trio never creates it uninvited, so a finished run
+  in a project without one **offers once** to create it and promote that run;
+  declining sets `artifacts.offerToCreate` false and it never asks again. Raw
   runs always live in `.trio/runs/<runId>/`, per project, gitignored.
 - **The event log** — both agents append to `.trio/runs/<runId>/events.jsonl`.
   The viewer tails it; kill the viewer and the audit continues — the log is
@@ -122,4 +123,5 @@ it thinks."
 | `view.autoOpen`                 | `true`                 | Auto-open the browser in `window` mode.        |
 | `converge.blockOn`              | `["critical","major"]` | Severities that must be all-clear to converge. |
 | `converge.requireNoNewFindings` | `true`                 | A new finding blocks convergence too.          |
+| `artifacts.offerToCreate`       | `true`                 | Offer to create the promote directory once.    |
 | `artifacts.promoteTo`           | `Docs/Audit`           | Where finished audits are promoted.            |

@@ -68,3 +68,30 @@ Report exactly what `verdict.json` says:
 - Any lens marked `failed` or `unparseable` — say coverage was partial and name the lens.
 
 Never round a partial or ceiling-limited run up to "clean".
+
+## If nothing was promoted
+
+A finished run carries `promotion: {skipped, path, offer}` when there was
+nowhere to promote to — the project has no `Docs/Audit/` (or whatever
+`artifacts.promoteTo` names). Trio never creates directories in a project on
+its own, so this is the one time to ask.
+
+When `promotion.offer` is true, report the verdict first, then ask once with
+`AskUserQuestion` — a single question, two options:
+
+- **Yes** → run
+  `node "${CLAUDE_PLUGIN_ROOT}/bin/trio.mjs" promote <runId> --create`.
+  That creates the directory _and_ promotes the run you just finished, so the
+  audit in front of them is written out, not only future ones. Show both
+  paths it prints.
+- **No** → run
+  `node "${CLAUDE_PLUGIN_ROOT}/bin/trio.mjs" config set artifacts.offerToCreate false`
+  so the offer never comes back, and carry on. The raw run is still under
+  `.trio/runs/<runId>/` either way.
+
+When `promotion.offer` is false the operator has already declined. Say
+nothing about it — one line noting the raw run path is enough.
+
+Both sides are promoted: `codex/YYYY-MM-DD/audit-N.md` is Codex's findings as
+reported, and `claude/YYYY-MM-DD/audit-N.md` is your adjudication — the
+verdict per finding, the disagreement table, and what stayed open.

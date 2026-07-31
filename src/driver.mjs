@@ -11,7 +11,7 @@ import { runPass, finalizeRun, newRunId } from "./orchestrator.mjs";
 import { buildLensPrompt, readPassResponse, claudeChanges } from "./prompt.mjs";
 import { diffPasses, isConverged } from "./findings.mjs";
 import { applyVerdicts } from "./reconcile.mjs";
-import { promote } from "./promote.mjs";
+import { promote, promoteTarget } from "./promote.mjs";
 import { readEvents, makeEvent, appendEvent } from "./bus.mjs";
 import { runDir, passDir, activeMarker, trioDir } from "./paths.mjs";
 import { readMarker, writeMarker, removeMarker } from "./marker.mjs";
@@ -104,6 +104,34 @@ function collectPasses(root, runId) {
   return passes;
 }
 
+// Promotes a run that has already finished — what "yes, create it" runs, so
+// the audit the operator just watched is written out too, not only the next
+// one. `create` is the operator's answer: without it this is a dry no-op,
+// because Trio does not make directories in a project on its own.
+export function promoteRun({ root, config, runId, create = false }) {
+  const verdictPath = join(runDir(root, runId), "verdict.json");
+  let verdict;
+  try {
+    verdict = JSON.parse(readFileSync(verdictPath, "utf8")).verdict;
+  } catch {
+    return { ok: false, error: `no finished run at ${runId}` };
+  }
+
+  const target = promoteTarget(root, config);
+  if (!target.exists) {
+    if (!create) return { ok: false, error: `${target.path} does not exist` };
+    mkdirSync(target.absolute, { recursive: true });
+  }
+
+  const passes = collectPasses(root, runId);
+  if (!passes.length) return { ok: false, error: `run ${runId} has no passes` };
+
+  const promoted = promote({ root, config, runId, passes, verdict });
+  return promoted
+    ? { ok: true, created: !target.exists, promoted }
+    : { ok: false, error: "promotion produced nothing" };
+}
+
 // The highest pass-<n>/reconcile.json under the run dir, or null if none.
 function latestCompletedPass(root, runId) {
   let entries;
@@ -159,7 +187,25 @@ function finalize({ root, runId, config, verdict }) {
         }),
       );
     }
-    return { status: "finished", verdict, runId, passes: passes.length, promoted };
+    return {
+      status: "finished",
+      verdict,
+      runId,
+      passes: passes.length,
+      promoted,
+      // Only present when there was nothing to promote into. `offer` is what
+      // tells Claude to ask once whether to create it; the operator declining
+      // sets artifacts.offerToCreate false and this goes quiet for good.
+      ...(promoted
+        ? {}
+        : {
+            promotion: {
+              skipped: true,
+              path: config.artifacts.promoteTo,
+              offer: config.artifacts.offerToCreate !== false,
+            },
+          }),
+    };
   } finally {
     removeMarker(root);
   }

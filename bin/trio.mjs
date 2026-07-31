@@ -7,6 +7,7 @@ import {
   readFileSync,
   writeFileSync,
   mkdirSync,
+  readdirSync,
 } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,7 +24,12 @@ import {
   modelsReport,
 } from "../src/capabilities.mjs";
 import { renderPanel, renderModelsTable } from "../src/panel.mjs";
-import { startRun, continueRun, cancelToken } from "../src/driver.mjs";
+import {
+  startRun,
+  continueRun,
+  cancelToken,
+  promoteRun,
+} from "../src/driver.mjs";
 import { finalizeRun, newRunId } from "../src/orchestrator.mjs";
 import { runLens } from "../src/codex-lane.mjs";
 import { start } from "../src/serve.mjs";
@@ -123,6 +129,23 @@ const beforeFirstPass = async ({ runId }) => {
     opener.unref();
   } catch {
     /* a viewer must never block or fail a run */
+  }
+};
+
+// Newest run directory that reached a verdict — what `trio promote` defaults
+// to once the marker is gone, which it always is after a run finishes.
+const latestFinishedRun = (root) => {
+  try {
+    return (
+      readdirSync(join(root, ".trio", "runs"))
+        .filter((id) =>
+          existsSync(join(runDir(root, id), "verdict.json")),
+        )
+        .sort()
+        .pop() ?? null
+    );
+  } catch {
+    return null;
   }
 };
 
@@ -265,6 +288,39 @@ switch (cmd) {
       autoExit: rest.includes("--auto-exit"),
     });
     out(url);
+    break;
+  }
+
+  // `trio promote <runId> --create` is the "yes" half of the offer a finished
+  // run makes when artifacts.promoteTo does not exist. Without --create it
+  // refuses rather than creating directories in someone's project.
+  case "promote": {
+    const config = loadConfig(root);
+    const runId =
+      rest.find((a) => !a.startsWith("--")) ??
+      (existsSync(activeMarker(root))
+        ? JSON.parse(readFileSync(activeMarker(root), "utf8")).run
+        : null) ??
+      latestFinishedRun(root);
+    if (!runId) {
+      out("No finished run to promote.");
+      process.exitCode = 1;
+      break;
+    }
+    const r = promoteRun({
+      root,
+      config,
+      runId,
+      create: rest.includes("--create"),
+    });
+    if (!r.ok) {
+      out(r.error);
+      process.exitCode = 1;
+      break;
+    }
+    out(
+      `${r.created ? `Created ${config.artifacts.promoteTo}/ and promoted` : "Promoted"} ${runId}:\n  ${r.promoted.codexPath}\n  ${r.promoted.claudePath}`,
+    );
     break;
   }
 

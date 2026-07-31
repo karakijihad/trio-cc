@@ -8,6 +8,7 @@ import {
   mkdirSync,
   writeFileSync,
   readFileSync,
+  readdirSync,
   existsSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -229,6 +230,70 @@ test("run: a hand-edited view.port is refused instead of reaching the browser la
   assert.equal(res.status, 2);
   assert.match(res.stdout, /view\.port/);
   assert.equal(existsSync(join(root, ".trio", "runs")), false);
+});
+
+test("run: a missing promote directory is reported as an offer, not a silence", () => {
+  const { root, cli } = project({ findings: FINDING });
+  const r = JSON.parse(cli(["run", "--lenses", "auditor", "--max", "1"]).stdout);
+  assert.equal(r.promoted, null);
+  assert.deepEqual(r.promotion, {
+    skipped: true,
+    path: "Docs/Audit",
+    offer: true,
+  });
+  assert.equal(existsSync(join(root, "Docs", "Audit")), false);
+});
+
+test("promote --create makes the directory and promotes the finished run", () => {
+  const { root, cli } = project({ findings: FINDING });
+  const r = JSON.parse(cli(["run", "--lenses", "auditor", "--max", "1"]).stdout);
+
+  const p = cli(["promote", r.runId, "--create"]);
+  assert.equal(p.status, 0, p.stderr);
+  assert.match(p.stdout, /Created Docs\/Audit\/ and promoted/);
+
+  // The run the operator just watched is written out, not only future ones.
+  const codex = join(root, "Docs", "Audit", "codex");
+  const claude = join(root, "Docs", "Audit", "claude");
+  assert.ok(existsSync(codex) && existsSync(claude));
+  const day = readdirSync(codex)[0];
+  assert.match(
+    readFileSync(join(codex, day, "audit-1.md"), "utf8"),
+    /## Findings/,
+  );
+  assert.match(
+    readFileSync(join(claude, readdirSync(claude)[0], "audit-1.md"), "utf8"),
+    /Where we disagreed/,
+  );
+});
+
+test("promote without --create refuses rather than creating the directory", () => {
+  const { root, cli } = project({ findings: FINDING });
+  const r = JSON.parse(cli(["run", "--lenses", "auditor", "--max", "1"]).stdout);
+  const p = cli(["promote", r.runId]);
+  assert.equal(p.status, 1);
+  assert.match(p.stdout, /does not exist/);
+  assert.equal(existsSync(join(root, "Docs")), false);
+});
+
+test("promote defaults to the most recent finished run", () => {
+  const { root, cli } = project();
+  const first = JSON.parse(cli(["run", "--lenses", "auditor"]).stdout);
+  assert.equal(first.status, "finished");
+  const p = cli(["promote", "--create"]);
+  assert.equal(p.status, 0, p.stderr);
+  assert.match(p.stdout, new RegExp(first.runId));
+});
+
+test("declining the offer silences it for good", () => {
+  const { root, cli } = project({ findings: FINDING });
+  assert.equal(
+    cli(["config", "set", "artifacts.offerToCreate", "false"]).status,
+    0,
+  );
+  const r = JSON.parse(cli(["run", "--lenses", "auditor", "--max", "1"]).stdout);
+  assert.equal(r.promotion.offer, false);
+  assert.equal(r.promotion.skipped, true);
 });
 
 test("run: promotes both audits when the promote directory exists", () => {

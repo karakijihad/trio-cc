@@ -27,7 +27,11 @@ export const DEFAULT_CONFIG = Object.freeze({
   },
   view: { mode: "window", port: 4319, autoOpen: true },
   converge: { blockOn: ["critical", "major"], requireNoNewFindings: true },
-  artifacts: { promoteTo: "Docs/Audit" },
+  // offerToCreate: promotion needs artifacts.promoteTo to exist, and Trio does
+  // not create directory trees in a project uninvited. When it is missing, a
+  // finished run says so and Claude offers to create it once; answering no
+  // sets this false and the offer never comes back.
+  artifacts: { promoteTo: "Docs/Audit", offerToCreate: true },
 });
 
 // Only modes with a production handler are offered. Raw runs always live under
