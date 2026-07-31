@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,6 +10,9 @@ import {
   validateLens,
   probe,
   saveCapabilities,
+  loadCapabilities,
+  isFresh,
+  probeState,
   REQUIRED_FLAGS,
 } from "../src/capabilities.mjs";
 import { capabilitiesPath } from "../src/paths.mjs";
@@ -180,4 +183,139 @@ test("saveCapabilities writes the probe result where the panel can find it", () 
   saveCapabilities(root, { cliVersion: "0.145.0", models: [] });
   const written = JSON.parse(readFileSync(capabilitiesPath(root), "utf8"));
   assert.equal(written.cliVersion, "0.145.0");
+});
+
+// --- Capability cache (24h TTL) ---
+
+const runStub = (extra = {}) => (bin, args) => {
+  if (args[0] === "--version") return { status: 0, stdout: "codex-cli 0.145.0" };
+  if (args[0] === "login") return { status: 0, stdout: "Logged in using ChatGPT" };
+  return { status: 0, stdout: "  --json\n" };
+};
+
+test("isFresh is true just inside the TTL", () => {
+  const now = Date.now();
+  const caps = { probedAt: new Date(now - 86_400_000 + 1_000).toISOString() };
+  assert.equal(isFresh(caps, { now }), true);
+});
+
+test("isFresh is false just outside the TTL", () => {
+  const now = Date.now();
+  const caps = { probedAt: new Date(now - 86_400_000 - 1_000).toISOString() };
+  assert.equal(isFresh(caps, { now }), false);
+});
+
+test("isFresh is false for null caps", () => {
+  assert.equal(isFresh(null), false);
+});
+
+test("isFresh is false for a missing probedAt", () => {
+  assert.equal(isFresh({}), false);
+});
+
+test("isFresh is false for a garbage probedAt", () => {
+  assert.equal(isFresh({ probedAt: "not-a-date" }), false);
+});
+
+test("isFresh is false when probedAt is more than a minute in the future", () => {
+  const now = Date.now();
+  const caps = { probedAt: new Date(now + 120_000).toISOString() };
+  assert.equal(isFresh(caps, { now }), false);
+});
+
+test("loadCapabilities returns null for a missing file", () => {
+  const root = mkdtempSync(join(tmpdir(), "trio-loadcaps-"));
+  assert.equal(loadCapabilities(root), null);
+});
+
+test("loadCapabilities returns null for an unparseable file", () => {
+  const root = mkdtempSync(join(tmpdir(), "trio-loadcaps-"));
+  mkdirSync(join(root, ".trio"), { recursive: true });
+  writeFileSync(capabilitiesPath(root), "{ not json");
+  assert.equal(loadCapabilities(root), null);
+});
+
+test("loadCapabilities round-trips a written file", () => {
+  const root = mkdtempSync(join(tmpdir(), "trio-loadcaps-"));
+  saveCapabilities(root, { cliVersion: "0.145.0", models: [] });
+  assert.equal(loadCapabilities(root).cliVersion, "0.145.0");
+});
+
+test("probeState with a fresh cache calls run zero times", () => {
+  const root = mkdtempSync(join(tmpdir(), "trio-probestate-"));
+  saveCapabilities(root, {
+    cliVersion: "0.145.0",
+    models: [],
+    probedAt: new Date().toISOString(),
+    preflight: { state: "ready", message: "ok", fix: "" },
+  });
+  let calls = 0;
+  const r = probeState({
+    root,
+    run: (...a) => {
+      calls++;
+      return runStub()(...a);
+    },
+  });
+  assert.equal(calls, 0);
+  assert.equal(r.cached, true);
+  assert.equal(r.caps.cliVersion, "0.145.0");
+  assert.equal(r.pre.state, "ready");
+});
+
+test("probeState with force:true calls run and refreshes probedAt", () => {
+  const root = mkdtempSync(join(tmpdir(), "trio-probestate-"));
+  const staleAt = new Date().toISOString();
+  saveCapabilities(root, {
+    cliVersion: "0.144.0",
+    models: [],
+    probedAt: staleAt,
+    preflight: { state: "ready", message: "ok", fix: "" },
+  });
+  let calls = 0;
+  const r = probeState({
+    root,
+    force: true,
+    run: (...a) => {
+      calls++;
+      return runStub()(...a);
+    },
+  });
+  assert.ok(calls > 0);
+  assert.equal(r.cached, false);
+  assert.notEqual(r.probedAt, staleAt);
+});
+
+test("probeState re-probes a stale cache without force", () => {
+  const root = mkdtempSync(join(tmpdir(), "trio-probestate-"));
+  const staleAt = new Date(Date.now() - 90_000_000).toISOString();
+  saveCapabilities(root, {
+    cliVersion: "0.144.0",
+    models: [],
+    probedAt: staleAt,
+    preflight: { state: "ready", message: "ok", fix: "" },
+  });
+  let calls = 0;
+  const r = probeState({
+    root,
+    run: (...a) => {
+      calls++;
+      return runStub()(...a);
+    },
+  });
+  assert.ok(calls > 0);
+  assert.equal(r.cached, false);
+});
+
+test("probeState never throws when the probe fails, and still yields a usable pre", () => {
+  const root = mkdtempSync(join(tmpdir(), "trio-probestate-"));
+  const r = probeState({
+    root,
+    run: () => {
+      throw new Error("codex not found");
+    },
+  });
+  assert.equal(r.caps, null);
+  assert.equal(r.cached, false);
+  assert.ok(r.pre && typeof r.pre.state === "string");
 });

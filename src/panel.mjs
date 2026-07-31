@@ -1,7 +1,21 @@
 const pad = (s, n) => String(s).padEnd(n);
 const RULE = "─".repeat(74);
 
-export function renderPanel({ installed, config, caps, drift, pre }) {
+const ago = (iso) => {
+  const ms = Date.now() - Date.parse(iso);
+  const hours = Math.round(ms / 3_600_000);
+  return hours < 1 ? "less than 1h ago" : `${hours}h ago`;
+};
+
+export function renderPanel({
+  installed,
+  config,
+  caps,
+  drift,
+  pre,
+  cached,
+  probedAt,
+}) {
   const lines = [];
 
   if (!installed || pre.state === "not_installed") {
@@ -21,6 +35,10 @@ export function renderPanel({ installed, config, caps, drift, pre }) {
     `TRIO  ${state}${pad("", 8)}codex-cli ${caps?.cliVersion ?? "?"} · auth ${caps?.authMode ?? "?"}`,
   );
   lines.push(RULE);
+
+  if (cached && probedAt) {
+    lines.push(`ⓘ cached probe from ${ago(probedAt)} · /trio:doctor to re-probe`);
+  }
 
   if (!drift.ok) {
     lines.push("⚠ DRIFT — Trio will not start a run until this is resolved:");

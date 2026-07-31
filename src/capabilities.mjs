@@ -1,6 +1,10 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { codexHome, capabilitiesPath } from "./paths.mjs";
+import { preflight } from "./preflight.mjs";
+
+const TTL_MS = 86_400_000;
+const FUTURE_SKEW_MS = 60_000;
 
 export const REQUIRED_FLAGS = [
   "--json",
@@ -114,4 +118,69 @@ export function saveCapabilities(root, caps) {
   const p = capabilitiesPath(root);
   mkdirSync(dirname(p), { recursive: true });
   writeFileSync(p, JSON.stringify(caps, null, 2) + "\n");
+}
+
+export function loadCapabilities(root) {
+  try {
+    return JSON.parse(readFileSync(capabilitiesPath(root), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+export function isFresh(caps, { ttlMs = TTL_MS, now = Date.now() } = {}) {
+  if (!caps) return false;
+  const probedAt = Date.parse(caps.probedAt);
+  if (!Number.isFinite(probedAt)) return false;
+  if (probedAt - now > FUTURE_SKEW_MS) return false;
+  if (now - probedAt > ttlMs) return false;
+  return true;
+}
+
+// Spec (DESIGN §4): the capability probe is cached for 24h and forced fresh
+// only by /trio:doctor. A fresh cache short-circuits before `run` is ever
+// invoked — that is the whole point, so this must never spawn Codex in that
+// path. A probe failure still yields a usable `pre` for the not-installed /
+// not-logged-in messaging callers depend on.
+export function probeState({ root, run, force = false, now = Date.now() }) {
+  if (!force) {
+    const cached = loadCapabilities(root);
+    if (isFresh(cached, { now })) {
+      return {
+        caps: cached,
+        pre: cached.preflight ?? { state: "ready", message: "", fix: "" },
+        cached: true,
+        probedAt: cached.probedAt,
+      };
+    }
+  }
+
+  let pre;
+  try {
+    pre = preflight({ run });
+  } catch {
+    pre = {
+      state: "not_installed",
+      message: "Trio could not check the Codex install.",
+      fix: "npm i -g @openai/codex, then: codex login",
+    };
+  }
+
+  let caps = null;
+  if (pre.state !== "not_installed") {
+    try {
+      caps = probe({ run });
+    } catch {
+      caps = null;
+    }
+  }
+
+  if (caps) {
+    saveCapabilities(root, {
+      ...caps,
+      preflight: { state: pre.state, message: pre.message, fix: pre.fix },
+    });
+  }
+
+  return { caps, pre, cached: false, probedAt: caps?.probedAt ?? null };
 }

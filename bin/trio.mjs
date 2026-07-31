@@ -10,13 +10,7 @@ import {
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig, saveConfig, setConfigValue } from "../src/config.mjs";
-import {
-  probe,
-  checkDrift,
-  validateLens,
-  saveCapabilities,
-} from "../src/capabilities.mjs";
-import { preflight } from "../src/preflight.mjs";
+import { checkDrift, validateLens, probeState } from "../src/capabilities.mjs";
 import { renderPanel } from "../src/panel.mjs";
 import { startRun, continueRun } from "../src/driver.mjs";
 import { finalizeRun, newRunId } from "../src/orchestrator.mjs";
@@ -41,14 +35,12 @@ const run = (bin, args) => {
 };
 const out = (s) => process.stdout.write(s.endsWith("\n") ? s : s + "\n");
 
-const gatherState = () => {
+const gatherState = ({ force = false } = {}) => {
   const config = loadConfig(root);
-  const pre = preflight({ run });
+  const { caps, pre, cached, probedAt } = probeState({ root, run, force });
   const installed = pre.state !== "not_installed";
-  const caps = installed ? probe({ run }) : null;
   const drift = caps ? checkDrift(caps) : { ok: true, warnings: [] };
-  if (caps) saveCapabilities(root, caps);
-  return { config, pre, installed, caps, drift };
+  return { config, pre, installed, caps, drift, cached, probedAt };
 };
 
 // D16: spawns the viewer once, at the start of the run, when the operator's
@@ -123,7 +115,7 @@ switch (cmd) {
   }
 
   case "doctor": {
-    const s = gatherState();
+    const s = gatherState({ force: true });
     out(renderPanel(s));
     out("");
     out(run("codex", ["doctor"]).stdout ?? "");
@@ -167,7 +159,12 @@ switch (cmd) {
       if (pairs[i] === "model") lens.model = pairs[i + 1];
       if (pairs[i] === "effort") lens.effort = pairs[i + 1];
     }
-    const caps = probe({ run });
+    const { caps, pre } = gatherState();
+    if (!caps) {
+      out(`${pre.message}\n  ${pre.fix}`);
+      process.exitCode = 1;
+      break;
+    }
     const check = validateLens(caps, lens);
     if (!check.ok) {
       out(check.error);
@@ -240,7 +237,7 @@ switch (cmd) {
   }
 
   case "run": {
-    const { config, drift, pre } = gatherState();
+    const { config, drift, pre } = gatherState({ force: true });
     if (!config.enabled) {
       out("Trio is off. Run /trio:on first.");
       process.exitCode = 1;

@@ -86,6 +86,32 @@ test("surfaces the API-key billing warning", () => {
   assert.match(out, /billed per token/i);
 });
 
+test("shows the cached-probe line with its age and escape hatch", () => {
+  const probedAt = new Date(Date.now() - 3 * 3_600_000).toISOString();
+  const out = renderPanel({
+    installed: true,
+    config: { ...DEFAULT_CONFIG, enabled: true },
+    caps: CAPS,
+    drift: OK_DRIFT,
+    pre: READY,
+    cached: true,
+    probedAt,
+  });
+  assert.match(out, /cached probe from/);
+  assert.match(out, /\/trio:doctor to re-probe/);
+});
+
+test("omits the cached-probe line when cached is not set", () => {
+  const out = renderPanel({
+    installed: true,
+    config: { ...DEFAULT_CONFIG, enabled: true },
+    caps: CAPS,
+    drift: OK_DRIFT,
+    pre: READY,
+  });
+  assert.doesNotMatch(out, /cached probe/);
+});
+
 test("never prints anything token-shaped", () => {
   const out = renderPanel({
     installed: true,
