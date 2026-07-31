@@ -9,9 +9,9 @@ both agents working side by side in a live browser window.
 Three participants, and the third one is you. Trio automates the handoff, not
 the judgement.
 
-> **Status: v0.1.0.** Install: `/plugin marketplace add karakijihad/trio-cc` then
+> **Status: v0.2.0.** Install: `/plugin marketplace add karakijihad/trio-cc` then
 > `/plugin install trio@trio-cc`, `/reload-plugins`, `/trio`.
-> Verified against Codex CLI 0.145.0.
+> Verified against Codex CLI 0.146.0.
 
 ---
 

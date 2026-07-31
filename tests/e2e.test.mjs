@@ -37,12 +37,10 @@ test(
       env,
       encoding: "utf8",
     });
-    spawnSync("node", [CLI, "lens", "security", "off"], {
-      env,
-      encoding: "utf8",
-    });
-
-    const res = spawnSync("node", [CLI, "run"], {
+    // Pin the lens set rather than relying on which lenses ship enabled:
+    // every extra lens is another real Codex process on the operator's
+    // account, and a smoke test only needs one to prove the loop closes.
+    const res = spawnSync("node", [CLI, "run", "--lenses", "auditor"], {
       env,
       encoding: "utf8",
       timeout: 600000,
@@ -73,7 +71,11 @@ test(
       env,
       encoding: "utf8",
     });
-    spawnSync("node", [CLI, "run"], { env, encoding: "utf8", timeout: 600000 });
+    spawnSync("node", [CLI, "run", "--lenses", "auditor"], {
+      env,
+      encoding: "utf8",
+      timeout: 600000,
+    });
     assert.equal(existsSync(join(root, ".trio", "active")), false);
   },
 );
