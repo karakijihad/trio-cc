@@ -80,6 +80,27 @@ export function validateLens(caps, lens) {
   return { ok: true };
 }
 
+// Pure projection for `trio models` / `/trio:model` / `/trio:lenses`: the
+// live model catalogue plus which lens currently uses which model.
+export function modelsReport(caps, config) {
+  return {
+    models: (caps?.models ?? []).map(
+      ({ slug, displayName, defaultEffort, efforts }) => ({
+        slug,
+        displayName,
+        defaultEffort,
+        efforts,
+      }),
+    ),
+    lenses: config.codex.lenses.map(({ name, model, effort, on }) => ({
+      name,
+      model,
+      effort,
+      on,
+    })),
+  };
+}
+
 export function probe({ run }) {
   const version = run("codex", ["--version"]);
   const cliVersion = (version.stdout.match(/\d+\.\d+\.\d+/) ?? ["unknown"])[0];

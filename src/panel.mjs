@@ -88,3 +88,25 @@ export function renderPanel({
   );
   return lines.join("\n");
 }
+
+const gutter = (s, n) => {
+  const str = String(s);
+  return str.length >= n ? `${str}  ` : str.padEnd(n);
+};
+
+export function renderModelsTable({ models, lenses }) {
+  const lines = [
+    `${pad("MODEL", 18)}${pad("DISPLAY NAME", 20)}${pad("DEFAULT", 10)}${gutter("EFFORTS", 34)}LENSES`,
+  ];
+  for (const m of models) {
+    const usedBy =
+      lenses
+        .filter((l) => l.model === m.slug)
+        .map((l) => l.name)
+        .join(", ") || "—";
+    lines.push(
+      `${pad(m.slug, 18)}${pad(m.displayName, 20)}${pad(m.defaultEffort, 10)}${gutter(m.efforts.join(","), 34)}${usedBy}`,
+    );
+  }
+  return lines.join("\n");
+}

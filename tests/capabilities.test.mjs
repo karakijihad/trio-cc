@@ -13,8 +13,10 @@ import {
   loadCapabilities,
   isFresh,
   probeState,
+  modelsReport,
   REQUIRED_FLAGS,
 } from "../src/capabilities.mjs";
+import { DEFAULT_CONFIG } from "../src/config.mjs";
 import { capabilitiesPath } from "../src/paths.mjs";
 
 const CACHE = {
@@ -318,4 +320,30 @@ test("probeState never throws when the probe fails, and still yields a usable pr
   assert.equal(r.caps, null);
   assert.equal(r.cached, false);
   assert.ok(r.pre && typeof r.pre.state === "string");
+});
+
+// --- modelsReport (for `trio models`, /trio:model, /trio:lenses) ---
+
+test("modelsReport lists known models and which lens uses each", () => {
+  const caps = { models: parseModelsCache(CACHE) };
+  const config = {
+    codex: {
+      lenses: [
+        { name: "auditor", model: "gpt-5.6-luna", effort: "xhigh", on: true },
+        { name: "security", model: "gpt-5.6-sol", effort: "max", on: true },
+      ],
+    },
+  };
+  const r = modelsReport(caps, config);
+  assert.equal(r.models.length, 2);
+  assert.deepEqual(
+    r.lenses.map((l) => l.name),
+    ["auditor", "security"],
+  );
+});
+
+test("modelsReport tolerates null caps (probe never succeeded)", () => {
+  const r = modelsReport(null, DEFAULT_CONFIG);
+  assert.deepEqual(r.models, []);
+  assert.equal(r.lenses.length, DEFAULT_CONFIG.codex.lenses.length);
 });

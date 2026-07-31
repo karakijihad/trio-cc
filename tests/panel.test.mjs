@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renderPanel } from "../src/panel.mjs";
+import { renderPanel, renderModelsTable } from "../src/panel.mjs";
 import { DEFAULT_CONFIG } from "../src/config.mjs";
 
 const CAPS = {
@@ -110,6 +110,41 @@ test("omits the cached-probe line when cached is not set", () => {
     pre: READY,
   });
   assert.doesNotMatch(out, /cached probe/);
+});
+
+test("renderModelsTable lists each model with the lenses that use it", () => {
+  const out = renderModelsTable({
+    models: [
+      {
+        slug: "gpt-5.6-luna",
+        displayName: "GPT-5.6-Luna",
+        defaultEffort: "medium",
+        efforts: ["medium", "xhigh"],
+      },
+    ],
+    lenses: [
+      { name: "auditor", model: "gpt-5.6-luna", effort: "xhigh", on: true },
+      { name: "tester", model: "gpt-5.4", effort: "high", on: true },
+    ],
+  });
+  assert.match(out, /gpt-5\.6-luna/);
+  assert.match(out, /auditor/);
+  assert.doesNotMatch(out, /tester.*gpt-5\.6-luna|gpt-5\.6-luna.*tester/);
+});
+
+test("renderModelsTable marks a model no lens currently uses", () => {
+  const out = renderModelsTable({
+    models: [
+      {
+        slug: "gpt-5.4",
+        displayName: "GPT-5.4",
+        defaultEffort: "high",
+        efforts: ["high"],
+      },
+    ],
+    lenses: [],
+  });
+  assert.match(out, /—/);
 });
 
 test("never prints anything token-shaped", () => {

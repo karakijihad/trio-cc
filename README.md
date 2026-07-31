@@ -41,11 +41,14 @@ you: "add feature X"
 Two passes by default. Convergence means no open Critical or Major **and** no
 findings that were not there last pass.
 
-Five lenses ship: auditor, security, tester, simplifier, consistency (drift
-between what things claim and what they do). Auditor and security run by
-default; `--lenses <name[,name...]|all>` on `/trio:loop` (or its per-lens
-shorthand — `/trio:auditor`, `/trio:security`, `/trio:tester`,
-`/trio:simplifier`, `/trio:consistency`) picks the set for that run.
+Five lenses ship, all enabled: auditor, security, tester, simplifier,
+consistency (drift between what things claim and what they do). Omit
+`--lenses` and all five run — five Codex processes per pass — so Claude (or
+you) should narrow the set deliberately per run with
+`--lenses <name[,name...]|all>` on `/trio:loop` (or its per-lens shorthand —
+`/trio:auditor`, `/trio:security`, `/trio:tester`, `/trio:simplifier`,
+`/trio:consistency`). `/trio:lenses` offers that choice as clickable presets;
+`/trio:model` picks a lens's model and reasoning effort the same way.
 
 **Watch it happen** — Codex's stream (every process, the commands it runs, their
 exit codes) on one lane, and the Claude ↔ Codex handover (findings out,
@@ -106,8 +109,9 @@ effort, view mode, artifact paths.
 /trio:loop --max 3
 /trio:consult <question>
 /trio:lens security model gpt-5.6-terra effort ultra
+/trio:model      /trio:lenses      (interactive pickers, both driven by AskUserQuestion)
 /trio:config set view.mode html
-/trio:doctor
+/trio:doctor     (forces a fresh Codex probe — otherwise cached 24h)
 ```
 
 `/trio:off` leaves Trio loaded but dormant — so when something would have used

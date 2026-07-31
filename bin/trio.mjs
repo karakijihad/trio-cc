@@ -10,8 +10,13 @@ import {
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig, saveConfig, setConfigValue } from "../src/config.mjs";
-import { checkDrift, validateLens, probeState } from "../src/capabilities.mjs";
-import { renderPanel } from "../src/panel.mjs";
+import {
+  checkDrift,
+  validateLens,
+  probeState,
+  modelsReport,
+} from "../src/capabilities.mjs";
+import { renderPanel, renderModelsTable } from "../src/panel.mjs";
 import { startRun, continueRun } from "../src/driver.mjs";
 import { finalizeRun, newRunId } from "../src/orchestrator.mjs";
 import { runLens } from "../src/codex-lane.mjs";
@@ -174,6 +179,23 @@ switch (cmd) {
     saveConfig(root, config);
     out(
       `${lens.name}  ${lens.model}  ${lens.effort}  ${lens.on ? "on" : "off"}`,
+    );
+    break;
+  }
+
+  case "models": {
+    const asJson = rest.includes("--json");
+    const { config, caps } = gatherState();
+    const { models, lenses } = modelsReport(caps, config);
+    if (!models.length) {
+      out("No Codex models known yet — run /trio:doctor to probe.");
+      if (asJson) process.exitCode = 1;
+      break;
+    }
+    out(
+      asJson
+        ? JSON.stringify({ models, lenses }, null, 2)
+        : renderModelsTable({ models, lenses }),
     );
     break;
   }
