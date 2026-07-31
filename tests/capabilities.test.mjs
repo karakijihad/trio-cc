@@ -265,6 +265,28 @@ test("probeState with a fresh cache calls run zero times", () => {
   assert.equal(r.pre.state, "ready");
 });
 
+test("probeState re-probes a fresh-by-timestamp cache with no preflight key, rather than fabricating one", () => {
+  // v0.1.0 wrote capabilities.json with no `preflight` key. A user logged
+  // out at their last probe must not be told "ready" for up to 24h just
+  // because the file happens to be fresh by timestamp.
+  const root = mkdtempSync(join(tmpdir(), "trio-probestate-"));
+  saveCapabilities(root, {
+    cliVersion: "0.145.0",
+    models: [],
+    probedAt: new Date().toISOString(),
+  });
+  let calls = 0;
+  const r = probeState({
+    root,
+    run: (...a) => {
+      calls++;
+      return runStub()(...a);
+    },
+  });
+  assert.ok(calls > 0);
+  assert.equal(r.cached, false);
+});
+
 test("probeState with force:true calls run and refreshes probedAt", () => {
   const root = mkdtempSync(join(tmpdir(), "trio-probestate-"));
   const staleAt = new Date().toISOString();

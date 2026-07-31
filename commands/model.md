@@ -22,7 +22,11 @@ more than four:
    array, each described with its supported efforts. "Other" accepts any
    slug in the catalogue.
 3. **Which effort?** Options come from **that model's** `efforts` array from
-   the JSON — never a hardcoded list.
+   the JSON — never a hardcoded list — but that array can itself hold more
+   than four levels (e.g. `low, medium, high, xhigh, max, ultra`). When it
+   does, present at most four: the model's `defaultEffort`, the highest
+   level in `efforts`, and up to two more spread across the remaining range.
+   Say that "Other" accepts any effort the model supports.
 
 Apply with:
 

@@ -166,10 +166,14 @@ export function isFresh(caps, { ttlMs = TTL_MS, now = Date.now() } = {}) {
 export function probeState({ root, run, force = false, now = Date.now() }) {
   if (!force) {
     const cached = loadCapabilities(root);
-    if (isFresh(cached, { now })) {
+    // A cache entry with no `preflight` key predates this feature (v0.1.0
+    // wrote capabilities.json with no such key) and was never actually
+    // checked for install/login state — using it would fabricate a "ready"
+    // the panel would present as a live check. Treat it as not fresh.
+    if (isFresh(cached, { now }) && cached.preflight) {
       return {
         caps: cached,
-        pre: cached.preflight ?? { state: "ready", message: "", fix: "" },
+        pre: cached.preflight,
         cached: true,
         probedAt: cached.probedAt,
       };
