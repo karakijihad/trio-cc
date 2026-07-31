@@ -86,6 +86,7 @@ export function renderPanel({
   lines.push(
     "/trio:lens security model gpt-5.6-terra effort ultra     /trio:config set view.mode html",
   );
+  lines.push("/trio:help   full command and concept reference");
   return lines.join("\n");
 }
 
