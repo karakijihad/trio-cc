@@ -226,20 +226,20 @@ explicit, same-behavior path.
 
 Every key in `.trio/config.json`, with its default:
 
-| Key                             | Default            | Meaning                                                                             |
-| -------------------------------- | ------------------ | ------------------------------------------------------------------------------------ |
-| `enabled`                        | `false`             | Whether Trio runs at all for this project. `/trio:on` sets it.                       |
-| `maxIterations`                  | `2`                 | Pass ceiling. Hitting it without convergence ends the run `ceiling_reached`.         |
-| `auto`                           | `ask`               | What Claude does after a code-modifying task: `off` never suggests an audit, `ask` asks first, `always` runs one without asking. |
-| `codex.parallel`                 | `2`                 | How many lenses run at once. Lower it to cut cost under API-key billing.            |
-| `codex.lenses[]`                 | five entries, all `on` | Each entry: `name`, `model`, `effort`, `on`. Defaults: `auditor` gpt-5.6-luna/xhigh, `security` gpt-5.6-sol/max, `tester` gpt-5.4/high, `simplifier` gpt-5.4-mini/medium, `consistency` gpt-5.4/high. |
-| `view.mode`                      | `window`            | `window` (OS browser window, opens itself) · `pane` (VS Code Simple Browser) · `html` (static file, no server) · `transcript` (digest in chat) · `off`. |
-| `view.port`                      | `4319`              | Local port the viewer binds.                                                        |
-| `view.autoOpen`                  | `true`              | Whether `window` mode opens the browser automatically.                              |
-| `converge.blockOn`               | `["critical","major"]` | Severities that must have zero open findings before a run can converge.          |
-| `converge.requireNoNewFindings`  | `true`              | A pass with a brand-new finding can't converge either, even with nothing blocking open. |
-| `artifacts.raw`                  | `.trio/runs`        | Where every run's raw pass data and event log live.                                 |
-| `artifacts.promoteTo`            | `Docs/Audit`        | Where finished audits are promoted on completion, if the directory exists.           |
+| Key                             | Default                | Meaning                                                                                                                                                                                               |
+| ------------------------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                       | `false`                | Whether Trio runs at all for this project. `/trio:on` sets it.                                                                                                                                        |
+| `maxIterations`                 | `2`                    | Pass ceiling. Hitting it without convergence ends the run `ceiling_reached`.                                                                                                                          |
+| `auto`                          | `ask`                  | What Claude does after a code-modifying task: `off` never suggests an audit, `ask` asks first, `always` runs one without asking.                                                                      |
+| `codex.parallel`                | `2`                    | How many lenses run at once. Affects wall-clock time only — every enabled lens still runs, so this does not change cost. To spend less, run fewer lenses (`--lenses`).                                |
+| `codex.lenses[]`                | five entries, all `on` | Each entry: `name`, `model`, `effort`, `on`. Defaults: `auditor` gpt-5.6-luna/xhigh, `security` gpt-5.6-sol/max, `tester` gpt-5.4/high, `simplifier` gpt-5.4-mini/medium, `consistency` gpt-5.4/high. |
+| `view.mode`                     | `window`               | `window` (OS browser window, opens itself) · `pane` (VS Code Simple Browser) · `html` (static file, no server) · `transcript` (digest in chat) · `off`.                                               |
+| `view.port`                     | `4319`                 | Local port the viewer binds.                                                                                                                                                                          |
+| `view.autoOpen`                 | `true`                 | Whether `window` mode opens the browser automatically.                                                                                                                                                |
+| `converge.blockOn`              | `["critical","major"]` | Severities that must have zero open findings before a run can converge.                                                                                                                               |
+| `converge.requireNoNewFindings` | `true`                 | A pass with a brand-new finding can't converge either, even with nothing blocking open.                                                                                                               |
+| `artifacts.raw`                 | `.trio/runs`           | Where every run's raw pass data and event log live.                                                                                                                                                   |
+| `artifacts.promoteTo`           | `Docs/Audit`           | Where finished audits are promoted on completion, if the directory exists.                                                                                                                            |
 
 Config lives at `.trio/config.json` in the project root — change it with
 `/trio:config set <key> <value>` or by editing the file directly. `.trio/` is
