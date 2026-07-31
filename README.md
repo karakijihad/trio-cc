@@ -401,9 +401,9 @@ Trio is glue. The intelligence belongs to two other teams:
   Every lens is a `codex exec` process
   ([docs](https://learn.chatgpt.com/docs/codex/cli)), on your own account.
 - **[Claude Code](https://claude.com/claude-code)** by
-  [Anthropic](https://www.anthropic.com) — the author and the adjudicator, and
-  the host this plugin is built for. See the
-  [plugin docs](https://docs.claude.com/en/docs/claude-code/plugins).
+  [Anthropic](https://www.anthropic.com) — the author, the adjudicator, and
+  the host Trio plugs into
+  ([installing plugins](https://code.claude.com/docs/en/discover-plugins)).
 
 Neither project is affiliated with Trio, and Trio ships no credentials for
 either. If something here misrepresents what Codex or Claude Code does, that
