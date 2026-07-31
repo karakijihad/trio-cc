@@ -1,0 +1,24 @@
+# Trio runtime — raw event streams may carry command output
+.trio/
+
+# Node
+node_modules/
+*.log
+
+# OS
+Thumbs.db
+.DS_Store
+
+# stray
+*.stackdump
+
+# operator's local reference prompts — not part of the product
+Audit/
+
+# SDD worktrees + scratch
+.worktrees/
+.superpowers/
+
+# design spec and implementation plan — kept locally and in git history.
+# The repo ships only the plugin.
+Docs/

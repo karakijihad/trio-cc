@@ -1,0 +1,110 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { renderStatic, writeStatic } from "../src/render-html.mjs";
+import { appendEvent, makeEvent } from "../src/bus.mjs";
+
+const tmp = () => mkdtempSync(join(tmpdir(), "trio-html-"));
+const seed = (dir, lane, kind, payload) =>
+  appendEvent(
+    dir,
+    makeEvent({ run: "r", pass: 1, lane, actor: "codex", kind, payload }),
+  );
+
+test("renders a self-contained document with no external references", () => {
+  const dir = tmp();
+  seed(dir, "codex:auditor", "agent_message", { text: "looking" });
+  const html = renderStatic(dir);
+  assert.match(html, /<!doctype html>/i);
+  assert.doesNotMatch(html, /src=["']http/i);
+  assert.doesNotMatch(html, /href=["']http/i);
+});
+
+test("includes a meta refresh so the file updates itself", () => {
+  const html = renderStatic(tmp());
+  assert.match(html, /http-equiv=["']refresh["']/i);
+});
+
+test("groups events into one section per lane", () => {
+  const dir = tmp();
+  seed(dir, "codex:auditor", "agent_message", { text: "alpha" });
+  seed(dir, "claude:main", "agent_message", { text: "beta" });
+  const html = renderStatic(dir);
+  assert.match(html, /codex:auditor/);
+  assert.match(html, /claude:main/);
+  assert.match(html, /alpha/);
+  assert.match(html, /beta/);
+});
+
+test("escapes html in event payloads", () => {
+  const dir = tmp();
+  seed(dir, "claude:main", "agent_message", {
+    text: '<img src=x onerror="alert(1)">',
+  });
+  const html = renderStatic(dir);
+  assert.doesNotMatch(html, /<img src=x/);
+  assert.match(html, /&lt;img/);
+});
+
+test("renders an empty log without throwing", () => {
+  assert.match(renderStatic(tmp()), /<!doctype html>/i);
+});
+
+test("writeStatic puts live.html inside the run directory", () => {
+  const dir = tmp();
+  seed(dir, "claude:main", "agent_message", { text: "x" });
+  const p = writeStatic(dir);
+  assert.equal(p, join(dir, "live.html"));
+  assert.ok(existsSync(p));
+  assert.match(readFileSync(p, "utf8"), /<!doctype html>/i);
+});
+
+test("escapes the usage branch like every other kind", () => {
+  const dir = tmp();
+  seed(dir, "codex:auditor", "usage", { input_tokens: "<img src=x>", output_tokens: 2 });
+  const html = renderStatic(dir);
+  assert.doesNotMatch(html, /<img src=x/);
+  assert.match(html, /&lt;img/);
+});
+
+test("claude file_change renders as a file line without diff body", () => {
+  const dir = tmp();
+  appendEvent(
+    dir,
+    makeEvent({
+      run: "r",
+      pass: 1,
+      lane: "claude:main",
+      actor: "claude",
+      kind: "file_change",
+      payload: {
+        file: "src/a.js",
+        diff: "@@ -1,2 +1,2 @@\n-old line\n+new line",
+      },
+    }),
+  );
+  const html = renderStatic(dir);
+  assert.match(html, /src\/a\.js/);
+  assert.doesNotMatch(html, /old line/);
+  assert.doesNotMatch(html, /new line/);
+});
+
+test("non-claude file_change still renders the diff body", () => {
+  const dir = tmp();
+  appendEvent(
+    dir,
+    makeEvent({
+      run: "r",
+      pass: 1,
+      lane: "codex:auditor",
+      actor: "codex",
+      kind: "file_change",
+      payload: { file: "src/b.js", diff: "+new line" },
+    }),
+  );
+  const html = renderStatic(dir);
+  assert.match(html, /src\/b\.js/);
+  assert.match(html, /new line/);
+});

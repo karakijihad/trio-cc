@@ -1,0 +1,187 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Trio</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fff;
+    --fg: #111;
+    --dim: #666;
+    --line: #e3e3e3;
+    --ok: #1a7f37;
+    --bad: #b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111;
+      --fg: #eee;
+      --dim: #999;
+      --line: #2a2a2a;
+    }
+  }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font:
+      13px/1.5 ui-monospace,
+      SFMono-Regular,
+      Menlo,
+      monospace;
+  }
+  header {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    gap: 16px;
+    align-items: baseline;
+  }
+  h1 {
+    font-size: 13px;
+    margin: 0;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  #meta {
+    color: var(--dim);
+  }
+  #lanes {
+    display: flex;
+    gap: 1px;
+    background: var(--line);
+    height: calc(100vh - 38px);
+    overflow-x: auto;
+  }
+  .lane {
+    background: var(--bg);
+    min-width: 340px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+  }
+  .lane > h2 {
+    font-size: 12px;
+    margin: 0;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--line);
+    color: var(--dim);
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+  }
+  .events {
+    overflow-y: auto;
+    padding: 6px 10px;
+  }
+  .ev {
+    margin: 0 0 8px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .kind {
+    color: var(--dim);
+  }
+  .cmd {
+    color: var(--fg);
+  }
+  .exit-0 {
+    color: var(--ok);
+  }
+  .exit-bad {
+    color: var(--bad);
+  }
+  .diff ins {
+    background: rgba(26, 127, 55, 0.16);
+    text-decoration: none;
+    display: block;
+  }
+  .diff del {
+    background: rgba(179, 38, 30, 0.16);
+    text-decoration: none;
+    display: block;
+  }
+</style>
+<header>
+  <h1>Trio</h1>
+  <span id="meta">connecting…</span>
+</header>
+<div id="lanes"></div>
+<script>
+  const lanes = new Map();
+  const el = document.getElementById("lanes");
+  const meta = document.getElementById("meta");
+  let count = 0;
+
+  function laneFor(name) {
+    if (lanes.has(name)) return lanes.get(name);
+    const wrap = document.createElement("section");
+    wrap.className = "lane";
+    const h = document.createElement("h2");
+    h.textContent = name;
+    const body = document.createElement("div");
+    body.className = "events";
+    wrap.append(h, body);
+    el.append(wrap);
+    lanes.set(name, body);
+    return body;
+  }
+
+  function render(ev) {
+    const p = ev.payload || {};
+    const node = document.createElement("div");
+    node.className = "ev";
+    if (ev.kind === "agent_message" || ev.kind === "reasoning") {
+      node.textContent = p.text || "";
+    } else if (ev.kind === "command_execution") {
+      const code = p.exit_code;
+      node.innerHTML = '<span class="kind">$ </span><span class="cmd"></span>';
+      node.querySelector(".cmd").textContent = p.command || "";
+      if (code !== null && code !== undefined) {
+        const badge = document.createElement("span");
+        badge.className = code === 0 ? "exit-0" : "exit-bad";
+        badge.textContent = "  exit " + code;
+        node.append(badge);
+      }
+    } else if (ev.kind === "file_change") {
+      if (ev.actor === "claude") {
+        node.textContent = "✎ " + (p.file || "");
+      } else {
+        const d = document.createElement("div");
+        d.className = "diff";
+        for (const line of String(p.diff || "").split("\n")) {
+          const t = line.startsWith("+")
+            ? "ins"
+            : line.startsWith("-")
+              ? "del"
+              : "span";
+          const n = document.createElement(t);
+          n.textContent = line;
+          d.append(n);
+        }
+        node.append(document.createTextNode(p.file || ""), d);
+      }
+    } else if (ev.kind === "usage") {
+      node.innerHTML = '<span class="kind"></span>';
+      node.querySelector(".kind").textContent =
+        `${p.input_tokens || 0} in / ${p.output_tokens || 0} out`;
+    } else {
+      node.innerHTML = '<span class="kind"></span>';
+      node.querySelector(".kind").textContent =
+        ev.kind + " " + (p.error || p.tool || p.agent_type || "");
+    }
+    const body = laneFor(ev.lane || "unknown");
+    body.append(node);
+    body.scrollTop = body.scrollHeight;
+    meta.textContent = `${++count} events · ${lanes.size} lanes`;
+  }
+
+  const src = new EventSource("/events");
+  src.onmessage = (m) => {
+    try {
+      render(JSON.parse(m.data));
+    } catch {}
+  };
+  src.onerror = () => {
+    meta.textContent = "disconnected";
+  };
+</script>

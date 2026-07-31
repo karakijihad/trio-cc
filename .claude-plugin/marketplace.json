@@ -1,0 +1,13 @@
+{
+  "name": "trio-cc",
+  "description": "Claude, Codex, and you — reviewing each other's work.",
+  "owner": { "name": "karakijihad", "url": "https://github.com/karakijihad" },
+  "plugins": [
+    {
+      "name": "trio",
+      "source": "./",
+      "description": "Claude, Codex, and you — reviewing each other's work. A bounded audit loop with a live two-lane view.",
+      "category": "Developer Tools"
+    }
+  ]
+}

@@ -1,0 +1,421 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { startRun, continueRun } from "../src/driver.mjs";
+import { DEFAULT_CONFIG } from "../src/config.mjs";
+import { findingId } from "../src/findings.mjs";
+import { appendEvent, makeEvent, readEvents } from "../src/bus.mjs";
+import {
+  runDir,
+  passDir,
+  activeMarker,
+  trioDir,
+  configPath,
+} from "../src/paths.mjs";
+
+const tmp = () => mkdtempSync(join(tmpdir(), "trio-driver-"));
+
+const cfg = (over = {}) => ({
+  ...JSON.parse(JSON.stringify(DEFAULT_CONFIG)),
+  codex: {
+    parallel: 1,
+    lenses: [{ name: "auditor", model: "m", effort: "low", on: true }],
+  },
+  ...over,
+});
+
+const finding = (title, severity = "major") => ({
+  severity,
+  file: "a.rs",
+  title,
+  evidence: "",
+  impact: "",
+  correction: "",
+  id: findingId("a.rs", title),
+});
+
+const okLens = (findings) => async ({ lens }) => ({
+  lens: lens.name,
+  status: "ok",
+  findings,
+  threadId: "t",
+  raw: "",
+});
+
+test("startRun: a lens that finds nothing finishes clean immediately", async () => {
+  const root = tmp();
+  const r = await startRun({
+    root,
+    config: cfg(),
+    target: "/repo",
+    runLensFn: okLens([]),
+  });
+  assert.equal(r.status, "finished");
+  assert.equal(r.verdict, "clean");
+  const verdict = JSON.parse(
+    readFileSync(join(runDir(root, r.runId), "verdict.json"), "utf8"),
+  );
+  assert.equal(verdict.verdict, "clean");
+  assert.equal(existsSync(activeMarker(root)), false);
+});
+
+test("startRun: a major finding yields awaiting_response with the marker held", async () => {
+  const root = tmp();
+  const config = cfg({ maxIterations: 2 });
+  const r = await startRun({
+    root,
+    config,
+    target: "/repo",
+    runLensFn: okLens([finding("leak")]),
+  });
+  assert.equal(r.status, "awaiting_response");
+  assert.equal(r.pass, 1);
+  assert.equal(r.findings.length, 1);
+  const marker = JSON.parse(readFileSync(activeMarker(root), "utf8"));
+  assert.deepEqual(marker, { run: r.runId, pass: 1 });
+  assert.ok(existsSync(join(passDir(root, r.runId, 1), "reconcile.json")));
+  assert.equal(
+    existsSync(join(runDir(root, r.runId), "verdict.json")),
+    false,
+  );
+  const runJson = JSON.parse(
+    readFileSync(join(runDir(root, r.runId), "run.json"), "utf8"),
+  );
+  assert.equal(runJson.target, "/repo");
+  assert.deepEqual(runJson.config, config);
+});
+
+test("continueRun: a refuting verdict converges without another lens call", async () => {
+  const root = tmp();
+  const config = cfg({ maxIterations: 2 });
+  let calls = 0;
+  const runLensFn = async ({ lens }) => {
+    calls++;
+    return {
+      lens: lens.name,
+      status: "ok",
+      findings: [finding("leak")],
+      threadId: "t",
+      raw: "",
+    };
+  };
+  const started = await startRun({ root, config, target: "/repo", runLensFn });
+  assert.equal(calls, 1);
+
+  writeFileSync(
+    join(passDir(root, started.runId, 1), "verdicts.json"),
+    JSON.stringify({
+      verdicts: [
+        { id: findingId("a.rs", "leak"), verdict: "refute", basis: "not reachable" },
+      ],
+    }),
+  );
+
+  const r = await continueRun({ root, runLensFn });
+  assert.equal(r.status, "finished");
+  assert.equal(r.verdict, "clean");
+  assert.equal(calls, 1);
+  assert.equal(existsSync(activeMarker(root)), false);
+});
+
+test("continueRun: pass 2's brief carries forward findings, response, and claude's diff", async () => {
+  const root = tmp();
+  const config = cfg({ maxIterations: 2 });
+  const started = await startRun({
+    root,
+    config,
+    target: "/repo",
+    runLensFn: okLens([finding("leak")]),
+  });
+
+  writeFileSync(
+    join(passDir(root, started.runId, 1), "response.json"),
+    JSON.stringify({
+      findings: [
+        { id: findingId("a.rs", "leak"), action: "declined", reason: "by design" },
+      ],
+    }),
+  );
+  appendEvent(
+    runDir(root, started.runId),
+    makeEvent({
+      run: started.runId,
+      pass: 1,
+      lane: "claude",
+      actor: "claude",
+      kind: "file_change",
+      payload: { file: "a.rs", diff: "@@ -1 +1 @@\n-old\n+new" },
+    }),
+  );
+
+  let seenBrief = null;
+  const runLensFn2 = async ({ lens, brief }) => {
+    seenBrief = brief;
+    return { lens: lens.name, status: "ok", findings: [], threadId: "t", raw: "" };
+  };
+  const r = await continueRun({ root, runLensFn: runLensFn2 });
+  assert.equal(r.status, "finished");
+  assert.equal(r.verdict, "clean");
+  assert.equal(r.passes, 2);
+  assert.match(seenBrief, /leak/);
+  assert.match(seenBrief, /by design/);
+  assert.match(seenBrief, /new/);
+});
+
+test("continueRun: pass 2 still finding the issue hits the ceiling", async () => {
+  const root = tmp();
+  const config = cfg({ maxIterations: 2 });
+  const runLensFn = okLens([finding("leak")]);
+  const started = await startRun({ root, config, target: "/repo", runLensFn });
+  const r = await continueRun({ root, runLensFn });
+  assert.equal(r.status, "finished");
+  assert.equal(r.verdict, "ceiling_reached");
+  assert.equal(r.passes, 2);
+  assert.equal(existsSync(activeMarker(root)), false);
+  void started;
+});
+
+test("continueRun: no active run", async () => {
+  const root = tmp();
+  const r = await continueRun({ root, runLensFn: okLens([]) });
+  assert.deepEqual(r, { status: "no_active_run" });
+});
+
+test("continueRun: a rejecting lens finishes failed", async () => {
+  const root = tmp();
+  const config = cfg({ maxIterations: 2 });
+  const started = await startRun({
+    root,
+    config,
+    target: "/repo",
+    runLensFn: okLens([finding("leak")]),
+  });
+  const boom = async () => {
+    throw new Error("boom");
+  };
+  const r = await continueRun({ root, runLensFn: boom });
+  assert.equal(r.status, "finished");
+  assert.equal(r.verdict, "failed");
+  const verdict = JSON.parse(
+    readFileSync(join(runDir(root, started.runId), "verdict.json"), "utf8"),
+  );
+  assert.equal(verdict.verdict, "failed");
+  assert.equal(existsSync(activeMarker(root)), false);
+});
+
+test("continueRun: a pre-existing verdict.json wins without being rewritten", async () => {
+  const root = tmp();
+  const config = cfg({ maxIterations: 2 });
+  const started = await startRun({
+    root,
+    config,
+    target: "/repo",
+    runLensFn: okLens([finding("leak")]),
+  });
+  const verdictPath = join(runDir(root, started.runId), "verdict.json");
+  const canceled =
+    JSON.stringify({ verdict: "cancelled", passes: 1, runId: started.runId }, null, 2) +
+    "\n";
+  writeFileSync(verdictPath, canceled);
+
+  const r = await continueRun({ root, runLensFn: okLens([finding("leak")]) });
+  assert.equal(r.status, "already_finished");
+  assert.equal(r.verdict, "cancelled");
+  assert.equal(readFileSync(verdictPath, "utf8"), canceled);
+  assert.equal(existsSync(activeMarker(root)), false);
+});
+
+test("continueRun: a malformed verdict value does not crash the run", async () => {
+  const root = tmp();
+  const config = cfg({ maxIterations: 2 });
+  const runLensFn = okLens([finding("leak")]);
+  const started = await startRun({ root, config, target: "/repo", runLensFn });
+  writeFileSync(
+    join(passDir(root, started.runId, 1), "verdicts.json"),
+    JSON.stringify({
+      verdicts: [{ id: findingId("a.rs", "leak"), verdict: "maybe", basis: "??" }],
+    }),
+  );
+
+  const r = await continueRun({ root, runLensFn });
+  assert.equal(r.status, "finished");
+  assert.equal(r.verdict, "ceiling_reached");
+  assert.equal(r.passes, 2);
+});
+
+test("continueRun: a live config edit mid-run is ignored", async () => {
+  const root = tmp();
+  const config = cfg({ maxIterations: 2 });
+  const runLensFn = okLens([finding("leak")]);
+  await startRun({ root, config, target: "/repo", runLensFn });
+
+  mkdirSync(trioDir(root), { recursive: true });
+  writeFileSync(configPath(root), JSON.stringify({ ...config, maxIterations: 99 }));
+
+  const r = await continueRun({ root, runLensFn });
+  assert.equal(r.status, "finished");
+  assert.equal(r.verdict, "ceiling_reached");
+  assert.equal(r.passes, 2);
+});
+
+test("startRun: a throwing beforeFirstPass does not block the run", async () => {
+  const root = tmp();
+  const beforeFirstPass = async () => {
+    throw new Error("viewer exploded");
+  };
+  const r = await startRun({
+    root,
+    config: cfg(),
+    target: "/repo",
+    runLensFn: okLens([]),
+    beforeFirstPass,
+  });
+  assert.equal(r.status, "finished");
+  assert.equal(r.verdict, "clean");
+});
+
+test("startRun: a throwing lens finalizes failed, not a crash", async () => {
+  const root = tmp();
+  const runLensFn = async () => {
+    throw new Error("boom");
+  };
+  const r = await startRun({ root, config: cfg(), target: "/repo", runLensFn });
+  assert.equal(r.status, "finished");
+  assert.equal(r.verdict, "failed");
+  assert.equal(r.error, "boom");
+  assert.equal(existsSync(activeMarker(root)), false);
+});
+
+test("continueRun: a corrupt run.json finalizes failed instead of throwing", async () => {
+  const root = tmp();
+  mkdirSync(runDir(root, "r1"), { recursive: true });
+  writeFileSync(join(runDir(root, "r1"), "run.json"), "{ not json");
+  writeFileSync(activeMarker(root), JSON.stringify({ run: "r1", pass: 1 }));
+
+  const r = await continueRun({ root, runLensFn: okLens([]) });
+  assert.equal(r.status, "finished");
+  assert.equal(r.verdict, "failed");
+  assert.equal(existsSync(activeMarker(root)), false);
+});
+
+test("continueRun: no completed pass on disk finalizes failed", async () => {
+  const root = tmp();
+  mkdirSync(runDir(root, "r1"), { recursive: true });
+  writeFileSync(
+    join(runDir(root, "r1"), "run.json"),
+    JSON.stringify({
+      runId: "r1",
+      target: "/repo",
+      startedAt: new Date().toISOString(),
+      config: cfg(),
+    }),
+  );
+  writeFileSync(activeMarker(root), JSON.stringify({ run: "r1", pass: 1 }));
+
+  const r = await continueRun({ root, runLensFn: okLens([]) });
+  assert.equal(r.status, "finished");
+  assert.equal(r.verdict, "failed");
+  assert.equal(existsSync(activeMarker(root)), false);
+});
+
+// --- Fix round 1 regressions ---
+
+test("continueRun: a corrupt verdict.json returns already_finished/unknown without throwing", async () => {
+  const root = tmp();
+  const config = cfg({ maxIterations: 2 });
+  const started = await startRun({
+    root,
+    config,
+    target: "/repo",
+    runLensFn: okLens([finding("leak")]),
+  });
+  const verdictPath = join(runDir(root, started.runId), "verdict.json");
+  const corrupt = "{ not json";
+  writeFileSync(verdictPath, corrupt);
+
+  const r = await continueRun({ root, runLensFn: okLens([finding("leak")]) });
+  assert.equal(r.status, "already_finished");
+  assert.equal(r.verdict, "unknown");
+  assert.equal(readFileSync(verdictPath, "utf8"), corrupt);
+  assert.equal(existsSync(activeMarker(root)), false);
+});
+
+test("startRun: a promote() throw does not corrupt the verdict or escape", async () => {
+  const root = tmp();
+  mkdirSync(root, { recursive: true });
+  const promoteFile = join(root, "promote-target-is-a-file");
+  writeFileSync(promoteFile, "not a directory");
+  const config = cfg({
+    artifacts: { raw: ".trio/runs", promoteTo: "promote-target-is-a-file" },
+  });
+
+  const r = await startRun({
+    root,
+    config,
+    target: "/repo",
+    runLensFn: okLens([]),
+  });
+
+  assert.equal(r.status, "finished");
+  assert.equal(r.verdict, "clean");
+  assert.equal(r.promoted, null);
+
+  const verdictPath = join(runDir(root, r.runId), "verdict.json");
+  const verdict = JSON.parse(readFileSync(verdictPath, "utf8"));
+  assert.equal(verdict.verdict, "clean");
+
+  const events = readEvents(runDir(root, r.runId));
+  assert.ok(
+    events.some((e) => e.kind === "error" && /promote/i.test(e.payload.error)),
+  );
+});
+
+test("continueRun: a corrupt run.json does not prevent an existing verdict.json from winning", async () => {
+  const root = tmp();
+  mkdirSync(runDir(root, "r1"), { recursive: true });
+  writeFileSync(join(runDir(root, "r1"), "run.json"), "{ not json");
+  const verdictPath = join(runDir(root, "r1"), "verdict.json");
+  const canceled =
+    JSON.stringify({ verdict: "cancelled", passes: 1, runId: "r1" }, null, 2) +
+    "\n";
+  writeFileSync(verdictPath, canceled);
+  writeFileSync(activeMarker(root), JSON.stringify({ run: "r1", pass: 1 }));
+
+  const r = await continueRun({ root, runLensFn: okLens([]) });
+  assert.equal(r.status, "already_finished");
+  assert.equal(r.verdict, "cancelled");
+  assert.equal(readFileSync(verdictPath, "utf8"), canceled);
+  assert.equal(existsSync(activeMarker(root)), false);
+});
+
+test("continueRun: a corrupt reconcile.json still degrades to a safe failed result", async () => {
+  const root = tmp();
+  const config = cfg({ maxIterations: 2 });
+  const started = await startRun({
+    root,
+    config,
+    target: "/repo",
+    runLensFn: okLens([finding("leak")]),
+  });
+  // Corrupts the very record continueRun (and finalizeFailed's own
+  // collectPasses) both need to read, so finalize() itself throws.
+  writeFileSync(
+    join(passDir(root, started.runId, 1), "reconcile.json"),
+    "{ not json",
+  );
+
+  const r = await continueRun({ root, runLensFn: okLens([finding("leak")]) });
+  assert.equal(r.status, "finished");
+  assert.equal(r.verdict, "failed");
+  assert.ok(r.error);
+  assert.ok(r.finalizeError);
+  assert.equal(existsSync(activeMarker(root)), false);
+});
