@@ -18,6 +18,7 @@ export const DEFAULT_CONFIG = Object.freeze({
         effort: "medium",
         on: false,
       },
+      { name: "consistency", model: "gpt-5.4", effort: "high", on: false },
     ],
   },
   view: { mode: "window", port: 4319, autoOpen: true },
