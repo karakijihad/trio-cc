@@ -11,14 +11,14 @@ export const DEFAULT_CONFIG = Object.freeze({
     lenses: [
       { name: "auditor", model: "gpt-5.6-luna", effort: "xhigh", on: true },
       { name: "security", model: "gpt-5.6-sol", effort: "max", on: true },
-      { name: "tester", model: "gpt-5.4", effort: "high", on: false },
+      { name: "tester", model: "gpt-5.4", effort: "high", on: true },
       {
         name: "simplifier",
         model: "gpt-5.4-mini",
         effort: "medium",
-        on: false,
+        on: true,
       },
-      { name: "consistency", model: "gpt-5.4", effort: "high", on: false },
+      { name: "consistency", model: "gpt-5.4", effort: "high", on: true },
     ],
   },
   view: { mode: "window", port: 4319, autoOpen: true },

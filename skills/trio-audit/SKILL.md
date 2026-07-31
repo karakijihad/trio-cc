@@ -17,13 +17,20 @@ Run `node "${CLAUDE_PLUGIN_ROOT}/bin/trio.mjs" status`.
 
 ## Choosing lenses
 
-The config defaults (auditor + security) apply when you pass nothing. You
-SHOULD pick the set that fits the task with `--lenses`: logic or feature work
-→ auditor; anything touching input, auth, secrets, or files → security;
-test-heavy or test-touching change → add tester; refactors → add simplifier;
-cross-module or wiring changes → add consistency; full audit of unfamiliar
-code → `--lenses all`. Every enabled lens is a separate Codex process per
-pass on the operator's account — choose deliberately, not maximally.
+All five lenses ship enabled. Passing nothing to `--lenses` audits through
+**all five — five Codex processes per pass** on the operator's account. The
+config default no longer withholds any lens; the decision of what to run is
+yours (or the operator's), made fresh each time.
+
+**Always choose deliberately: state which lenses you are running and why
+before starting.** Map the task to a lens: logic or feature work → auditor;
+anything touching input, auth, secrets, or files → security; test-heavy or
+test-touching change → add tester; refactors → add simplifier; cross-module
+or wiring changes → add consistency; unfamiliar code or an explicit "full
+audit" → all five (`--lenses all`).
+
+When the operator has not indicated scope and the change is small, prefer
+`--lenses auditor,security` and say so. When in doubt about cost, ask.
 
 ## The loop
 
