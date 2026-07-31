@@ -262,6 +262,10 @@ switch (cmd) {
     const target = rest.includes("--target")
       ? rest[rest.indexOf("--target") + 1]
       : root;
+    const lensesFlag = rest.indexOf("--lenses");
+    const lensesArg = lensesFlag !== -1 ? rest[lensesFlag + 1] : undefined;
+    const lenses =
+      lensesArg === "all" ? "all" : lensesArg?.split(",").filter(Boolean);
 
     const r = await startRun({
       root,
@@ -269,7 +273,13 @@ switch (cmd) {
       target,
       runLensFn: runLens,
       beforeFirstPass,
+      lenses,
     });
+    if (r.status === "invalid_lenses") {
+      out(r.error);
+      process.exitCode = 2;
+      break;
+    }
     out(JSON.stringify(r, null, 2));
     break;
   }

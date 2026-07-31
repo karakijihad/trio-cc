@@ -396,6 +396,113 @@ test("continueRun: a corrupt run.json does not prevent an existing verdict.json 
   assert.equal(existsSync(activeMarker(root)), false);
 });
 
+// --- Per-run lens selection ---
+
+const twoLensCfg = (over = {}) =>
+  cfg({
+    codex: {
+      parallel: 2,
+      lenses: [
+        { name: "auditor", model: "m", effort: "low", on: true },
+        { name: "security", model: "m", effort: "low", on: true },
+      ],
+    },
+    ...over,
+  });
+
+test("startRun: lenses array restricts run.json snapshot and which lenses run", async () => {
+  const root = tmp();
+  const config = twoLensCfg();
+  const calls = [];
+  const runLensFn = async ({ lens }) => {
+    calls.push(lens.name);
+    return { lens: lens.name, status: "ok", findings: [], threadId: "t", raw: "" };
+  };
+  const r = await startRun({
+    root,
+    config,
+    target: "/repo",
+    runLensFn,
+    lenses: ["auditor"],
+  });
+  assert.equal(r.status, "finished");
+  assert.deepEqual(calls, ["auditor"]);
+  const runJson = JSON.parse(
+    readFileSync(join(runDir(root, r.runId), "run.json"), "utf8"),
+  );
+  const snapLenses = runJson.config.codex.lenses;
+  assert.equal(snapLenses.find((l) => l.name === "auditor").on, true);
+  assert.equal(snapLenses.find((l) => l.name === "security").on, false);
+});
+
+test('startRun: lenses "all" enables every configured lens', async () => {
+  const root = tmp();
+  const config = cfg({
+    codex: {
+      parallel: 3,
+      lenses: [
+        { name: "auditor", model: "m", effort: "low", on: true },
+        { name: "security", model: "m", effort: "low", on: false },
+        { name: "tester", model: "m", effort: "low", on: false },
+      ],
+    },
+  });
+  const calls = [];
+  const runLensFn = async ({ lens }) => {
+    calls.push(lens.name);
+    return { lens: lens.name, status: "ok", findings: [], threadId: "t", raw: "" };
+  };
+  const r = await startRun({
+    root,
+    config,
+    target: "/repo",
+    runLensFn,
+    lenses: "all",
+  });
+  assert.equal(r.status, "finished");
+  assert.deepEqual(calls.sort(), ["auditor", "security", "tester"]);
+});
+
+test("startRun: an unknown lens name returns invalid_lenses and creates nothing", async () => {
+  const root = tmp();
+  const config = twoLensCfg();
+  const r = await startRun({
+    root,
+    config,
+    target: "/repo",
+    runLensFn: okLens([]),
+    lenses: ["bogus"],
+  });
+  assert.equal(r.status, "invalid_lenses");
+  assert.match(r.error, /unknown lens: bogus/);
+  assert.match(r.error, /known: auditor, security/);
+  assert.equal(r.runId, undefined);
+  assert.equal(existsSync(trioDir(root)), false);
+});
+
+test("continueRun: pass 2 keeps the lens restriction startRun applied", async () => {
+  const root = tmp();
+  const config = twoLensCfg({ maxIterations: 2 });
+  const started = await startRun({
+    root,
+    config,
+    target: "/repo",
+    runLensFn: okLens([finding("leak")]),
+    lenses: ["auditor"],
+  });
+  assert.equal(started.status, "awaiting_response");
+
+  const calls = [];
+  const runLensFn2 = async ({ lens }) => {
+    calls.push(lens.name);
+    return { lens: lens.name, status: "ok", findings: [], threadId: "t", raw: "" };
+  };
+  const r = await continueRun({ root, runLensFn: runLensFn2 });
+  assert.equal(r.status, "finished");
+  assert.equal(r.verdict, "clean");
+  assert.deepEqual(calls, ["auditor"]);
+});
+
 test("continueRun: a corrupt reconcile.json still degrades to a safe failed result", async () => {
   const root = tmp();
   const config = cfg({ maxIterations: 2 });

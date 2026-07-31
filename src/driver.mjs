@@ -247,6 +247,38 @@ function applyAdjudication({ root, config, runId, pass, record }) {
   return { record: updated, converged };
 }
 
+// Applies a per-run lens selection (optional `lenses`, D-lens-select) to a
+// config before it is ever written to disk. `names` is an array of lens
+// names or the string "all"; omitted/empty leaves config untouched (today's
+// behavior). Returns { config } on success, or { error } naming the first
+// unknown lens — callers must check for `error` before writing anything.
+function applyLensSelection(config, names) {
+  if (!names || (Array.isArray(names) && names.length === 0)) {
+    return { config };
+  }
+  const known = config.codex.lenses.map((l) => l.name);
+  if (names !== "all") {
+    const unknown = names.find((n) => !known.includes(n));
+    if (unknown) {
+      return {
+        error: `unknown lens: ${unknown}. known: ${known.join(", ")}`,
+      };
+    }
+  }
+  return {
+    config: {
+      ...config,
+      codex: {
+        ...config.codex,
+        lenses: config.codex.lenses.map((l) => ({
+          ...l,
+          on: names === "all" ? true : names.includes(l.name),
+        })),
+      },
+    },
+  };
+}
+
 // Starts a run and executes pass 1 only (D18) — the audit loop yields back
 // to the caller (Claude, via the CLI) so it can adjudicate, fix, and reply
 // before pass 2. Everything the run needs lives on disk under
@@ -259,7 +291,12 @@ export async function startRun({
   runLensFn,
   beforeFirstPass,
   now,
+  lenses,
 }) {
+  const selection = applyLensSelection(config, lenses);
+  if (selection.error) return { status: "invalid_lenses", error: selection.error };
+  config = selection.config;
+
   const startedAt = now ?? new Date();
   const runId = newRunId(startedAt);
   const dir = runDir(root, runId);

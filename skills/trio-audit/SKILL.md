@@ -15,6 +15,16 @@ Run `node "${CLAUDE_PLUGIN_ROOT}/bin/trio.mjs" status`.
   and the one command that fixes it. Do not attempt a run.
 - **Panel says enabled and healthy** → continue.
 
+## Choosing lenses
+
+The config defaults (auditor + security) apply when you pass nothing. You
+SHOULD pick the set that fits the task with `--lenses`: logic or feature work
+→ auditor; anything touching input, auth, secrets, or files → security;
+test-heavy or test-touching change → add tester; refactors → add simplifier;
+cross-module or wiring changes → add consistency; full audit of unfamiliar
+code → `--lenses all`. Every enabled lens is a separate Codex process per
+pass on the operator's account — choose deliberately, not maximally.
+
 ## The loop
 
 1. Run `node "${CLAUDE_PLUGIN_ROOT}/bin/trio.mjs" run` with any `--max` or

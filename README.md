@@ -41,6 +41,12 @@ you: "add feature X"
 Two passes by default. Convergence means no open Critical or Major **and** no
 findings that were not there last pass.
 
+Five lenses ship: auditor, security, tester, simplifier, consistency (drift
+between what things claim and what they do). Auditor and security run by
+default; `--lenses <name[,name...]|all>` on `/trio:loop` (or its per-lens
+shorthand — `/trio:auditor`, `/trio:security`, `/trio:tester`,
+`/trio:simplifier`, `/trio:consistency`) picks the set for that run.
+
 **Watch it happen** — Codex's stream (every process, the commands it runs, their
 exit codes) on one lane, and the Claude ↔ Codex handover (findings out,
 Claude's reply back — no Claude diff bodies) on the other. By default an OS
