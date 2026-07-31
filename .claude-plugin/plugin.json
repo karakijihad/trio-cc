@@ -6,7 +6,5 @@
   "author": { "name": "karakijihad", "url": "https://github.com/karakijihad" },
   "repository": "https://github.com/karakijihad/trio-cc",
   "license": "MIT",
-  "keywords": ["codex", "review", "audit", "second-opinion"],
-  "hooks": "./hooks/hooks.json",
-  "agents": ["./agents/trio-reconciler.md"]
+  "keywords": ["codex", "review", "audit", "second-opinion"]
 }
