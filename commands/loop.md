@@ -1,6 +1,6 @@
 ---
-description: Run the bounded Codex audit loop on the current work
-argument-hint: [--max N] [--target PATH]
+description: Run the Codex audit loop
+argument-hint: [--max N]
 ---
 
 Use the `trio-audit` skill to run the loop. Pass through any `--max` or

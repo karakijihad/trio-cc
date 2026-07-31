@@ -14,6 +14,21 @@ test("redacts bearer and sk- tokens", () => {
   assert.match(scrub("key sk-proj-AAAABBBBCCCCDDDD1234"), /<redacted:token>/);
 });
 
+test("redacts GitHub's underscore-delimited token families", () => {
+  // GitHub's documented prefixes delimit with an underscore, which an earlier
+  // hyphen-only matcher let through in the clear. Assembled at runtime rather
+  // than written out, so this fixture is not itself a token-shaped literal
+  // sitting in the repository for secret scanners to trip over.
+  const body = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789";
+  const sep = "_";
+  for (const prefix of ["github" + sep + "pat", "ghp", "gho", "ghu", "ghs"]) {
+    const token = prefix + sep + body;
+    const out = scrub(`token=${token}`);
+    assert.match(out, /<redacted:token>/, prefix);
+    assert.doesNotMatch(out, new RegExp(body), prefix);
+  }
+});
+
 test("redacts JWTs", () => {
   assert.match(
     scrub("t=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcdEFGH1234"),

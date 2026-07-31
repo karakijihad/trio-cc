@@ -1,5 +1,5 @@
 ---
-description: Show the Trio control panel — install state, auth, lenses, loop settings
+description: Show the Trio control panel
 ---
 
 Run `node "${CLAUDE_PLUGIN_ROOT}/bin/trio.mjs" status` and show the operator its

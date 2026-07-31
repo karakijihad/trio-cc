@@ -1,9 +1,9 @@
-import { test } from "node:test";
+﻿import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runLoop, runPass, finalizeRun, newRunId } from "../src/orchestrator.mjs";
+import { runPass, finalizeRun, newRunId } from "../src/orchestrator.mjs";
 import { DEFAULT_CONFIG } from "../src/config.mjs";
 import { findingId } from "../src/findings.mjs";
 import { readEvents } from "../src/bus.mjs";
@@ -34,152 +34,27 @@ const scripted = (perPass) => {
   };
 };
 
-test("newRunId is minute-resolution and filename-safe", () => {
+const oneLens = (name = "auditor", parallel = 1) => ({
+  parallel,
+  lenses: [{ name, model: "m", effort: "low", on: true }],
+});
+
+test("newRunId is second-resolution and filename-safe", () => {
   const id = newRunId(new Date("2026-07-29T14:03:11Z"));
-  assert.equal(id, "2026-07-29T14-03");
+  assert.equal(id, "2026-07-29T14-03-11");
   assert.doesNotMatch(id, /[:/\\]/);
 });
 
-test("a first pass with nothing found converges immediately", async () => {
-  const r = await runLoop({
-    config: cfg({
-      codex: {
-        parallel: 1,
-        lenses: [{ name: "auditor", model: "m", effort: "low", on: true }],
-      },
-    }),
-    target: "/repo",
-    root: tmp(),
-    runId: "r1",
-    runLensFn: scripted([[]]),
-    reconcileFn: passthrough,
-    briefFor: () => "b",
-  });
-  assert.equal(r.verdict, "clean");
-  assert.equal(r.passes.length, 1);
-});
-
-test("a major in pass 1 that closes in pass 2 converges", async () => {
-  const r = await runLoop({
-    config: cfg({
-      codex: {
-        parallel: 1,
-        lenses: [{ name: "auditor", model: "m", effort: "low", on: true }],
-      },
-    }),
-    target: "/repo",
-    root: tmp(),
-    runId: "r1",
-    runLensFn: scripted([[finding("leak")], []]),
-    reconcileFn: passthrough,
-    briefFor: () => "b",
-  });
-  assert.equal(r.verdict, "clean");
-  assert.equal(r.passes.length, 2);
-});
-
-test("a major still open at the ceiling reports ceiling_reached, not clean", async () => {
-  const r = await runLoop({
-    config: cfg({
-      maxIterations: 2,
-      codex: {
-        parallel: 1,
-        lenses: [{ name: "auditor", model: "m", effort: "low", on: true }],
-      },
-    }),
-    target: "/repo",
-    root: tmp(),
-    runId: "r1",
-    runLensFn: scripted([[finding("leak")], [finding("leak")]]),
-    reconcileFn: passthrough,
-    briefFor: () => "b",
-  });
-  assert.equal(r.verdict, "ceiling_reached");
-  assert.equal(r.passes.length, 2);
-});
-
-test("never runs more passes than maxIterations", async () => {
-  const r = await runLoop({
-    config: cfg({
-      maxIterations: 3,
-      codex: {
-        parallel: 1,
-        lenses: [{ name: "auditor", model: "m", effort: "low", on: true }],
-      },
-    }),
-    target: "/repo",
-    root: tmp(),
-    runId: "r1",
-    runLensFn: scripted([
-      [finding("a")],
-      [finding("a")],
-      [finding("a")],
-      [finding("a")],
-    ]),
-    reconcileFn: passthrough,
-    briefFor: () => "b",
-  });
-  assert.equal(r.passes.length, 3);
-});
-
-test("an unparseable lens blocks a clean verdict even with no findings", async () => {
-  const r = await runLoop({
-    config: cfg({
-      codex: {
-        parallel: 1,
-        lenses: [{ name: "auditor", model: "m", effort: "low", on: true }],
-      },
-    }),
-    target: "/repo",
-    root: tmp(),
-    runId: "r1",
-    runLensFn: async ({ lens }) => ({
-      lens: lens.name,
-      status: "unparseable",
-      findings: [],
-      threadId: null,
-      raw: "oops",
-    }),
-    reconcileFn: passthrough,
-    briefFor: () => "b",
-  });
-  assert.notEqual(r.verdict, "clean");
-  assert.equal(r.verdict, "ceiling_reached");
-});
-
-test("a failed lens blocks a clean verdict and is named in the pass", async () => {
-  const root = tmp();
-  const r = await runLoop({
-    config: cfg({
-      codex: {
-        parallel: 1,
-        lenses: [{ name: "security", model: "m", effort: "low", on: true }],
-      },
-    }),
-    target: "/repo",
-    root,
-    runId: "r1",
-    runLensFn: async ({ lens }) => ({
-      lens: lens.name,
-      status: "failed",
-      findings: [],
-      threadId: null,
-      raw: "",
-    }),
-    reconcileFn: passthrough,
-    briefFor: () => "b",
-  });
-  assert.notEqual(r.verdict, "clean");
-  assert.ok(
-    r.passes[0].lenses.some(
-      (l) => l.lens === "security" && l.status === "failed",
-    ),
+test("newRunId distinguishes two runs started in the same minute", () => {
+  assert.notEqual(
+    newRunId(new Date("2026-07-29T14:03:11Z")),
+    newRunId(new Date("2026-07-29T14:03:47Z")),
   );
 });
 
 test("only enabled lenses run", async () => {
   const seen = [];
-  await runLoop({
+  await runPass({
     config: cfg({
       codex: {
         parallel: 2,
@@ -192,6 +67,8 @@ test("only enabled lenses run", async () => {
     target: "/repo",
     root: tmp(),
     runId: "r1",
+    pass: 1,
+    prevRecord: null,
     runLensFn: async ({ lens }) => {
       seen.push(lens.name);
       return {
@@ -217,11 +94,13 @@ test("respects the parallel cap", async () => {
     effort: "low",
     on: true,
   }));
-  await runLoop({
+  await runPass({
     config: cfg({ codex: { parallel: 2, lenses } }),
     target: "/repo",
     root: tmp(),
     runId: "r1",
+    pass: 1,
+    prevRecord: null,
     runLensFn: async ({ lens }) => {
       peak = Math.max(peak, ++inFlight);
       await new Promise((r) => setTimeout(r, 5));
@@ -240,119 +119,114 @@ test("respects the parallel cap", async () => {
   assert.ok(peak <= 2, `peak concurrency was ${peak}`);
 });
 
-test("a refuted critical does not block convergence", async () => {
-  const r = await runLoop({
-    config: cfg({
-      codex: {
-        parallel: 1,
-        lenses: [{ name: "auditor", model: "m", effort: "low", on: true }],
-      },
-    }),
+test("an unparseable lens blocks convergence even with no findings", async () => {
+  const { converged } = await runPass({
+    config: cfg({ codex: oneLens() }),
     target: "/repo",
     root: tmp(),
     runId: "r1",
+    pass: 1,
+    prevRecord: null,
+    runLensFn: async ({ lens }) => ({
+      lens: lens.name,
+      status: "unparseable",
+      findings: [],
+      threadId: null,
+      raw: "oops",
+    }),
+    reconcileFn: passthrough,
+    briefFor: () => "b",
+  });
+  assert.equal(converged, false);
+});
+
+test("a failed lens blocks convergence and is named in the pass record", async () => {
+  const { record, converged } = await runPass({
+    config: cfg({ codex: oneLens("security") }),
+    target: "/repo",
+    root: tmp(),
+    runId: "r1",
+    pass: 1,
+    prevRecord: null,
+    runLensFn: async ({ lens }) => ({
+      lens: lens.name,
+      status: "failed",
+      findings: [],
+      threadId: null,
+      raw: "",
+    }),
+    reconcileFn: passthrough,
+    briefFor: () => "b",
+  });
+  assert.equal(converged, false);
+  assert.ok(
+    record.lenses.some((l) => l.lens === "security" && l.status === "failed"),
+  );
+});
+
+test("a refuted critical does not block convergence", async () => {
+  const { converged } = await runPass({
+    config: cfg({ codex: oneLens() }),
+    target: "/repo",
+    root: tmp(),
+    runId: "r1",
+    pass: 1,
+    prevRecord: null,
     runLensFn: scripted([[finding("phantom", "critical")]]),
     reconcileFn: async (findings) =>
-      findings.map((f) => ({
-        ...f,
-        verdict: "refute",
-        basis: "not reachable",
-      })),
+      findings.map((f) => ({ ...f, verdict: "refute", basis: "not reachable" })),
     briefFor: () => "b",
   });
-  assert.equal(r.verdict, "clean");
+  assert.equal(converged, true);
 });
 
-test("each pass records its cross-pass diff", async () => {
-  const r = await runLoop({
-    config: cfg({
-      codex: {
-        parallel: 1,
-        lenses: [{ name: "auditor", model: "m", effort: "low", on: true }],
-      },
-    }),
-    target: "/repo",
-    root: tmp(),
-    runId: "r1",
-    runLensFn: scripted([[finding("a")], [finding("b")]]),
-    reconcileFn: passthrough,
-    briefFor: () => "b",
-  });
-  assert.equal(r.passes[1].diff.new.length, 1);
-  assert.equal(r.passes[1].diff.closed.length, 1);
-});
-
-test("an unexpected rejection ends the run as failed rather than throwing", async () => {
-  const r = await runLoop({
-    config: cfg({
-      codex: {
-        parallel: 1,
-        lenses: [{ name: "auditor", model: "m", effort: "low", on: true }],
-      },
-    }),
-    target: "/repo",
-    root: tmp(),
-    runId: "r1",
-    runLensFn: async () => {
-      throw new Error("boom");
-    },
-    reconcileFn: passthrough,
-    briefFor: () => "b",
-  });
-  assert.equal(r.verdict, "failed");
-});
-
-test("a failed run still writes verdict.json so the marker can be cleared", async () => {
+test("a pass records its diff against the prior pass", async () => {
   const root = tmp();
-  await runLoop({
-    config: cfg({
-      codex: {
-        parallel: 1,
-        lenses: [{ name: "auditor", model: "m", effort: "low", on: true }],
-      },
-    }),
+  const common = {
+    config: cfg({ codex: oneLens() }),
     target: "/repo",
     root,
     runId: "r1",
-    runLensFn: async () => {
-      throw new Error("boom");
-    },
     reconcileFn: passthrough,
     briefFor: () => "b",
+  };
+  const first = await runPass({
+    ...common,
+    pass: 1,
+    prevRecord: null,
+    runLensFn: scripted([[finding("a")]]),
   });
-  const v = JSON.parse(
-    readFileSync(join(runDir(root, "r1"), "verdict.json"), "utf8"),
-  );
-  assert.equal(v.verdict, "failed");
+  const second = await runPass({
+    ...common,
+    pass: 2,
+    prevRecord: first.record,
+    runLensFn: scripted([[finding("b")]]),
+  });
+  assert.equal(second.record.diff.new.length, 1);
+  assert.equal(second.record.diff.closed.length, 1);
 });
 
-test("briefFor is called pass-aware, with the prior pass's record", async () => {
+test("briefFor is called with the lens, the pass number, and the prior record", async () => {
   const calls = [];
-  const r = await runLoop({
-    config: cfg({
-      codex: {
-        parallel: 1,
-        lenses: [{ name: "auditor", model: "m", effort: "low", on: true }],
-      },
-    }),
+  const prevRecord = { pass: 1, findings: [finding("leak")] };
+  await runPass({
+    config: cfg({ codex: oneLens() }),
     target: "/repo",
     root: tmp(),
     runId: "r1",
-    runLensFn: scripted([[finding("leak")], []]),
+    pass: 2,
+    prevRecord,
+    runLensFn: scripted([[]]),
     reconcileFn: passthrough,
-    briefFor: (lens, pass, prevRecord) => {
-      calls.push({ lens, pass, prevRecord });
+    briefFor: (lens, pass, prior) => {
+      calls.push({ lens, pass, prior });
       return "b";
     },
   });
-  assert.equal(r.passes.length, 2);
   assert.equal(calls[0].lens.name, "auditor");
-  assert.equal(calls[0].pass, 1);
-  assert.equal(calls[0].prevRecord, null);
-  assert.equal(calls[1].lens.name, "auditor");
-  assert.equal(calls[1].pass, 2);
-  assert.equal(calls[1].prevRecord.pass, 1);
-  assert.ok(calls[1].prevRecord.findings.some((f) => f.title === "leak"));
+  assert.equal(calls[0].pass, 2);
+  assert.equal(calls[0].prior.pass, 1);
+  assert.ok(calls[0].prior.findings.some((f) => f.title === "leak"));
 });
 
 test("runPass alone executes one pass", async () => {

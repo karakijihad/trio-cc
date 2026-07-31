@@ -1,7 +1,7 @@
 {
   "name": "trio",
   "displayName": "Trio",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Claude, Codex, and you — reviewing each other's work. Drives OpenAI's Codex CLI as a read-only second opinion and auditor.",
   "author": { "name": "karakijihad", "url": "https://github.com/karakijihad" },
   "repository": "https://github.com/karakijihad/trio-cc",

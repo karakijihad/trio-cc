@@ -19,7 +19,7 @@ function fakeSpawn(stdout, { code = 0 } = {}) {
     const proc = new EventEmitter();
     proc.stdout = Readable.from([stdout]);
     proc.stderr = Readable.from([]);
-    proc.stdin = { write() {}, end() {} };
+    proc.stdin = { write() {}, end() {}, on() {} };
     proc.stdout.on("end", () => setImmediate(() => proc.emit("close", code)));
     return proc;
   };
@@ -37,7 +37,7 @@ test("sandbox is read-only and frozen", () => {
 });
 
 test("buildArgs always passes read-only and never a write sandbox", () => {
-  const args = buildArgs({ lens: LENS, target: "/repo" });
+  const args = buildArgs({ target: "/repo", model: LENS.model, effort: LENS.effort });
   assert.ok(args.includes("--sandbox"));
   assert.equal(args[args.indexOf("--sandbox") + 1], "read-only");
   assert.equal(args.includes("workspace-write"), false);
@@ -45,11 +45,11 @@ test("buildArgs always passes read-only and never a write sandbox", () => {
 });
 
 test("buildArgs carries json, cwd, model and effort", () => {
-  const args = buildArgs({ lens: LENS, target: "/repo" });
+  const args = buildArgs({ target: "/repo", model: LENS.model, effort: LENS.effort });
   assert.ok(args.includes("--json"));
   assert.ok(args.includes("--skip-git-repo-check"));
   assert.equal(args[args.indexOf("--cd") + 1], "/repo");
-  assert.equal(args[args.indexOf("-m") + 1], "gpt-5.6-luna");
+  assert.equal(args[args.indexOf("--model") + 1], "gpt-5.6-luna");
   assert.ok(args.includes("model_reasoning_effort=xhigh"));
 });
 
@@ -163,6 +163,42 @@ test("runLens reports failed on a non-zero exit", async () => {
   });
   assert.equal(r.status, "failed");
   assert.deepEqual(r.findings, []);
+});
+
+test("a launch failure settles the lens as failed instead of crashing", async () => {
+  const dir = tmp();
+  // What Node does when the binary cannot be executed: an 'error' event and
+  // no process. Unlistened, it becomes an uncaught exception that takes the
+  // whole audit down.
+  const spawnFn = () => {
+    const proc = new EventEmitter();
+    proc.stdout = Readable.from([]);
+    proc.stderr = Readable.from([]);
+    proc.stdin = { write() {}, end() {}, on() {} };
+    setImmediate(() => {
+      const err = new Error("spawn codex ENOENT");
+      err.code = "ENOENT";
+      proc.emit("error", err);
+      proc.emit("close", null);
+    });
+    return proc;
+  };
+  const r = await runLens({
+    lens: LENS,
+    target: "/repo",
+    brief: "b",
+    runDirPath: dir,
+    run: "r1",
+    pass: 1,
+    spawnFn,
+  });
+  assert.equal(r.status, "failed");
+  assert.deepEqual(r.findings, []);
+  assert.ok(
+    readEvents(dir).some(
+      (e) => e.kind === "error" && /failed to start/.test(e.payload.error),
+    ),
+  );
 });
 
 test("a failed lens still names itself in the result", async () => {

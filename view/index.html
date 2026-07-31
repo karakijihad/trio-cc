@@ -1,151 +1,480 @@
 <!doctype html>
 <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Trio</title>
 <style>
-  :root {
-    color-scheme: light dark;
-    --bg: #fff;
-    --fg: #111;
-    --dim: #666;
-    --line: #e3e3e3;
+  html[data-theme="light"] {
+    --bg: #f7f6f3;
+    --panel: #fffefc;
+    --fg: #17191d;
+    --dim: #6d7079;
+    --faint: #9a9da5;
+    --line: #e4e1da;
+    --rule: #efece6;
     --ok: #1a7f37;
     --bad: #b3261e;
+    --warn: #a35b00;
+    --codex: #c2570a;
+    --claude: #5a54cf;
+    --trio: #6d7079;
+    --inset: #f2efe9;
+    --shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
   }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #111;
-      --fg: #eee;
-      --dim: #999;
-      --line: #2a2a2a;
-    }
+  html[data-theme="dark"] {
+    --bg: #0d0f12;
+    --panel: #14171b;
+    --fg: #e7e9ec;
+    --dim: #8b9099;
+    --faint: #656c76;
+    --line: #232830;
+    --rule: #1c2026;
+    --ok: #4ec26f;
+    --bad: #f0685f;
+    --warn: #e0a34a;
+    --codex: #e08a3c;
+    --claude: #8f8bf0;
+    --trio: #8b9099;
+    --inset: #1a1e24;
+    --shadow: none;
+  }
+  * {
+    box-sizing: border-box;
   }
   body {
     margin: 0;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
     background: var(--bg);
     color: var(--fg);
     font:
-      13px/1.5 ui-monospace,
+      12.5px/1.6 ui-monospace,
       SFMono-Regular,
+      "SF Mono",
       Menlo,
+      Consolas,
       monospace;
+    -webkit-font-smoothing: antialiased;
   }
+
   header {
-    padding: 8px 12px;
+    height: 44px;
+    padding: 0 14px;
     border-bottom: 1px solid var(--line);
+    background: var(--panel);
     display: flex;
-    gap: 16px;
-    align-items: baseline;
+    gap: 14px;
+    align-items: center;
+    box-shadow: var(--shadow);
   }
   h1 {
-    font-size: 13px;
+    font-size: 12px;
     margin: 0;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.22em;
     text-transform: uppercase;
+    font-weight: 600;
   }
   #meta {
     color: var(--dim);
+    font-size: 11.5px;
+    letter-spacing: 0.02em;
   }
+  #meta.off {
+    color: var(--bad);
+  }
+  .spacer {
+    flex: 1;
+  }
+  #theme {
+    appearance: none;
+    border: 1px solid var(--line);
+    background: transparent;
+    color: var(--dim);
+    font: inherit;
+    font-size: 12px;
+    line-height: 1;
+    padding: 6px 9px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition:
+      color 0.12s,
+      border-color 0.12s,
+      background 0.12s;
+  }
+  #theme:hover {
+    color: var(--fg);
+    border-color: var(--dim);
+    background: var(--inset);
+  }
+  #theme:focus-visible {
+    outline: 2px solid var(--claude);
+    outline-offset: 1px;
+  }
+
+  /* The run's own lane is a strip under the header, not a column — columns are
+     for the agents actually working, so five or six of them fit without a
+     horizontal scrollbar. */
+  #hood {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+    padding: 7px 14px;
+    background: var(--inset);
+    border-bottom: 1px solid var(--line);
+    color: var(--dim);
+    font-size: 11.5px;
+    min-height: 32px;
+  }
+  #hood:empty {
+    display: none;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 1px 8px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--panel);
+    white-space: nowrap;
+  }
+  .chip b {
+    font-weight: 500;
+    color: var(--fg);
+  }
+  .chip.good b {
+    color: var(--ok);
+  }
+  .chip.bad b {
+    color: var(--bad);
+  }
+
   #lanes {
     display: flex;
     gap: 1px;
     background: var(--line);
-    height: calc(100vh - 38px);
+    flex: 1;
+    min-height: 0;
     overflow-x: auto;
   }
   .lane {
-    background: var(--bg);
-    min-width: 340px;
-    flex: 1;
+    background: var(--panel);
+    min-width: 220px;
+    flex: 1 1 0;
     display: flex;
     flex-direction: column;
   }
   .lane > h2 {
-    font-size: 12px;
+    font-size: 11.5px;
+    font-weight: 500;
     margin: 0;
-    padding: 6px 10px;
-    border-bottom: 1px solid var(--line);
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--rule);
     color: var(--dim);
+    display: flex;
+    align-items: center;
+    gap: 8px;
     position: sticky;
     top: 0;
-    background: var(--bg);
+    background: var(--panel);
+    z-index: 1;
   }
+  .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--trio);
+    flex: none;
+  }
+  .lane[data-actor="codex"] .dot {
+    background: var(--codex);
+  }
+  .lane[data-actor="claude"] .dot {
+    background: var(--claude);
+  }
+  .name {
+    color: var(--fg);
+    letter-spacing: 0.04em;
+    flex: none;
+  }
+  /* The dot already says which agent this is, so the spelled-out actor is what
+     gives way first when a lane gets narrow. */
+  .role {
+    color: var(--faint);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tokens {
+    margin-left: auto;
+    padding-left: 8px;
+    color: var(--faint);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
   .events {
     overflow-y: auto;
-    padding: 6px 10px;
+    padding: 10px 12px 24px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--line) transparent;
+  }
+  .events::-webkit-scrollbar {
+    width: 9px;
+  }
+  .events::-webkit-scrollbar-thumb {
+    background: var(--line);
+    border-radius: 5px;
   }
   .ev {
-    margin: 0 0 8px;
+    margin: 0 0 9px;
     white-space: pre-wrap;
     word-break: break-word;
   }
-  .kind {
+  .ev.reasoning {
     color: var(--dim);
+    border-left: 2px solid var(--rule);
+    padding-left: 9px;
   }
-  .cmd {
-    color: var(--fg);
+  .ev.cmd {
+    background: var(--inset);
+    border-radius: 5px;
+    padding: 6px 9px;
+  }
+  .sigil {
+    color: var(--faint);
+    user-select: none;
+  }
+  .exit {
+    font-size: 11px;
+    padding: 0 5px;
+    margin-left: 8px;
+    border-radius: 4px;
+    font-variant-numeric: tabular-nums;
   }
   .exit-0 {
     color: var(--ok);
+    background: color-mix(in srgb, var(--ok) 12%, transparent);
   }
   .exit-bad {
     color: var(--bad);
+    background: color-mix(in srgb, var(--bad) 14%, transparent);
+  }
+  .sev {
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 1px 6px;
+    margin-right: 7px;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+  .sev-critical {
+    color: var(--bad);
+    background: color-mix(in srgb, var(--bad) 16%, transparent);
+  }
+  .sev-major {
+    color: var(--warn);
+    background: color-mix(in srgb, var(--warn) 16%, transparent);
+  }
+  .sev-minor,
+  .sev-info {
+    color: var(--dim);
+    background: var(--inset);
+  }
+  .file {
+    color: var(--fg);
+  }
+  .diff {
+    margin-top: 5px;
+    border-left: 2px solid var(--rule);
+    border-radius: 0 4px 4px 0;
+    overflow: hidden;
+  }
+  .diff ins,
+  .diff del,
+  .diff span {
+    display: block;
+    text-decoration: none;
+    padding: 0 8px;
   }
   .diff ins {
-    background: rgba(26, 127, 55, 0.16);
-    text-decoration: none;
-    display: block;
+    background: color-mix(in srgb, var(--ok) 14%, transparent);
+    color: var(--fg);
   }
   .diff del {
-    background: rgba(179, 38, 30, 0.16);
-    text-decoration: none;
-    display: block;
+    background: color-mix(in srgb, var(--bad) 14%, transparent);
+    color: var(--fg);
+  }
+  .diff span {
+    color: var(--dim);
+  }
+  .kind {
+    color: var(--faint);
+  }
+  .kind.err {
+    color: var(--bad);
+  }
+  .empty {
+    color: var(--faint);
+    padding: 24px 14px;
   }
 </style>
+
 <header>
   <h1>Trio</h1>
   <span id="meta">connecting…</span>
+  <span class="spacer"></span>
+  <button id="theme" type="button" aria-live="polite">◐ theme</button>
 </header>
-<div id="lanes"></div>
+<div id="hood"></div>
+<div id="lanes"><div class="empty">waiting for the first event…</div></div>
+
 <script>
+  // Theme: resolved to a concrete value at boot so the toggle always wins over
+  // the OS preference, and remembered per browser.
+  const root = document.documentElement;
+  const btn = document.getElementById("theme");
+  const stored = localStorage.getItem("trio-theme");
+
+  function setTheme(t) {
+    root.dataset.theme = t;
+    btn.textContent = t === "dark" ? "☀ light" : "☾ dark";
+    btn.setAttribute(
+      "aria-label",
+      "switch to " + (t === "dark" ? "light" : "dark") + " theme",
+    );
+  }
+  // Dark is the shipped default; the toggle's choice is remembered from then on.
+  setTheme(stored === "light" ? "light" : "dark");
+  btn.addEventListener("click", () => {
+    const next = root.dataset.theme === "dark" ? "light" : "dark";
+    localStorage.setItem("trio-theme", next);
+    setTheme(next);
+  });
+
   const lanes = new Map();
   const el = document.getElementById("lanes");
+  const hood = document.getElementById("hood");
   const meta = document.getElementById("meta");
   let count = 0;
 
-  function laneFor(name) {
+  // Run-level events (pass boundaries, verdict) go to the strip under the
+  // header rather than claiming a column, so the columns stay with the agents
+  // doing the work and five or six of them fit without scrolling sideways.
+  function toHood(ev) {
+    const p = ev.payload || {};
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    const label = document.createElement("span");
+    label.textContent = String(ev.kind).replace(/_/g, " ");
+    const value = document.createElement("b");
+    value.textContent =
+      p.verdict ??
+      p.error ??
+      (p.findings !== undefined
+        ? `${p.findings} findings`
+        : p.pass !== undefined
+          ? `pass ${p.pass}`
+          : "");
+    if (p.verdict === "clean") chip.className = "chip good";
+    if (p.error || p.verdict === "failed" || p.verdict === "ceiling_reached")
+      chip.className = "chip bad";
+    chip.append(label);
+    if (String(value.textContent)) chip.append(value);
+    hood.append(chip);
+  }
+
+  function laneFor(name, actor) {
     if (lanes.has(name)) return lanes.get(name);
+    el.querySelector(".empty")?.remove();
+
+    const [who, role] = String(name).split(":");
     const wrap = document.createElement("section");
     wrap.className = "lane";
+    wrap.dataset.actor = actor || who || "trio";
+
     const h = document.createElement("h2");
-    h.textContent = name;
+    const dot = document.createElement("span");
+    dot.className = "dot";
+    const nm = document.createElement("span");
+    nm.className = "name";
+    nm.textContent = role || who;
+    const rl = document.createElement("span");
+    rl.className = "role";
+    rl.textContent = role ? who : "";
+    const tk = document.createElement("span");
+    tk.className = "tokens";
+    h.append(dot, nm, rl, tk);
+
     const body = document.createElement("div");
     body.className = "events";
     wrap.append(h, body);
     el.append(wrap);
-    lanes.set(name, body);
-    return body;
+
+    const lane = { body, tokens: tk };
+    lanes.set(name, lane);
+    return lane;
   }
 
   function render(ev) {
     const p = ev.payload || {};
+    if ((ev.lane || "") === "trio" || ev.actor === "trio") {
+      toHood(ev);
+      meta.textContent = `${++count} events · ${lanes.size} lanes`;
+      return;
+    }
+    const lane = laneFor(ev.lane || "unknown", ev.actor);
+
+    // Token usage belongs in the lane header, not the event stream.
+    if (ev.kind === "usage") {
+      lane.tokens.textContent = `${p.input_tokens || 0} in / ${p.output_tokens || 0} out`;
+      meta.textContent = `${++count} events · ${lanes.size} lanes`;
+      return;
+    }
+
     const node = document.createElement("div");
     node.className = "ev";
-    if (ev.kind === "agent_message" || ev.kind === "reasoning") {
+
+    if (ev.kind === "agent_message") {
+      // A lens reports findings as "<severity> · <file:line> — …"; surface the
+      // severity as a pill so the stream is scannable.
+      const text = p.text || "";
+      const sev = /^(critical|major|minor|info)\s+·\s+/.exec(text);
+      if (sev) {
+        const pill = document.createElement("span");
+        pill.className = "sev sev-" + sev[1];
+        pill.textContent = sev[1];
+        node.append(pill, document.createTextNode(text.slice(sev[0].length)));
+      } else {
+        node.textContent = text;
+      }
+    } else if (ev.kind === "reasoning") {
+      node.className = "ev reasoning";
       node.textContent = p.text || "";
     } else if (ev.kind === "command_execution") {
+      node.className = "ev cmd";
+      const sig = document.createElement("span");
+      sig.className = "sigil";
+      sig.textContent = "$ ";
+      const cmd = document.createElement("span");
+      cmd.textContent = p.command || "";
+      node.append(sig, cmd);
       const code = p.exit_code;
-      node.innerHTML = '<span class="kind">$ </span><span class="cmd"></span>';
-      node.querySelector(".cmd").textContent = p.command || "";
       if (code !== null && code !== undefined) {
         const badge = document.createElement("span");
-        badge.className = code === 0 ? "exit-0" : "exit-bad";
-        badge.textContent = "  exit " + code;
+        badge.className = "exit " + (code === 0 ? "exit-0" : "exit-bad");
+        badge.textContent = "exit " + code;
         node.append(badge);
       }
     } else if (ev.kind === "file_change") {
-      if (ev.actor === "claude") {
-        node.textContent = "✎ " + (p.file || "");
-      } else {
+      const f = document.createElement("span");
+      f.className = "file";
+      f.textContent = (ev.actor === "claude" ? "✎ " : "") + (p.file || "");
+      node.append(f);
+      if (ev.actor !== "claude") {
         const d = document.createElement("div");
         d.className = "diff";
         for (const line of String(p.diff || "").split("\n")) {
@@ -158,20 +487,20 @@
           n.textContent = line;
           d.append(n);
         }
-        node.append(document.createTextNode(p.file || ""), d);
+        node.append(d);
       }
-    } else if (ev.kind === "usage") {
-      node.innerHTML = '<span class="kind"></span>';
-      node.querySelector(".kind").textContent =
-        `${p.input_tokens || 0} in / ${p.output_tokens || 0} out`;
     } else {
-      node.innerHTML = '<span class="kind"></span>';
-      node.querySelector(".kind").textContent =
-        ev.kind + " " + (p.error || p.tool || p.agent_type || "");
+      const k = document.createElement("span");
+      k.className = "kind" + (p.error ? " err" : "");
+      k.textContent = ev.kind + " " + (p.error || p.tool || p.agent_type || "");
+      node.append(k);
     }
-    const body = laneFor(ev.lane || "unknown");
-    body.append(node);
-    body.scrollTop = body.scrollHeight;
+
+    const atBottom =
+      lane.body.scrollHeight - lane.body.scrollTop - lane.body.clientHeight <
+      40;
+    lane.body.append(node);
+    if (atBottom) lane.body.scrollTop = lane.body.scrollHeight;
     meta.textContent = `${++count} events · ${lanes.size} lanes`;
   }
 
@@ -183,5 +512,9 @@
   };
   src.onerror = () => {
     meta.textContent = "disconnected";
+    meta.className = "off";
+  };
+  src.onopen = () => {
+    meta.className = "";
   };
 </script>

@@ -14,6 +14,7 @@ import { applyVerdicts } from "./reconcile.mjs";
 import { promote } from "./promote.mjs";
 import { readEvents, makeEvent, appendEvent } from "./bus.mjs";
 import { runDir, passDir, activeMarker, trioDir } from "./paths.mjs";
+import { readMarker, writeMarker, removeMarker } from "./marker.mjs";
 import { scrubDeep } from "./scrub.mjs";
 import { DEFAULT_CONFIG } from "./config.mjs";
 
@@ -23,23 +24,56 @@ import { DEFAULT_CONFIG } from "./config.mjs";
 // defaults every finding to "confirm".
 const passthrough = (findings) => applyVerdicts(findings, []);
 
-function readMarker(root) {
-  try {
-    return JSON.parse(readFileSync(activeMarker(root), "utf8"));
-  } catch {
-    return null;
+
+// The durable half of cancellation: `trio cancel` signals the worker process,
+// but a signal can be missed (the pid is gone, the kill is refused). The token
+// is what a surviving worker checks before it writes anything else, so a
+// cancelled run stays cancelled either way.
+export const cancelToken = (root, runId) =>
+  join(runDir(root, runId), "cancelled");
+
+export const isCancelled = (root, runId) =>
+  existsSync(cancelToken(root, runId));
+
+// Claiming the marker IS the lock. Exclusive creation ("wx") is one atomic
+// filesystem operation, so of two starts racing each other exactly one wins —
+// a read-then-write guard cannot promise that, because both can read "absent"
+// before either writes. The claim goes down before a run id exists; startRun
+// rewrites it with the real id once the run directory is its own.
+//
+// An existing marker means: another start is mid-flight (run: null), a run is
+// genuinely in progress, or a crash left a marker whose run already reached a
+// verdict — only the last is stale, and only that one is cleared and retried.
+function claimActiveRun(root) {
+  mkdirSync(trioDir(root), { recursive: true });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      writeFileSync(
+        activeMarker(root),
+        JSON.stringify({ run: null, pass: 0, pid: process.pid }),
+        { flag: "wx" },
+      );
+      return { ok: true };
+    } catch (err) {
+      if (err.code !== "EEXIST") throw err;
+      const held = readMarker(root);
+      if (!held?.run) return { ok: false, runId: null, pass: null };
+      if (!existsSync(join(runDir(root, held.run), "verdict.json")))
+        return { ok: false, runId: held.run, pass: held.pass ?? null };
+      removeMarker(root);
+    }
   }
+  return { ok: false, runId: null, pass: null };
 }
 
-function writeMarker(root, runId, pass) {
-  writeFileSync(activeMarker(root), JSON.stringify({ run: runId, pass }));
-}
-
-function removeMarker(root) {
-  try {
-    rmSync(activeMarker(root), { force: true });
-  } catch {
-    /* already gone */
+// Timestamps alone are not collision-resistant — two runs inside the same
+// second would share a directory and overwrite each other's artifacts. Suffix
+// until the directory is genuinely new.
+function uniqueRunId(root, base) {
+  if (!existsSync(runDir(root, base))) return base;
+  for (let n = 2; ; n++) {
+    const candidate = `${base}-${n}`;
+    if (!existsSync(runDir(root, candidate))) return candidate;
   }
 }
 
@@ -297,19 +331,36 @@ export async function startRun({
   if (selection.error) return { status: "invalid_lenses", error: selection.error };
   config = selection.config;
 
-  const startedAt = now ?? new Date();
-  const runId = newRunId(startedAt);
-  const dir = runDir(root, runId);
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(
-    join(dir, "run.json"),
-    JSON.stringify(
-      { runId, target, startedAt: startedAt.toISOString(), config },
-      null,
-      2,
-    ) + "\n",
-  );
-  writeMarker(root, runId, 1);
+  // Nothing below this line runs unless this process owns the marker.
+  const claim = claimActiveRun(root);
+  if (!claim.ok)
+    return {
+      status: "run_in_progress",
+      runId: claim.runId,
+      pass: claim.pass,
+    };
+
+  let runId, dir;
+  try {
+    const startedAt = now ?? new Date();
+    runId = uniqueRunId(root, newRunId(startedAt));
+    dir = runDir(root, runId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "run.json"),
+      JSON.stringify(
+        { runId, target, startedAt: startedAt.toISOString(), config },
+        null,
+        2,
+      ) + "\n",
+    );
+    writeMarker(root, runId, 1);
+  } catch (err) {
+    // The claim is held but the run never existed — release it, or every
+    // later start would refuse against a marker naming nothing.
+    removeMarker(root);
+    return { status: "finished", verdict: "failed", runId: null, error: err.message };
+  }
 
   if (beforeFirstPass) {
     try {
@@ -331,6 +382,12 @@ export async function startRun({
       reconcileFn: passthrough,
       briefFor: briefFor(root, runId),
     });
+
+    // Cancelled mid-pass: the verdict is already on disk and is the
+    // authority. Report it rather than asking Claude to adjudicate a run the
+    // operator has ended.
+    if (isCancelled(root, runId))
+      return finalize({ root, runId, config, verdict: "cancelled" });
 
     const done = finalizeIfDone({ root, runId, config, pass: 1, converged });
     if (done) return done;
@@ -394,6 +451,9 @@ export async function continueRun({ root, runLensFn }) {
     });
   }
 
+  if (isCancelled(root, runId))
+    return finalize({ root, runId, config, verdict: "cancelled" });
+
   try {
     const stored = readReconcile(root, runId, N);
     const { record, converged } = applyAdjudication({
@@ -419,6 +479,9 @@ export async function continueRun({ root, runLensFn }) {
       reconcileFn: passthrough,
       briefFor: briefFor(root, runId),
     });
+
+    if (isCancelled(root, runId))
+      return finalize({ root, runId, config, verdict: "cancelled" });
 
     const done2 = finalizeIfDone({
       root,

@@ -16,7 +16,6 @@ const tmp = () => mkdtempSync(join(tmpdir(), "trio-"));
 test("ships disabled with a ceiling of 2", () => {
   assert.equal(DEFAULT_CONFIG.enabled, false);
   assert.equal(DEFAULT_CONFIG.maxIterations, 2);
-  assert.equal(DEFAULT_CONFIG.auto, "ask");
 });
 
 test("loadConfig returns defaults when no file exists", () => {
@@ -52,6 +51,18 @@ test("setConfigValue coerces numbers and booleans", () => {
   assert.equal(setConfigValue(DEFAULT_CONFIG, "enabled", "true").enabled, true);
 });
 
+test("setConfigValue rejects counts that `trio run` would refuse", () => {
+  for (const key of ["maxIterations", "codex.parallel", "view.port"]) {
+    for (const bad of ["0", "-1", "1.5"]) {
+      assert.throws(
+        () => setConfigValue(DEFAULT_CONFIG, key, bad),
+        /positive whole number/,
+        `${key}=${bad} was accepted`,
+      );
+    }
+  }
+});
+
 test("setConfigValue rejects an unknown key", () => {
   assert.throws(
     () => setConfigValue(DEFAULT_CONFIG, "view.nonsense", "x"),
@@ -62,8 +73,17 @@ test("setConfigValue rejects an unknown key", () => {
 test("setConfigValue rejects an invalid enum value and lists the valid ones", () => {
   assert.throws(
     () => setConfigValue(DEFAULT_CONFIG, "view.mode", "hologram"),
-    /pane.*html.*transcript.*off/s,
+    /pane.*window.*off/s,
   );
+});
+
+test("setConfigValue rejects a view mode with no implementation", () => {
+  for (const mode of ["html", "transcript"]) {
+    assert.throws(
+      () => setConfigValue(DEFAULT_CONFIG, "view.mode", mode),
+      /invalid value/i,
+    );
+  }
 });
 
 test("setConfigValue does not mutate the input", () => {

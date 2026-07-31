@@ -1,5 +1,5 @@
 ---
-description: Enable Trio for this project
+description: Turn Trio on for this project
 ---
 
 Run `node "${CLAUDE_PLUGIN_ROOT}/bin/trio.mjs" on` and show the resulting panel.

@@ -9,7 +9,9 @@ export const SANDBOX = "read-only";
 const STRICTER =
   '\n\nYour previous reply omitted or malformed the required block. Reply again and end your message with exactly one fenced ```json block of the shape {"findings":[...]}, and nothing after it.';
 
-export function buildArgs({ lens, target }) {
+// The single place any Codex invocation is assembled — audit lenses and
+// consults alike. Two copies of this list drifted apart once already.
+export function buildArgs({ target, model, effort }) {
   return [
     "exec",
     "--json",
@@ -18,10 +20,12 @@ export function buildArgs({ lens, target }) {
     "--skip-git-repo-check",
     "--cd",
     target,
-    "-m",
-    lens.model,
-    "-c",
-    `model_reasoning_effort=${lens.effort}`,
+    // Long forms deliberately: these are the flags the drift guard probes for
+    // in `codex exec --help`, and guard and invocation must not diverge.
+    "--model",
+    model,
+    "--config",
+    `model_reasoning_effort=${effort}`,
   ];
 }
 
@@ -67,14 +71,31 @@ export async function runLens({
   retried = false,
 }) {
   const lane = `codex:${lens.name}`;
-  const cmd = codexCommand(buildArgs({ lens, target }));
+  const cmd = codexCommand(
+    buildArgs({ target, model: lens.model, effort: lens.effort }),
+  );
   const proc = spawnFn(cmd.file, cmd.args, {
     stdio: ["pipe", "pipe", "pipe"],
     ...cmd.opts,
   });
 
-  proc.stdin.write(retried ? brief + STRICTER : brief);
-  proc.stdin.end();
+  // A launch failure (ENOENT, EACCES) arrives as an 'error' event, which Node
+  // throws as an uncaught exception if nothing is listening — killing the whole
+  // audit process. Record it and let this lens settle as failed instead.
+  let launchError = null;
+  proc.on("error", (err) => {
+    launchError = err;
+  });
+  proc.stdin?.on?.("error", () => {
+    /* the child never started; the close handler reports it */
+  });
+
+  try {
+    proc.stdin.write(retried ? brief + STRICTER : brief);
+    proc.stdin.end();
+  } catch {
+    /* same */
+  }
 
   let threadId = null;
   const messages = [];
@@ -99,8 +120,34 @@ export async function runLens({
     );
   });
 
-  const code = await new Promise((resolve) => proc.on("close", resolve));
+  // Settles on whichever comes first: a normal close, or a launch that never
+  // produced a process at all.
+  const code = await new Promise((resolve) => {
+    let settled = false;
+    const done = (v) => {
+      if (settled) return;
+      settled = true;
+      resolve(v);
+    };
+    proc.on("close", done);
+    proc.on("error", () => done(null));
+  });
   const raw = messages.join("\n");
+
+  if (launchError) {
+    appendEvent(
+      runDirPath,
+      makeEvent({
+        run,
+        pass,
+        lane,
+        actor: "codex",
+        kind: "error",
+        payload: { error: `codex failed to start: ${launchError.message}` },
+      }),
+    );
+    return { lens: lens.name, status: "failed", findings: [], threadId, raw };
+  }
 
   if (code !== 0) {
     appendEvent(

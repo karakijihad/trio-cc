@@ -5,11 +5,17 @@ import {
   existsSync,
   appendFileSync,
   readFileSync,
+  writeFileSync,
   mkdirSync,
 } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadConfig, saveConfig, setConfigValue } from "../src/config.mjs";
+import {
+  loadConfig,
+  saveConfig,
+  setConfigValue,
+  configErrors,
+} from "../src/config.mjs";
 import {
   checkDrift,
   validateLens,
@@ -17,7 +23,7 @@ import {
   modelsReport,
 } from "../src/capabilities.mjs";
 import { renderPanel, renderModelsTable } from "../src/panel.mjs";
-import { startRun, continueRun } from "../src/driver.mjs";
+import { startRun, continueRun, cancelToken } from "../src/driver.mjs";
 import { finalizeRun, newRunId } from "../src/orchestrator.mjs";
 import { runLens } from "../src/codex-lane.mjs";
 import { start } from "../src/serve.mjs";
@@ -31,9 +37,18 @@ import {
 
 const root = process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
 const [cmd, ...rest] = process.argv.slice(2);
+// codexCommand throws when Codex cannot be invoked safely (win32 with no
+// resolvable entry point). That is a "Codex is not usable here" answer, not a
+// crash: every caller of this helper already reads a spawnSync-shaped result
+// and treats a non-zero status as not-installed, so shape it that way.
 const run = (bin, args) => {
   if (bin === "codex") {
-    const c = codexCommand(args);
+    let c;
+    try {
+      c = codexCommand(args);
+    } catch (err) {
+      return { status: 127, stdout: "", stderr: err.message, error: err };
+    }
     return spawnSync(c.file, c.args, { encoding: "utf8", ...c.opts });
   }
   return spawnSync(bin, args, { encoding: "utf8" });
@@ -52,31 +67,60 @@ const gatherState = ({ force = false } = {}) => {
 // view mode calls for one. Runs detached and with stdio ignored so a failure
 // here can never block or fail the run; the "error" handlers below stop an
 // unreachable spawn target from surfacing as an unhandled event later.
-const beforeFirstPass = ({ runId }) => {
+// Resolves with the viewer's first line of stdout — the URL it actually
+// bound — or null if it does not arrive in time. The server silently walks
+// forward from the configured port when one is taken, so the configured port
+// is a request, not an answer, and only the server knows which it got.
+const firstLine = (stream, ms) =>
+  new Promise((resolve) => {
+    let buf = "";
+    const finish = (v) => {
+      clearTimeout(timer);
+      stream.destroy();
+      resolve(v);
+    };
+    const timer = setTimeout(() => finish(null), ms);
+    timer.unref?.();
+    stream.setEncoding("utf8");
+    stream.on("data", (chunk) => {
+      buf += chunk;
+      const nl = buf.indexOf("\n");
+      if (nl !== -1) finish(buf.slice(0, nl).trim() || null);
+    });
+    stream.on("error", () => finish(null));
+    stream.on("end", () => finish(buf.trim() || null));
+  });
+
+const beforeFirstPass = async ({ runId }) => {
   try {
     const { view } = loadConfig(root);
     if (view.mode !== "pane" && view.mode !== "window") return;
 
     const bin = fileURLToPath(import.meta.url);
+    const wantsBrowser = view.mode === "window" && view.autoOpen;
     const viewer = spawn(
       process.execPath,
       [bin, "serve", runId, "--auto-exit"],
-      { detached: true, stdio: "ignore" },
+      {
+        detached: true,
+        stdio: ["ignore", wantsBrowser ? "pipe" : "ignore", "ignore"],
+      },
     );
     viewer.on("error", () => {});
     viewer.unref();
+    if (!wantsBrowser) return;
 
-    if (view.mode === "window" && view.autoOpen) {
-      const url = `http://127.0.0.1:${view.port}/`;
-      const o = openUrlCommand(url);
-      const opener = spawn(o.file, o.args, {
-        detached: true,
-        stdio: "ignore",
-        ...o.opts,
-      });
-      opener.on("error", () => {});
-      opener.unref();
-    }
+    const url = await firstLine(viewer.stdout, 10_000);
+    if (!url || !/^http:\/\/127\.0\.0\.1:\d+\/?$/.test(url)) return;
+
+    const o = openUrlCommand(url);
+    const opener = spawn(o.file, o.args, {
+      detached: true,
+      stdio: "ignore",
+      ...o.opts,
+    });
+    opener.on("error", () => {});
+    opener.unref();
   } catch {
     /* a viewer must never block or fail a run */
   }
@@ -123,7 +167,10 @@ switch (cmd) {
     const s = gatherState({ force: true });
     out(renderPanel(s));
     out("");
-    out(run("codex", ["doctor"]).stdout ?? "");
+    // Doctor is the command you run when Codex is broken, so it has to
+    // survive Codex being broken and say what it found.
+    const d = run("codex", ["doctor"]);
+    out(d.stdout || d.stderr || "codex doctor produced no output.");
     break;
   }
 
@@ -241,6 +288,38 @@ switch (cmd) {
       break;
     }
     const runId = marker.run;
+    if (!runId) {
+      // A start that claimed the marker but had not yet named its run.
+      try {
+        rmSync(activeMarker(root));
+      } catch {
+        /* already gone */
+      }
+      out("Cleared a claim from a run that never started.");
+      break;
+    }
+
+    // Order matters. The token goes down first so a worker that survives the
+    // signal still refuses to write anything further; only then is the
+    // process stopped, and only then is the verdict recorded — a run is not
+    // reported cancelled while its lenses are still running.
+    mkdirSync(runDir(root, runId), { recursive: true });
+    writeFileSync(
+      cancelToken(root, runId),
+      JSON.stringify({ at: new Date().toISOString() }),
+    );
+
+    let stopped = null;
+    if (marker.pid && marker.pid !== process.pid) {
+      try {
+        process.kill(marker.pid, "SIGTERM");
+        stopped = marker.pid;
+      } catch (err) {
+        // ESRCH simply means the run process is already gone.
+        if (err.code !== "ESRCH") stopped = null;
+      }
+    }
+
     if (!existsSync(join(runDir(root, runId), "verdict.json"))) {
       let passCount = 0;
       while (
@@ -254,12 +333,37 @@ switch (cmd) {
     } catch {
       /* already gone */
     }
-    out("Run cancelled.");
+    out(stopped ? `Run cancelled (stopped pid ${stopped}).` : "Run cancelled.");
     break;
   }
 
   case "run": {
-    const { config, drift, pre } = gatherState({ force: true });
+    // Arguments and stored config are validated before Codex is probed or
+    // anything is spawned — gatherState({force:true}) shells out to the real
+    // CLI, so validating after it would mean a malformed flag still ran a
+    // process. An unvalidated --max is not cosmetic either: NaN compares
+    // false against every pass number, removing the ceiling the loop needs.
+    const config = loadConfig(root);
+    const maxFlag = rest.indexOf("--max");
+    if (maxFlag !== -1) {
+      const n = Number(rest[maxFlag + 1]);
+      if (!Number.isSafeInteger(n) || n < 1) {
+        out(
+          `--max takes a positive whole number, got: ${rest[maxFlag + 1] ?? "(nothing)"}`,
+        );
+        process.exitCode = 2;
+        break;
+      }
+      config.maxIterations = n;
+    }
+    const bad = configErrors(config);
+    if (bad.length) {
+      out(`Refusing to start — .trio/config.json is invalid:\n  ${bad.join("\n  ")}`);
+      process.exitCode = 2;
+      break;
+    }
+
+    const { drift, pre } = gatherState({ force: true });
     if (!config.enabled) {
       out("Trio is off. Run /trio:on first.");
       process.exitCode = 1;
@@ -276,8 +380,6 @@ switch (cmd) {
       break;
     }
 
-    const maxFlag = rest.indexOf("--max");
-    if (maxFlag !== -1) config.maxIterations = Number(rest[maxFlag + 1]);
     const target = rest.includes("--target")
       ? rest[rest.indexOf("--target") + 1]
       : root;
@@ -299,6 +401,13 @@ switch (cmd) {
       process.exitCode = 2;
       break;
     }
+    if (r.status === "run_in_progress") {
+      out(
+        `A run is already in progress: ${r.runId}${r.pass ? ` (pass ${r.pass})` : ""}.\n  /trio:cancel to end it, then start again.`,
+      );
+      process.exitCode = 1;
+      break;
+    }
     out(JSON.stringify(r, null, 2));
     break;
   }
@@ -311,16 +420,17 @@ switch (cmd) {
   }
 
   case "consult": {
-    const { config, pre } = gatherState();
-    if (pre.state === "not_installed" || pre.state === "not_logged_in") {
-      out(`${pre.message}\n  ${pre.fix}`);
-      process.exitCode = 1;
-      break;
-    }
+    // Usage before probing, for the same reason as `run`.
     const question = rest.join(" ");
     if (!question) {
       out("usage: trio consult <question>");
       process.exitCode = 2;
+      break;
+    }
+    const { config, pre } = gatherState();
+    if (pre.state === "not_installed" || pre.state === "not_logged_in") {
+      out(`${pre.message}\n  ${pre.fix}`);
+      process.exitCode = 1;
       break;
     }
 
@@ -329,14 +439,30 @@ switch (cmd) {
       config.codex.lenses.find((l) => l.on) ?? config.codex.lenses[0];
     mkdirSync(runDir(root, runId), { recursive: true });
     const { askCodex } = await import("../src/consult.mjs");
-    const r = await askCodex({
-      question,
-      target: root,
-      model: lens.model,
-      effort: lens.effort,
-      runDirPath: runDir(root, runId),
-      run: runId,
-    });
+    let r;
+    try {
+      r = await askCodex({
+        question,
+        target: root,
+        model: lens.model,
+        effort: lens.effort,
+        runDirPath: runDir(root, runId),
+        run: runId,
+      });
+    } catch (err) {
+      // Codex being uninvokable is a failed consult, not a crashed CLI —
+      // a cached-fresh preflight can report "ready" for an install that has
+      // broken since it was probed.
+      out(
+        JSON.stringify(
+          { runId, answer: "", failed: true, error: err.message },
+          null,
+          2,
+        ),
+      );
+      process.exitCode = 1;
+      break;
+    }
     out(JSON.stringify({ runId, answer: r.answer, failed: r.failed }, null, 2));
     break;
   }

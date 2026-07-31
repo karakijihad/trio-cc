@@ -30,9 +30,9 @@ Explain that one thing in depth, in Trio's own terms, using the reference
 below. Topics include a command name, a concept (`lens`, `finding`, `pass`,
 `reconciler`, `convergence`, `verdict`, `promotion`, `model`, `view`), a lens
 name (`auditor`, `security`, `tester`, `simplifier`, `consistency`), or a
-config key (`enabled`, `maxIterations`, `auto`, `codex.parallel`,
+config key (`enabled`, `maxIterations`, `codex.parallel`,
 `codex.lenses`, `view.mode`, `view.port`, `view.autoOpen`,
-`converge.blockOn`, `converge.requireNoNewFindings`, `artifacts.raw`,
+`converge.blockOn`, `converge.requireNoNewFindings`,
 `artifacts.promoteTo`). If the topic doesn't match anything below, say so and
 name the closest match.
 
@@ -74,8 +74,10 @@ name the closest match.
 - **Promotion** — on finish, audits render to
   `Docs/Audit/codex/YYYY-MM-DD/audit-N.md` (Codex's findings) and
   `Docs/Audit/claude/YYYY-MM-DD/audit-N.md` (the reconciliation and
-  disagreement table). `N` increments; nothing overwritten. Skipped if
-  `Docs/Audit` doesn't exist.
+  disagreement table). `N` increments; nothing overwritten. **Silently skipped
+  if `Docs/Audit` doesn't exist** — Trio does not create directory trees
+  uninvited, so `mkdir -p Docs/Audit` once is what turns promotion on. Raw
+  runs always live in `.trio/runs/<runId>/`, per project, gitignored.
 - **The event log** — both agents append to `.trio/runs/<runId>/events.jsonl`.
   The viewer tails it; kill the viewer and the audit continues — the log is
   the source of truth. Secrets are scrubbed before anything is written.
@@ -88,20 +90,20 @@ name the closest match.
 
 ### Commands
 
-| Command | What it does |
-| --- | --- |
-| `/trio` | Control panel: install/auth state, Codex version, drift, loop settings, every lens, view mode, artifact paths. |
-| `/trio:on` / `/trio:off` | Enable/disable Trio for this project. `off` stays loaded but dormant — Claude names what it would have sent to Codex. |
-| `/trio:loop [--max N] [--target PATH] [--lenses a,b\|all]` | Run the audit loop. Omit `--lenses` for all five. |
-| `/trio:consult <question>` | Ask Claude and Codex the same question independently; compare, disagreements named. |
-| `/trio:cancel` | Stop the active run; records `cancelled`. |
-| `/trio:lenses [preset\|list]` | Interactive picker for which lenses run — preset or custom, this run or saved. |
-| `/trio:model [lens] [model] [effort]` | Interactive picker for a lens's model and reasoning effort, from the live catalogue. |
-| `/trio:auditor` / `security` / `tester` / `simplifier` / `consistency` | Run the loop through that one lens only. |
-| `/trio:config get` / `set <key> <value>` | Read or change any setting; `set` rejects invalid values with the valid list. |
-| `/trio:lens <name> [on\|off] [model <slug>] [effort <level>]` | Direct, non-interactive lens change. |
-| `/trio:doctor` | Re-probe Codex now (bypasses the 24h cache); reports version, auth, drift. Run this first when something's off. |
-| `/trio:help [topic]` | This reference. |
+| Command                                                                | What it does                                                                                                          |
+| ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `/trio`                                                                | Control panel: install/auth state, Codex version, drift, loop settings, every lens, view mode, artifact paths.        |
+| `/trio:on` / `/trio:off`                                               | Enable/disable Trio for this project. `off` stays loaded but dormant — Claude names what it would have sent to Codex. |
+| `/trio:loop [--max N] [--target PATH] [--lenses a,b\|all]`             | Run the audit loop. Omit `--lenses` for all five.                                                                     |
+| `/trio:consult <question>`                                             | Ask Claude and Codex the same question independently; compare, disagreements named.                                   |
+| `/trio:cancel`                                                         | Stop the active run: cancellation token, run process stopped, `cancelled` recorded.                                   |
+| `/trio:lenses [preset\|list]`                                          | Interactive picker for which lenses run — preset or custom, this run or saved.                                        |
+| `/trio:model [lens] [model] [effort]`                                  | Interactive picker for a lens's model and reasoning effort, from the live catalogue.                                  |
+| `/trio:auditor` / `security` / `tester` / `simplifier` / `consistency` | Run the loop through that one lens only.                                                                              |
+| `/trio:config get` / `set <key> <value>`                               | Read or change any setting; `set` rejects invalid values with the valid list.                                         |
+| `/trio:lens <name> [on\|off] [model <slug>] [effort <level>]`          | Direct, non-interactive lens change.                                                                                  |
+| `/trio:doctor`                                                         | Re-probe Codex now (bypasses the 24h cache); reports version, auth, drift. Run this first when something's off.       |
+| `/trio:help [topic]`                                                   | This reference.                                                                                                       |
 
 Two skills fire without a slash command: `trio-audit` when the operator says
 things like "have Codex audit this," and `trio-consult` for "ask Codex what
@@ -109,17 +111,15 @@ it thinks."
 
 ### Settings (`.trio/config.json`)
 
-| Key | Default | Meaning |
-| --- | --- | --- |
-| `enabled` | `false` | Whether Trio runs at all here. |
-| `maxIterations` | `2` | Pass ceiling. |
-| `auto` | `ask` | After a code-modifying task: `off`/`ask`/`always`. |
-| `codex.parallel` | `2` | Lenses run at once. |
-| `codex.lenses[]` | 5 entries, all `on` | `{name, model, effort, on}` per lens. |
-| `view.mode` | `window` | `window`/`pane`/`html`/`transcript`/`off`. |
-| `view.port` | `4319` | Viewer's local port. |
-| `view.autoOpen` | `true` | Auto-open the browser in `window` mode. |
-| `converge.blockOn` | `["critical","major"]` | Severities that must be all-clear to converge. |
-| `converge.requireNoNewFindings` | `true` | A new finding blocks convergence too. |
-| `artifacts.raw` | `.trio/runs` | Raw run data and event log. |
-| `artifacts.promoteTo` | `Docs/Audit` | Where finished audits are promoted. |
+| Key                             | Default                | Meaning                                        |
+| ------------------------------- | ---------------------- | ---------------------------------------------- |
+| `enabled`                       | `false`                | Whether Trio runs at all here.                 |
+| `maxIterations`                 | `2`                    | Pass ceiling.                                  |
+| `codex.parallel`                | `2`                    | Lenses run at once.                            |
+| `codex.lenses[]`                | 5 entries, all `on`    | `{name, model, effort, on}` per lens.          |
+| `view.mode`                     | `window`               | `window`/`pane`/`off`.                         |
+| `view.port`                     | `4319`                 | Viewer's local port.                           |
+| `view.autoOpen`                 | `true`                 | Auto-open the browser in `window` mode.        |
+| `converge.blockOn`              | `["critical","major"]` | Severities that must be all-clear to converge. |
+| `converge.requireNoNewFindings` | `true`                 | A new finding blocks convergence too.          |
+| `artifacts.promoteTo`           | `Docs/Audit`           | Where finished audits are promoted.            |

@@ -27,6 +27,19 @@ test("binds loopback only", async () => {
   server.close();
 });
 
+test("walks past an occupied port and reports the one it actually bound", async () => {
+  const first = await start({ runDirPath: tmp(), port: 0 });
+  // Ask for the port already in use: the server must move on, and the URL it
+  // returns is the only truthful one — the configured port is a request.
+  const second = await start({ runDirPath: tmp(), port: first.port });
+  assert.notEqual(second.port, first.port);
+  assert.equal(second.url, `http://127.0.0.1:${second.port}`);
+  const res = await fetch(second.url);
+  assert.equal(res.status, 200);
+  first.server.close();
+  second.server.close();
+});
+
 test("serves the pane html at /", async () => {
   const { server, url } = await start({ runDirPath: tmp(), port: 0 });
   const res = await fetch(url);

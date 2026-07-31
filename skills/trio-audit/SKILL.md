@@ -1,6 +1,6 @@
 ---
 name: trio-audit
-description: Use when the operator asks for a Codex audit or second review of code - "have Codex audit this", "run the loop", "get Codex to check my work", "audit this with Trio" - or when a code-modifying task has just finished and Trio's auto setting calls for an independent review. Runs a bounded audit loop where Codex reviews read-only through parallel lenses and Claude adjudicates the findings.
+description: Use when the operator asks for a Codex audit or second review of code - "have Codex audit this", "run the loop", "get Codex to check my work", "audit this with Trio" - or when a code-modifying task has just finished and an independent review is called for. Runs a bounded audit loop where Codex reviews read-only through parallel lenses and Claude adjudicates the findings.
 ---
 
 # Trio audit loop
@@ -41,25 +41,23 @@ When the operator has not indicated scope and the change is small, prefer
 2. Read the JSON the command prints. `status: "finished"` → go to Reporting.
    `status: "awaiting_response"` → for pass N:
    a. Read `.trio/runs/<runId>/pass-N/reconcile.json`. If it has findings,
-      dispatch the `trio-reconciler` agent with the findings array; write
-      its verdicts block to `.trio/runs/<runId>/pass-N/verdicts.json`.
+   dispatch the `trio-reconciler` agent with the findings array; write
+   its verdicts block to `.trio/runs/<runId>/pass-N/verdicts.json`.
    b. Fix what the verdicts confirm. Do not accept a finding because Codex
-      is confident — verify against the code; a refuted finding needs cited
-      evidence.
+   is confident — verify against the code; a refuted finding needs cited
+   evidence.
    c. Write `.trio/runs/<runId>/pass-N/response.json` (D17):
-      `{"findings": [{"id", "action": "fixed"|"declined", "note"/"reason"}], "summary"}`
-      — every finding gets an entry; `reason` is required when declining.
+   `{"findings": [{"id", "action": "fixed"|"declined", "note"/"reason"}], "summary"}`
+   — every finding gets an entry; `reason` is required when declining.
    d. Run `node "${CLAUDE_PLUGIN_ROOT}/bin/trio.mjs" continue` and loop from
-      step 2.
+   step 2.
 3. View-mode table:
 
-   | Mode         | What to do                                                            |
-   | ------------ | ---------------------------------------------------------------------- |
-   | `window`     | Default — nothing to do, a browser window opened; close it when done. |
-   | `pane`       | URL + Simple Browser.                                                 |
-   | `html`       | Render after the run.                                                 |
-   | `transcript` | Digest each pass into chat.                                           |
-   | `off`        | Verdict only.                                                         |
+   | Mode     | What to do                                                            |
+   | -------- | --------------------------------------------------------------------- |
+   | `window` | Default — nothing to do, a browser window opened; close it when done. |
+   | `pane`   | URL + Simple Browser.                                                 |
+   | `off`    | Verdict only.                                                         |
 
 ## Reporting
 

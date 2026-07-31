@@ -1,5 +1,5 @@
 ---
-description: Ask the same question to Claude and Codex, then compare
+description: Ask Claude and Codex the same question
 argument-hint: <question>
 ---
 

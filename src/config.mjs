@@ -5,33 +5,74 @@ import { configPath } from "./paths.mjs";
 export const DEFAULT_CONFIG = Object.freeze({
   enabled: false,
   maxIterations: 2,
-  auto: "ask",
   codex: {
     parallel: 2,
     lenses: [
-      { name: "auditor", model: "gpt-5.6-luna", effort: "xhigh", on: true },
-      { name: "security", model: "gpt-5.6-sol", effort: "max", on: true },
-      { name: "tester", model: "gpt-5.4", effort: "high", on: true },
+      { name: "auditor", model: "gpt-5.6-terra", effort: "medium", on: true },
+      { name: "security", model: "gpt-5.6-terra", effort: "medium", on: true },
+      { name: "tester", model: "gpt-5.6-terra", effort: "medium", on: true },
       {
         name: "simplifier",
-        model: "gpt-5.4-mini",
+        model: "gpt-5.6-terra",
         effort: "medium",
         on: true,
       },
-      { name: "consistency", model: "gpt-5.4", effort: "high", on: true },
+      {
+        name: "consistency",
+        model: "gpt-5.6-terra",
+        effort: "medium",
+        on: true,
+      },
     ],
   },
   view: { mode: "window", port: 4319, autoOpen: true },
   converge: { blockOn: ["critical", "major"], requireNoNewFindings: true },
-  artifacts: { raw: ".trio/runs", promoteTo: "Docs/Audit" },
+  artifacts: { promoteTo: "Docs/Audit" },
 });
 
+// Only modes with a production handler are offered. Raw runs always live under
+// .trio/runs — that path is not configurable, so it is not a setting.
 const ENUMS = {
-  auto: ["off", "ask", "always"],
-  "view.mode": ["pane", "window", "html", "transcript", "off"],
+  "view.mode": ["pane", "window", "off"],
 };
 
+const POSITIVE_INTEGERS = new Set([
+  "maxIterations",
+  "codex.parallel",
+  "view.port",
+]);
+
+const MAX_PORT = 65535;
+
 const clone = (v) => JSON.parse(JSON.stringify(v));
+
+const at = (obj, dotted) =>
+  dotted.split(".").reduce((o, k) => (o == null ? o : o[k]), obj);
+
+// A config.json edited by hand bypasses setConfigValue entirely, and its
+// values reach real command lines — view.port is interpolated into the URL
+// handed to the OS browser launcher. Every caller that acts on config checks
+// this first, so a malformed file is refused rather than executed.
+export function configErrors(cfg) {
+  const errors = [];
+  for (const key of POSITIVE_INTEGERS) {
+    const v = at(cfg, key);
+    if (!Number.isSafeInteger(v) || v < 1)
+      errors.push(
+        `${key} must be a positive whole number, got: ${JSON.stringify(v)}`,
+      );
+  }
+  const port = at(cfg, "view.port");
+  if (Number.isSafeInteger(port) && port > MAX_PORT)
+    errors.push(`view.port must be between 1 and ${MAX_PORT}, got: ${port}`);
+
+  const mode = at(cfg, "view.mode");
+  if (!ENUMS["view.mode"].includes(mode))
+    errors.push(
+      `view.mode must be one of: ${ENUMS["view.mode"].join(", ")}, got: ${JSON.stringify(mode)}`,
+    );
+  return errors;
+}
 
 const merge = (base, over) => {
   const out = clone(base);
@@ -88,6 +129,14 @@ export function setConfigValue(cfg, dottedKey, raw) {
     const n = Number(raw);
     if (!Number.isFinite(n))
       throw new Error(`${dottedKey} expects a number, got: ${raw}`);
+    // Counts the loop and the viewer depend on must be whole and positive, or
+    // `trio run` would refuse a value this setter had accepted.
+    if (POSITIVE_INTEGERS.has(dottedKey) && (!Number.isSafeInteger(n) || n < 1))
+      throw new Error(
+        `${dottedKey} expects a positive whole number, got: ${raw}`,
+      );
+    if (dottedKey === "view.port" && n > MAX_PORT)
+      throw new Error(`view.port expects 1-${MAX_PORT}, got: ${raw}`);
     cursor[leaf] = n;
   } else if (typeof current === "boolean") {
     if (!["true", "false"].includes(raw))

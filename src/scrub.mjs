@@ -7,8 +7,11 @@ const RULES = [
     /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}/g,
     "<redacted:token>",
   ],
+  // GitHub's post-2021 formats delimit with an underscore (ghp_, gho_,
+  // github_pat_); Slack and OpenAI use a hyphen. Accept either, or the
+  // underscore families reach events.jsonl in the clear.
   [
-    /\b(?:sk|gho|ghp|github_pat|xox[baprs])-[A-Za-z0-9_-]{12,}/g,
+    /\b(?:sk|gho|ghp|ghu|ghs|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{12,}/g,
     "<redacted:token>",
   ],
   [/\bBearer\s+[A-Za-z0-9._-]{16,}/gi, "Bearer <redacted:token>"],

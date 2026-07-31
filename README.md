@@ -9,7 +9,7 @@ both agents working side by side in a live browser window.
 Three participants, and the third one is you. Trio automates the handoff, not
 the judgement.
 
-> **Status: v0.2.0.** Install: `/plugin marketplace add karakijihad/trio-cc` then
+> **Status: v0.3.0.** Install: `/plugin marketplace add karakijihad/trio-cc` then
 > `/plugin install trio@trio-cc`, `/reload-plugins`, `/trio`.
 > Verified against Codex CLI 0.146.0.
 
@@ -54,6 +54,16 @@ you) should narrow the set deliberately per run with
 exit codes) on one lane, and the Claude ↔ Codex handover (findings out,
 Claude's reply back — no Claude diff bodies) on the other. By default an OS
 browser window opens itself when the run starts; no setup needed.
+
+![The Trio viewer: a run strip across the top, then one column per lens with
+severity-tagged findings](media/viewer-dark.png)
+
+<sub>An example run — five lenses auditing in parallel, Claude's adjudication
+in the last column.</sub>
+
+One column per working agent; the run's own events sit in the strip under the
+header rather than taking a column, so five or six lenses fit without a sideways
+scroll. Dark by default, with a light toggle in the corner that remembers.
 
 ---
 
@@ -226,24 +236,42 @@ explicit, same-behavior path.
 
 Every key in `.trio/config.json`, with its default:
 
-| Key                             | Default                | Meaning                                                                                                                                                                                               |
-| ------------------------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`                       | `false`                | Whether Trio runs at all for this project. `/trio:on` sets it.                                                                                                                                        |
-| `maxIterations`                 | `2`                    | Pass ceiling. Hitting it without convergence ends the run `ceiling_reached`.                                                                                                                          |
-| `auto`                          | `ask`                  | What Claude does after a code-modifying task: `off` never suggests an audit, `ask` asks first, `always` runs one without asking.                                                                      |
-| `codex.parallel`                | `2`                    | How many lenses run at once. Affects wall-clock time only — every enabled lens still runs, so this does not change cost. To spend less, run fewer lenses (`--lenses`).                                |
-| `codex.lenses[]`                | five entries, all `on` | Each entry: `name`, `model`, `effort`, `on`. Defaults: `auditor` gpt-5.6-luna/xhigh, `security` gpt-5.6-sol/max, `tester` gpt-5.4/high, `simplifier` gpt-5.4-mini/medium, `consistency` gpt-5.4/high. |
-| `view.mode`                     | `window`               | `window` (OS browser window, opens itself) · `pane` (VS Code Simple Browser) · `html` (static file, no server) · `transcript` (digest in chat) · `off`.                                               |
-| `view.port`                     | `4319`                 | Local port the viewer binds.                                                                                                                                                                          |
-| `view.autoOpen`                 | `true`                 | Whether `window` mode opens the browser automatically.                                                                                                                                                |
-| `converge.blockOn`              | `["critical","major"]` | Severities that must have zero open findings before a run can converge.                                                                                                                               |
-| `converge.requireNoNewFindings` | `true`                 | A pass with a brand-new finding can't converge either, even with nothing blocking open.                                                                                                               |
-| `artifacts.raw`                 | `.trio/runs`           | Where every run's raw pass data and event log live.                                                                                                                                                   |
-| `artifacts.promoteTo`           | `Docs/Audit`           | Where finished audits are promoted on completion, if the directory exists.                                                                                                                            |
+| Key                             | Default                | Meaning                                                                                                                                                                |
+| ------------------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                       | `false`                | Whether Trio runs at all for this project. `/trio:on` sets it.                                                                                                         |
+| `maxIterations`                 | `2`                    | Pass ceiling. Hitting it without convergence ends the run `ceiling_reached`.                                                                                           |
+| `codex.parallel`                | `2`                    | How many lenses run at once. Affects wall-clock time only — every enabled lens still runs, so this does not change cost. To spend less, run fewer lenses (`--lenses`). |
+| `codex.lenses[]`                | five entries, all `on` | Each entry: `name`, `model`, `effort`, `on`. All five default to gpt-5.6-terra/medium; change any with `/trio:model` or `/trio:lens`.                                  |
+| `view.mode`                     | `window`               | `window` (OS browser window, opens itself) · `pane` (VS Code Simple Browser) · `off`. A static file is available on demand via `trio render`.                          |
+| `view.port`                     | `4319`                 | Local port the viewer binds.                                                                                                                                           |
+| `view.autoOpen`                 | `true`                 | Whether `window` mode opens the browser automatically.                                                                                                                 |
+| `converge.blockOn`              | `["critical","major"]` | Severities that must have zero open findings before a run can converge.                                                                                                |
+| `converge.requireNoNewFindings` | `true`                 | A pass with a brand-new finding can't converge either, even with nothing blocking open.                                                                                |
+| `artifacts.promoteTo`           | `Docs/Audit`           | Where finished audits are promoted on completion, if the directory exists.                                                                                             |
 
 Config lives at `.trio/config.json` in the project root — change it with
 `/trio:config set <key> <value>` or by editing the file directly. `.trio/` is
 added to `.gitignore` the first time you run `/trio:on`.
+
+### Where the audits end up
+
+Everything is per-project, under the repo you ran the audit in — Trio writes
+nothing to your home directory and nothing outside the project.
+
+- **`.trio/runs/<runId>/`** — every run's raw record: `events.jsonl` (the
+  append-only stream both agents write and the viewer tails), each pass's
+  `reconcile.json`, each lens's own JSON, and the final `verdict.json`. This
+  is gitignored, because raw event streams can carry command output.
+- **`Docs/Audit/codex/YYYY-MM-DD/audit-N.md`** and
+  **`Docs/Audit/claude/YYYY-MM-DD/audit-N.md`** — the readable pair promoted
+  when a run finishes: Codex's findings, and Claude's adjudication with the
+  disagreements. `N` increments; nothing is ever overwritten.
+
+**Promotion is skipped silently when `Docs/Audit/` does not exist.** That is
+deliberate — Trio does not create directory trees in your repo uninvited. If
+you finished a run and found no promoted files, that is why: run
+`mkdir -p Docs/Audit` once, and every later run lands there. Point it
+somewhere else with `/trio:config set artifacts.promoteTo <path>`.
 
 ---
 
@@ -277,6 +305,66 @@ still open — never rounded up to "clean."
 
 ---
 
+## Why Trio
+
+**You already have two of the best coding models in the world. Trio is what
+makes the second one useful.**
+
+A model is a poor reviewer of its own work and a good reviewer of somebody
+else's. Claude reviewing Claude shares a training set, a house style, and a set
+of blind spots — it re-derives the reasoning that produced the bug and calls it
+verified. Codex fails differently. Point it at the same code and it finds what
+Claude cannot see, because the two miss different things.
+
+The catch has always been the friction: a second terminal, re-explaining the
+task, pasting findings back, deciding which of them are actually true. Trio
+removes exactly that friction — and nothing else. One command, five reviewer
+perspectives in parallel, every finding adjudicated against the code, and a
+verdict you can trust because it refuses to round itself up.
+
+What you get for it:
+
+- **Bugs a self-review does not catch.** A different vendor's model with
+  uncorrelated blind spots — the single highest-yield reviewer you can add.
+- **No coordination cost.** Codex is read-only by construction. No worktrees,
+  no merge conflicts, no diff-approval queue. Adding a reviewer costs the
+  review and nothing more.
+- **No false comfort.** A run that hits the pass ceiling with findings open
+  reports `ceiling_reached`, and a crashed lens makes the run partial. Green
+  means green.
+- **No new bill, no new account, no telemetry.** Your Codex, your OpenAI plan,
+  your rate limits. Trio ships no credentials and phones nowhere.
+- **A record you can hand to somebody.** Every run promotes both sides —
+  Codex's findings and Claude's adjudication, disagreements included — to dated
+  files in `Docs/Audit/`.
+
+Against the alternatives:
+
+| Instead of…                                    | What you get there                                                                            | What Trio does differently                                                                                              |
+| ---------------------------------------------- | --------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| A self-review pass or a reviewer subagent      | Fast and free, but correlated blind spots — the reviewer rationalises what the author decided | A different vendor's model, uncorrelated failure modes                                                                  |
+| Multi-agent setups where every agent can write | Competing edits, worktrees, merge conflicts, diff-approval fatigue                            | Exactly one writer. Codex is `--sandbox read-only`, hardcoded — no coordination problem to solve                        |
+| Linters, type checkers, SAST in CI             | Deterministic and cheap, but bounded by their rule set                                        | Findings a rule set cannot express — "the README promises this flag and the code ignores it"                            |
+| Running Codex yourself in a second terminal    | The same second opinion, if you carry the context by hand each time                           | The handoff is automated: scoped briefs, parallel lenses, a pass-2 conversation that shows Codex its own prior findings |
+| One-shot "LLM as judge" review                 | A verdict, with no standard for accepting it                                                  | Every finding is adjudicated — confirm · refute · downgrade · escalate — and a refutation must cite code                |
+
+Two things make the difference in practice.
+
+**Confidence is not evidence.** A raw second opinion is noisy — plausible,
+confident, and sometimes wrong. Trio never hands you that. Claude rules on
+every finding against the actual code, and refuting one requires citing what
+disproves it. Findings come back confirmed, downgraded, refuted, or merged as
+duplicates, so what reaches you is the part that survived scrutiny — not a
+list to triage yourself.
+
+**Pass 2 is a conversation, not a re-run.** Codex sees its own prior findings,
+the diff of what changed, and which findings were declined and why. It can
+agree, push back, or tell you what the fix broke. That is the pass where the
+subtle regressions surface, and it is the one you cannot get by asking a fresh
+reviewer the same question twice.
+
+---
+
 ## Design notes
 
 **Codex is strictly read-only.** `--sandbox read-only`, hardcoded, not a
@@ -295,6 +383,32 @@ log; the pane tails it. Kill the viewer mid-run and the audit carries on.
 **No network calls of its own.** The viewer binds `127.0.0.1` only. Codex talks
 to OpenAI on your credentials; Claude talks to Anthropic on yours. Trio talks to
 nobody, and there is no telemetry.
+
+**One run at a time, and cancel means cancel.** A run claims `.trio/active` by
+exclusive creation, so two starts cannot race into the same directory — the
+second is told which run is already in flight. `/trio:cancel` writes a
+cancellation token, stops the run process, and records the `cancelled`
+verdict; the first verdict written wins, so a worker finishing late can never
+overwrite it.
+
+---
+
+## Credits
+
+Trio is glue. The intelligence belongs to two other teams:
+
+- **[OpenAI Codex CLI](https://github.com/openai/codex)** — the reviewer.
+  Trio drives it read-only through [`codex exec`](https://developers.openai.com/codex/cli/).
+  Install with `npm i -g @openai/codex`; it runs on your own
+  [OpenAI / ChatGPT](https://openai.com/codex/) account.
+- **[Claude Code](https://claude.com/claude-code)** by
+  [Anthropic](https://www.anthropic.com) — the author and the adjudicator, and
+  the host this plugin is built for. See the
+  [plugin docs](https://docs.claude.com/en/docs/claude-code/plugins).
+
+Neither project is affiliated with Trio, and Trio ships no credentials for
+either. If something here misrepresents what Codex or Claude Code does, that
+is a bug — please open an issue.
 
 ---
 

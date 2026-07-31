@@ -1,5 +1,5 @@
 ---
-description: Re-probe the Codex install and report Trio's health
+description: Re-probe Codex and report Trio's health
 ---
 
 Run `node "${CLAUDE_PLUGIN_ROOT}/bin/trio.mjs" doctor` and show its output

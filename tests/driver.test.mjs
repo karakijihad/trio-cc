@@ -80,7 +80,10 @@ test("startRun: a major finding yields awaiting_response with the marker held", 
   assert.equal(r.pass, 1);
   assert.equal(r.findings.length, 1);
   const marker = JSON.parse(readFileSync(activeMarker(root), "utf8"));
-  assert.deepEqual(marker, { run: r.runId, pass: 1 });
+  assert.equal(marker.run, r.runId);
+  assert.equal(marker.pass, 1);
+  // The owning process id is what `trio cancel` signals.
+  assert.equal(marker.pid, process.pid);
   assert.ok(existsSync(join(passDir(root, r.runId, 1), "reconcile.json")));
   assert.equal(
     existsSync(join(runDir(root, r.runId), "verdict.json")),
@@ -91,6 +94,62 @@ test("startRun: a major finding yields awaiting_response with the marker held", 
   );
   assert.equal(runJson.target, "/repo");
   assert.deepEqual(runJson.config, config);
+});
+
+test("startRun: refuses to start over a run that is still in flight", async () => {
+  const root = tmp();
+  const first = await startRun({
+    root,
+    config: cfg({ maxIterations: 2 }),
+    target: "/repo",
+    runLensFn: okLens([finding("leak")]),
+  });
+  assert.equal(first.status, "awaiting_response");
+
+  let called = false;
+  const second = await startRun({
+    root,
+    config: cfg({ maxIterations: 2 }),
+    target: "/repo",
+    runLensFn: async (...args) => {
+      called = true;
+      return okLens([])(...args);
+    },
+  });
+  assert.equal(second.status, "run_in_progress");
+  assert.equal(second.runId, first.runId);
+  assert.equal(second.pass, 1);
+  assert.equal(called, false, "the second run must not spawn a lens");
+  // The first run's marker and artifacts are untouched.
+  const marker = JSON.parse(readFileSync(activeMarker(root), "utf8"));
+  assert.equal(marker.run, first.runId);
+  assert.equal(marker.pass, 1);
+});
+
+test("startRun: a marker left behind by a finished run is cleared, not obeyed", async () => {
+  const root = tmp();
+  const done = await startRun({
+    root,
+    config: cfg(),
+    target: "/repo",
+    runLensFn: okLens([]),
+  });
+  assert.equal(done.verdict, "clean");
+  // Simulate a crash after finalization that left the marker behind.
+  mkdirSync(trioDir(root), { recursive: true });
+  writeFileSync(
+    activeMarker(root),
+    JSON.stringify({ run: done.runId, pass: 1 }),
+  );
+
+  const next = await startRun({
+    root,
+    config: cfg(),
+    target: "/repo",
+    runLensFn: okLens([]),
+  });
+  assert.equal(next.status, "finished");
+  assert.notEqual(next.runId, done.runId);
 });
 
 test("continueRun: a refuting verdict converges without another lens call", async () => {
@@ -354,7 +413,7 @@ test("startRun: a promote() throw does not corrupt the verdict or escape", async
   const promoteFile = join(root, "promote-target-is-a-file");
   writeFileSync(promoteFile, "not a directory");
   const config = cfg({
-    artifacts: { raw: ".trio/runs", promoteTo: "promote-target-is-a-file" },
+    artifacts: { promoteTo: "promote-target-is-a-file" },
   });
 
   const r = await startRun({

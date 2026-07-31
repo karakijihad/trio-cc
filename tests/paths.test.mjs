@@ -4,43 +4,10 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  codexBin,
-  shellQuote,
   resolveCodexScript,
   codexCommand,
   openUrlCommand,
 } from "../src/paths.mjs";
-
-test("codexBin resolves to the npm shim name on win32, plain name elsewhere", () => {
-  if (process.platform === "win32") {
-    assert.equal(codexBin(), "codex.cmd");
-  } else {
-    assert.equal(codexBin(), "codex");
-  }
-});
-
-test("shellQuote quotes an argument containing a space", () => {
-  const out = shellQuote(["--cd", "/repo with space"]);
-  if (process.platform === "win32") {
-    assert.equal(out[1], '"/repo with space"');
-  } else {
-    assert.equal(out[1], "/repo with space");
-  }
-});
-
-test("shellQuote leaves an argument without a space untouched", () => {
-  const out = shellQuote(["--cd", "/repo"]);
-  assert.equal(out[1], "/repo");
-});
-
-test("shellQuote is identity off win32", () => {
-  const args = ["--cd", "/repo with space"];
-  if (process.platform !== "win32") {
-    assert.deepEqual(shellQuote(args), args);
-  } else {
-    assert.notDeepEqual(shellQuote(args), args);
-  }
-});
 
 test("resolveCodexScript finds the npm shim's JS entry point", () => {
   const dir = mkdtempSync(join(tmpdir(), "trio-shim-"));
@@ -61,22 +28,25 @@ test("resolveCodexScript ignores a shim with no sibling entry point", () => {
   assert.equal(resolveCodexScript(dir), null);
 });
 
-test("codexCommand never asks for a shell unless it has to", () => {
-  const cmd = codexCommand(["exec", "--json"]);
+test("codexCommand never asks for a shell", () => {
+  let cmd;
+  try {
+    cmd = codexCommand(["exec", "--json"]);
+  } catch (err) {
+    // win32 with no resolvable entry point: fails closed rather than
+    // composing a cmd.exe command line.
+    assert.equal(process.platform, "win32");
+    assert.match(err.message, /codex\.cmd/);
+    return;
+  }
+  assert.deepEqual(cmd.opts, {});
   if (process.platform === "win32") {
-    // npm layout → node + script, no shell. Other layouts → documented fallback.
-    if (cmd.file === process.execPath) {
-      assert.deepEqual(cmd.opts, {});
-      assert.match(cmd.args[0], /codex\.js$/);
-      assert.deepEqual(cmd.args.slice(1), ["exec", "--json"]);
-    } else {
-      assert.equal(cmd.file, "codex.cmd");
-      assert.equal(cmd.opts.shell, true);
-    }
+    assert.equal(cmd.file, process.execPath);
+    assert.match(cmd.args[0], /codex\.js$/);
+    assert.deepEqual(cmd.args.slice(1), ["exec", "--json"]);
   } else {
     assert.equal(cmd.file, "codex");
     assert.deepEqual(cmd.args, ["exec", "--json"]);
-    assert.deepEqual(cmd.opts, {});
   }
 });
 

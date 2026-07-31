@@ -14,16 +14,6 @@ export const configPath = (root) => join(trioDir(root), "config.json");
 export const capabilitiesPath = (root) =>
   join(trioDir(root), "capabilities.json");
 
-export const codexBin = () =>
-  process.platform === "win32" ? "codex.cmd" : "codex";
-
-// With shell:true Node joins argv with spaces and cmd.exe re-splits it, so any
-// argument containing whitespace must carry its own quotes. No-op off win32.
-export const shellQuote = (args) =>
-  process.platform === "win32"
-    ? args.map((a) => (/\s/.test(a) ? `"${a}"` : a))
-    : args;
-
 // npm installs the CLI as `codex.cmd`, a batch file Node will not spawn without
 // a shell. Its sibling JS entry point can be spawned directly.
 export function resolveCodexScript(pathEnv = process.env.PATH ?? "") {
@@ -38,11 +28,18 @@ export function resolveCodexScript(pathEnv = process.env.PATH ?? "") {
 
 // One place that decides how Codex is invoked. Every caller spawns
 // `file` with `args` and spreads `opts` — nothing else branches on platform.
+//
+// Fails closed on win32 rather than falling back to `shell: true`: that
+// fallback ran the arguments through cmd.exe, where an audit target carrying
+// `&` or `|` would have been read as a command separator.
 export function codexCommand(args) {
   if (process.platform !== "win32") return { file: "codex", args, opts: {} };
   const js = resolveCodexScript();
   if (js) return { file: process.execPath, args: [js, ...args], opts: {} };
-  return { file: codexBin(), args: shellQuote(args), opts: { shell: true } };
+  throw new Error(
+    "cannot locate the Codex JavaScript entry point beside codex.cmd on PATH — " +
+      "reinstall with `npm i -g @openai/codex`",
+  );
 }
 
 // The OS default-browser launcher for a URL. cmd.exe here follows the D2a

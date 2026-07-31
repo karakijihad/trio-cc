@@ -61,9 +61,6 @@ export function renderPanel({
   lines.push(
     `${pad("Loop", 11)}max iterations  ${config.maxIterations}${pad("", 6)}stop on  ${config.converge.blockOn.join(", ")}`,
   );
-  lines.push(
-    `${pad("Auto", 11)}${config.auto}${pad("", 14)}(off | ask | always)`,
-  );
   lines.push("");
   config.codex.lenses.forEach((l, i) => {
     lines.push(
@@ -75,7 +72,7 @@ export function renderPanel({
     `${pad("View", 11)}mode  ${pad(config.view.mode, 10)}port ${config.view.port}${pad("", 3)}autoOpen ${config.view.autoOpen ? "✓" : "✗"}`,
   );
   lines.push(
-    `${pad("Artifacts", 11)}raw ${config.artifacts.raw}  →  promote ${config.artifacts.promoteTo}/<agent>/YYYY-MM-DD/`,
+    `${pad("Artifacts", 11)}raw .trio/runs  →  promote ${config.artifacts.promoteTo}/<agent>/YYYY-MM-DD/`,
   );
   lines.push(RULE);
   lines.push(
@@ -84,7 +81,7 @@ export function renderPanel({
       : "/trio:on   to enable",
   );
   lines.push(
-    "/trio:lens security model gpt-5.6-terra effort ultra     /trio:config set view.mode html",
+    "/trio:lens security model gpt-5.6-terra effort ultra     /trio:config set view.mode pane",
   );
   lines.push("/trio:help   full command and concept reference");
   return lines.join("\n");

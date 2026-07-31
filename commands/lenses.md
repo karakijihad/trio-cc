@@ -1,6 +1,6 @@
 ---
-description: Pick which audit lenses run, as a preset or per-lens toggle
-argument-hint: [preset name | lens list]
+description: Pick which audit lenses run
+argument-hint: [preset]
 ---
 
 Run `node "${CLAUDE_PLUGIN_ROOT}/bin/trio.mjs" models --json` to read which

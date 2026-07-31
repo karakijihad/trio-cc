@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { EventEmitter } from "node:events";
-import { askCodex, renderComparison } from "../src/consult.mjs";
+import { askCodex } from "../src/consult.mjs";
 import { readEvents } from "../src/bus.mjs";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "trio-consult-"));
@@ -15,7 +15,7 @@ function fakeSpawn(stdout, code = 0) {
     const p = new EventEmitter();
     p.stdout = Readable.from([stdout]);
     p.stderr = Readable.from([]);
-    p.stdin = { write() {}, end() {} };
+    p.stdin = { write() {}, end() {}, on() {} };
     p.stdout.on("end", () => setImmediate(() => p.emit("close", code)));
     return p;
   };
@@ -68,26 +68,4 @@ test("askCodex reports a failure rather than throwing", async () => {
   });
   assert.equal(r.answer, "");
   assert.equal(r.failed, true);
-});
-
-test("renderComparison shows both answers under labelled headings", () => {
-  const md = renderComparison({
-    question: "Is this locking sound?",
-    claudeAnswer: "A mutex is fine here.",
-    codexAnswer: "Use a mutex, not a spinlock.",
-  });
-  assert.match(md, /## Claude/);
-  assert.match(md, /## Codex/);
-  assert.match(md, /Is this locking sound\?/);
-  assert.match(md, /spinlock/);
-});
-
-test("renderComparison flags a failed Codex answer instead of pretending agreement", () => {
-  const md = renderComparison({
-    question: "q",
-    claudeAnswer: "a",
-    codexAnswer: "",
-    codexFailed: true,
-  });
-  assert.match(md, /did not answer/i);
 });

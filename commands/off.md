@@ -1,5 +1,5 @@
 ---
-description: Disable Trio, leaving it loaded but dormant
+description: Turn Trio off for this project
 ---
 
 Run `node "${CLAUDE_PLUGIN_ROOT}/bin/trio.mjs" off` and report the result in one line.

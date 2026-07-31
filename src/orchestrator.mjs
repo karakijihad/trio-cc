@@ -1,12 +1,15 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { diffPasses, isConverged } from "./findings.mjs";
 import { makeEvent, appendEvent } from "./bus.mjs";
-import { runDir, passDir, activeMarker } from "./paths.mjs";
+import { runDir, passDir } from "./paths.mjs";
+import { writeMarker } from "./marker.mjs";
 import { scrubDeep } from "./scrub.mjs";
 
+// Seconds, not minutes: two runs started in the same minute would otherwise
+// share a directory and overwrite each other's artifacts.
 export function newRunId(now = new Date()) {
-  return now.toISOString().slice(0, 16).replace(/:/g, "-");
+  return now.toISOString().slice(0, 19).replace(/:/g, "-");
 }
 
 async function pool(items, limit, worker) {
@@ -46,7 +49,7 @@ export async function runPass({
 
   // keep the hook's marker in step so Claude-lane events carry the right pass
   try {
-    writeFileSync(activeMarker(root), JSON.stringify({ run: runId, pass }));
+    writeMarker(root, runId, pass);
   } catch {
     /* not enabled */
   }
@@ -124,11 +127,27 @@ export async function runPass({
   return { record, converged };
 }
 
+function readVerdict(dir) {
+  try {
+    const parsed = JSON.parse(readFileSync(join(dir, "verdict.json"), "utf8"));
+    return typeof parsed?.verdict === "string" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 // The run's tail: writes verdict.json and emits run_finished. Always runs,
 // including on the "failed" path (D13).
 export function finalizeRun({ root, runId, verdict, passCount }) {
   const dir = runDir(root, runId);
   mkdirSync(dir, { recursive: true });
+
+  // First verdict wins. A run cancelled from another terminal writes its
+  // verdict while this process may still be finishing a pass; the worker
+  // arriving late must not overwrite "cancelled" with its own outcome.
+  const existing = readVerdict(dir);
+  if (existing) return existing;
+
   writeFileSync(
     join(dir, "verdict.json"),
     JSON.stringify({ verdict, passes: passCount, runId }, null, 2) + "\n",
@@ -152,57 +171,3 @@ export function finalizeRun({ root, runId, verdict, passCount }) {
   return { verdict, passes: passCount, runId };
 }
 
-export async function runLoop({
-  config,
-  target,
-  root,
-  runId,
-  runLensFn,
-  reconcileFn,
-  briefFor,
-}) {
-  const dir = runDir(root, runId);
-  mkdirSync(dir, { recursive: true });
-
-  const passes = [];
-  let prevRecord = null;
-  let verdict = "ceiling_reached";
-
-  try {
-    for (let pass = 1; pass <= config.maxIterations; pass++) {
-      const { record, converged } = await runPass({
-        config,
-        target,
-        root,
-        runId,
-        pass,
-        prevRecord,
-        runLensFn,
-        reconcileFn,
-        briefFor,
-      });
-      passes.push(record);
-      prevRecord = record;
-      if (converged) {
-        verdict = "clean";
-        break;
-      }
-    }
-  } catch (err) {
-    verdict = "failed";
-    appendEvent(
-      dir,
-      makeEvent({
-        run: runId,
-        pass: passes.length,
-        lane: "trio",
-        actor: "trio",
-        kind: "error",
-        payload: { error: `run failed: ${err.message}` },
-      }),
-    );
-  }
-
-  finalizeRun({ root, runId, verdict, passCount: passes.length });
-  return { verdict, passes };
-}

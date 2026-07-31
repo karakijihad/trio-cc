@@ -1,7 +1,7 @@
 import { spawn as nodeSpawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { makeEvent, appendEvent } from "./bus.mjs";
-import { mapEvent, SANDBOX } from "./codex-lane.mjs";
+import { mapEvent, buildArgs } from "./codex-lane.mjs";
 import { codexCommand } from "./paths.mjs";
 
 const PREAMBLE =
@@ -16,26 +16,25 @@ export async function askCodex({
   run,
   spawnFn = nodeSpawn,
 }) {
-  const args = [
-    "exec",
-    "--json",
-    "--sandbox",
-    SANDBOX,
-    "--skip-git-repo-check",
-    "--cd",
-    target,
-    "-m",
-    model,
-    "-c",
-    `model_reasoning_effort=${effort}`,
-  ];
-  const cmd = codexCommand(args);
+  const cmd = codexCommand(buildArgs({ target, model, effort }));
   const proc = spawnFn(cmd.file, cmd.args, {
     stdio: ["pipe", "pipe", "pipe"],
     ...cmd.opts,
   });
-  proc.stdin.write(PREAMBLE + question);
-  proc.stdin.end();
+
+  // See runLens: an unlistened 'error' from a failed launch is an uncaught
+  // exception, not a failed consult.
+  let launchError = null;
+  proc.on("error", (err) => {
+    launchError = err;
+  });
+  proc.stdin?.on?.("error", () => {});
+  try {
+    proc.stdin.write(PREAMBLE + question);
+    proc.stdin.end();
+  } catch {
+    /* the child never started */
+  }
 
   let threadId = null;
   const messages = [];
@@ -64,29 +63,16 @@ export async function askCodex({
     );
   });
 
-  const code = await new Promise((resolve) => proc.on("close", resolve));
-  if (code !== 0) return { answer: "", threadId, failed: true };
+  const code = await new Promise((resolve) => {
+    let settled = false;
+    const done = (v) => {
+      if (settled) return;
+      settled = true;
+      resolve(v);
+    };
+    proc.on("close", done);
+    proc.on("error", () => done(null));
+  });
+  if (launchError || code !== 0) return { answer: "", threadId, failed: true };
   return { answer: messages.join("\n\n").trim(), threadId, failed: false };
-}
-
-export function renderComparison({
-  question,
-  claudeAnswer,
-  codexAnswer,
-  codexFailed = false,
-}) {
-  return [
-    `# Consult — ${question}`,
-    "",
-    "## Claude",
-    "",
-    claudeAnswer.trim() || "_No answer._",
-    "",
-    "## Codex",
-    "",
-    codexFailed
-      ? "_Codex did not answer — the run failed. Treat this as one opinion, not two._"
-      : codexAnswer.trim() || "_No answer._",
-    "",
-  ].join("\n");
 }
