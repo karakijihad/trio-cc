@@ -398,9 +398,8 @@ overwrite it.
 Trio is glue. The intelligence belongs to two other teams:
 
 - **[OpenAI Codex CLI](https://github.com/openai/codex)** — the reviewer.
-  Trio drives it read-only through [`codex exec`](https://developers.openai.com/codex/cli/).
-  Install with `npm i -g @openai/codex`; it runs on your own
-  [OpenAI / ChatGPT](https://openai.com/codex/) account.
+  Every lens is a `codex exec` process
+  ([docs](https://learn.chatgpt.com/docs/codex/cli)), on your own account.
 - **[Claude Code](https://claude.com/claude-code)** by
   [Anthropic](https://www.anthropic.com) — the author and the adjudicator, and
   the host this plugin is built for. See the
