@@ -4,7 +4,7 @@
 
 Trio is a Claude Code plugin that lets Claude consult OpenAI's Codex as a
 read-only second opinion, run a bounded audit loop between the two, and show
-both agents working side by side in a live VS Code pane.
+both agents working side by side in a live browser window.
 
 Three participants, and the third one is you. Trio automates the handoff, not
 the judgement.
