@@ -32,6 +32,17 @@ test("removeMarker leaves a marker that names a different run alone", async () =
   assert.equal(existsSync(activeMarker(root)), false);
 });
 
+// The likeliest thing standing there when an orphan finishes is the {run:null}
+// a fresh claim writes before it has named its run.
+test("removeMarker leaves an unnamed fresh claim alone", async () => {
+  const { removeMarker } = await import("../src/marker.mjs");
+  const root = tmp();
+  mkdirSync(trioDir(root), { recursive: true });
+  writeFileSync(activeMarker(root), JSON.stringify({ run: null, pass: 0 }));
+  assert.equal(removeMarker(root, "older-run"), false);
+  assert.equal(existsSync(activeMarker(root)), true);
+});
+
 // The marker outlives a pass on purpose, so this tap would otherwise record
 // hours of unrelated work while a run sits parked between passes.
 test("the tap stops appending once the log is oversized", () => {

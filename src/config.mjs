@@ -119,8 +119,12 @@ export function loadConfig(root) {
   let raw;
   try {
     raw = readFileSync(configPath(root), "utf8");
-  } catch {
-    return clone(DEFAULT_CONFIG); // no config yet — a fresh project
+  } catch (err) {
+    // Only "there is no config here" is a fresh project. A config that exists
+    // but cannot be read — EACCES, EPERM, EISDIR — must not fail open now
+    // that the default is enabled.
+    if (err.code === "ENOENT") return clone(DEFAULT_CONFIG);
+    return { ...clone(DEFAULT_CONFIG), enabled: false, unreadable: true };
   }
   try {
     return merge(DEFAULT_CONFIG, JSON.parse(raw));

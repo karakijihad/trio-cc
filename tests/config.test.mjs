@@ -49,6 +49,16 @@ test("an unreadable config fails closed instead of restoring the on default", ()
   assert.match(configErrors(cfg).join(" "), /not valid JSON/);
 });
 
+// Only ENOENT is a fresh project. A config that exists but cannot be read
+// must not fail open now that the default is enabled.
+test("a config that cannot be read at all fails closed too", () => {
+  const root = tmp();
+  mkdirSync(join(trioDir(root), "config.json"), { recursive: true });
+  const cfg = loadConfig(root); // EISDIR, not ENOENT
+  assert.equal(cfg.enabled, false);
+  assert.equal(cfg.unreadable, true);
+});
+
 test("the unreadable marker is never written back to disk", () => {
   const root = tmp();
   saveConfig(root, { ...DEFAULT_CONFIG, unreadable: true });

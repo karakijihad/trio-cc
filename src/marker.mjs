@@ -28,7 +28,10 @@ export function removeMarker(root, runId) {
   try {
     if (runId) {
       const held = readMarker(root);
-      if (held?.run && held.run !== runId) return false;
+      // Any marker that is not ours is somebody else's, including the
+      // {run: null} a fresh claim writes before it has named its run — which
+      // is the likeliest thing to be standing there when an orphan finishes.
+      if (held && held.run !== runId) return false;
     }
     rmSync(activeMarker(root), { force: true });
     return true;

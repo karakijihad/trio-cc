@@ -209,6 +209,19 @@ const latestFinishedRun = (root) => {
 // .trio/ holds raw event streams that quote source and command output, so it
 // belongs in .gitignore — but only where there is a checkout to ignore it in.
 // Trio's root is wherever it was invoked, which is not always a repo.
+// `trio cancel` stops the worker process. Node does not cascade a signal to
+// children, and off win32 the tree-killer is a no-op, so without this the
+// lenses a worker spawned outlive the run that owns them. Every command that
+// spawns lenses needs it — `continue` runs them exactly as `run` does.
+const stopLensesOnSignal = () => {
+  const stop = () => {
+    stopAllLenses();
+    process.exit(1);
+  };
+  process.on("SIGTERM", stop);
+  process.on("SIGINT", stop);
+};
+
 const ensureGitignore = () => {
   if (!existsSync(join(root, ".git"))) return;
   const gi = join(root, ".gitignore");
@@ -576,15 +589,7 @@ switch (cmd) {
     // writes to .trio/ — /trio:on is no longer the guaranteed first touch.
     ensureGitignore();
 
-    // `trio cancel` stops this process. Node does not cascade a signal to
-    // children, and off win32 the tree-killer is a no-op, so without this the
-    // lenses this worker spawned would outlive the run that owns them.
-    const stopOnSignal = () => {
-      stopAllLenses();
-      process.exit(1);
-    };
-    process.on("SIGTERM", stopOnSignal);
-    process.on("SIGINT", stopOnSignal);
+    stopLensesOnSignal();
 
     const r = await startRun({
       root,
@@ -611,6 +616,7 @@ switch (cmd) {
   }
 
   case "continue": {
+    stopLensesOnSignal();
     const r = await continueRun({ root, runLensFn: runLens });
     out(JSON.stringify(r, null, 2));
     if (r.status === "no_active_run") process.exitCode = 1;
