@@ -20,10 +20,19 @@ export function writeMarker(root, runId, pass) {
   );
 }
 
-export function removeMarker(root) {
+// Releasing the lock is ownership-scoped when a runId is given. A worker that
+// was orphaned — left running by an `off` or a crash while a later run claimed
+// the marker — finishes eventually and clears up after itself; without this
+// check it would delete the newer run's lock instead of its own.
+export function removeMarker(root, runId) {
   try {
+    if (runId) {
+      const held = readMarker(root);
+      if (held?.run && held.run !== runId) return false;
+    }
     rmSync(activeMarker(root), { force: true });
+    return true;
   } catch {
-    /* already gone */
+    return false; /* already gone */
   }
 }

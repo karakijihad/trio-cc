@@ -207,7 +207,9 @@ function finalize({ root, runId, config, verdict }) {
           }),
     };
   } finally {
-    removeMarker(root);
+    // Scoped to this run: an orphaned worker finishing late must release its
+    // own lock, never the lock of whatever run claimed the marker after it.
+    removeMarker(root, runId);
   }
 }
 
@@ -233,7 +235,7 @@ function finalizeFailed({ root, runId, config, err }) {
     const result = finalize({ root, runId, config, verdict: "failed" });
     return { ...result, error: err.message };
   } catch (finalizeErr) {
-    removeMarker(root);
+    removeMarker(root, runId);
     return {
       status: "finished",
       verdict: "failed",
@@ -478,10 +480,10 @@ export async function continueRun({ root, runLensFn }) {
     } catch {
       // The file is evidence — a corrupt verdict.json is never rewritten,
       // only reported as unknown.
-      removeMarker(root);
+      removeMarker(root, runId);
       return { status: "already_finished", verdict: "unknown" };
     }
-    removeMarker(root);
+    removeMarker(root, runId);
     return { status: "already_finished", verdict: parsed.verdict };
   }
 

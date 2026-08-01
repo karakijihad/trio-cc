@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -19,6 +19,18 @@ const activate = (root, runId = "r1") => {
   writeFileSync(activeMarker(root), JSON.stringify({ run: runId, pass: 1 }));
   return runDir(root, runId);
 };
+
+// An orphaned worker finishing late must release its own lock, not the lock
+// of whatever run claimed the marker after it.
+test("removeMarker leaves a marker that names a different run alone", async () => {
+  const { removeMarker } = await import("../src/marker.mjs");
+  const root = tmp();
+  activate(root, "newer-run");
+  assert.equal(removeMarker(root, "older-run"), false);
+  assert.equal(existsSync(activeMarker(root)), true);
+  assert.equal(removeMarker(root, "newer-run"), true);
+  assert.equal(existsSync(activeMarker(root)), false);
+});
 
 // The marker outlives a pass on purpose, so this tap would otherwise record
 // hours of unrelated work while a run sits parked between passes.

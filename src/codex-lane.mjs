@@ -67,6 +67,17 @@ export const DEFAULT_TIMEOUT_MS = 15 * 60_000;
 // Falls back to kill() whenever the tree-killer is unavailable or refuses to
 // launch: a lens that will not die is worse than one killed imprecisely, and
 // either way the settle promise below needs the pipes to close.
+// Lenses currently running in this process. `trio cancel` signals the worker,
+// and off win32 that signal reaches the worker alone: killTreeCommand is a
+// no-op there, Node installs no default cascade, and lens children are not in
+// their own process group. Without this registry a cancelled run on macOS or
+// Linux leaves every Codex child alive and spending.
+const live = new Set();
+
+export function stopAllLenses() {
+  for (const proc of live) killTree(proc);
+}
+
 export function killTree(proc, spawnFn = nodeSpawn) {
   const cmd = killTreeCommand(proc.pid);
   const direct = () => {
@@ -107,6 +118,7 @@ export async function runLens({
   // A launch failure (ENOENT, EACCES) arrives as an 'error' event, which Node
   // throws as an uncaught exception if nothing is listening — killing the whole
   // audit process. Record it and let this lens settle as failed instead.
+  live.add(proc);
   let launchError = null;
   proc.on("error", (err) => {
     launchError = err;
@@ -168,6 +180,7 @@ export async function runLens({
     proc.on("error", () => done(null));
   });
   clearTimeout(deadline);
+  live.delete(proc);
   const raw = messages.join("\n");
 
   // Before the exit-code check, and before the retry: killing the process is

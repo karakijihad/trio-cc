@@ -31,7 +31,7 @@ import {
   promoteRun,
 } from "../src/driver.mjs";
 import { finalizeRun, newRunId } from "../src/orchestrator.mjs";
-import { runLens, killTree } from "../src/codex-lane.mjs";
+import { runLens, killTree, stopAllLenses } from "../src/codex-lane.mjs";
 import { start } from "../src/serve.mjs";
 import {
   activeMarker,
@@ -235,6 +235,27 @@ switch (cmd) {
   }
 
   case "off": {
+    // Deleting the marker out from under a live run does not stop it: the
+    // worker keeps going, keeps spending, and is now unreachable by `cancel`,
+    // which finds the run through that very marker. Refuse instead, and name
+    // the command that actually ends it.
+    let held = null;
+    try {
+      held = JSON.parse(readFileSync(activeMarker(root), "utf8"));
+    } catch {
+      /* nothing in flight */
+    }
+    if (
+      held?.run &&
+      !existsSync(join(runDir(root, held.run), "verdict.json"))
+    ) {
+      out(
+        `A run is in progress: ${held.run}${held.pass ? ` (pass ${held.pass})` : ""}.\n  /trio:cancel to end it, then /trio:off.`,
+      );
+      process.exitCode = 1;
+      break;
+    }
+
     saveConfig(root, { ...loadConfig(root), enabled: false });
     try {
       rmSync(activeMarker(root));
@@ -481,6 +502,22 @@ switch (cmd) {
       process.exitCode = 2;
       break;
     }
+    // A value can be present and still name nothing: `--lenses ,` parses to an
+    // empty list, which applyLensSelection reads as "no selection given" and
+    // runs every lens. What has to be non-empty is the parsed list.
+    const lensFlagAt = rest.indexOf("--lenses");
+    const lensNames =
+      lensFlagAt === -1
+        ? null
+        : (rest[lensFlagAt + 1] ?? "")
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean);
+    if (lensNames && !lensNames.length) {
+      out(`--lenses needs at least one lens name\n\n${USAGE}`);
+      process.exitCode = 2;
+      break;
+    }
 
     // Arguments and stored config are validated before Codex is probed or
     // anything is spawned — gatherState({force:true}) shells out to the real
@@ -530,14 +567,24 @@ switch (cmd) {
     const target = rest.includes("--target")
       ? rest[rest.indexOf("--target") + 1]
       : root;
-    const lensesFlag = rest.indexOf("--lenses");
-    const lensesArg = lensesFlag !== -1 ? rest[lensesFlag + 1] : undefined;
     const lenses =
-      lensesArg === "all" ? "all" : lensesArg?.split(",").filter(Boolean);
+      lensFlagAt !== -1 && rest[lensFlagAt + 1] === "all"
+        ? "all"
+        : (lensNames ?? undefined);
 
     // Trio is on by default, so a first run can be the first thing that ever
     // writes to .trio/ — /trio:on is no longer the guaranteed first touch.
     ensureGitignore();
+
+    // `trio cancel` stops this process. Node does not cascade a signal to
+    // children, and off win32 the tree-killer is a no-op, so without this the
+    // lenses this worker spawned would outlive the run that owns them.
+    const stopOnSignal = () => {
+      stopAllLenses();
+      process.exit(1);
+    };
+    process.on("SIGTERM", stopOnSignal);
+    process.on("SIGINT", stopOnSignal);
 
     const r = await startRun({
       root,

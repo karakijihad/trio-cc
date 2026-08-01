@@ -85,6 +85,17 @@ export function configErrors(cfg) {
   if (Number.isSafeInteger(port) && port > MAX_PORT)
     errors.push(`view.port must be between 1 and ${MAX_PORT}, got: ${port}`);
 
+  // A hand-edited `"lenses": null` survives merge (the guard there is
+  // `v && typeof v === "object"`), and the all-off check in startRun then
+  // throws an uncaught TypeError rather than refusing.
+  const lenses = at(cfg, "codex.lenses");
+  if (!Array.isArray(lenses) || !lenses.length)
+    errors.push(
+      `codex.lenses must be a non-empty array, got: ${JSON.stringify(lenses)}`,
+    );
+  else if (lenses.some((l) => !l || typeof l.name !== "string" || !l.name))
+    errors.push("every entry in codex.lenses needs a name");
+
   const mode = at(cfg, "view.mode");
   if (!ENUMS["view.mode"].includes(mode))
     errors.push(

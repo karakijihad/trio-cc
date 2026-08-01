@@ -227,6 +227,47 @@ test("run rejects an empty flag value rather than running everything", () => {
   assert.match(r.stdout + r.stderr, /--lenses needs a value/);
 });
 
+// A value can be present and still name nothing. Rejecting whitespace alone
+// left `--lenses ,` running every lens.
+test("run rejects a lens list that names nothing", () => {
+  for (const arg of [",", ",,,", " , "]) {
+    const r = trio(project(), ["run", "--lenses", arg]);
+    assert.equal(r.status, 2, JSON.stringify(arg));
+    assert.match(r.stdout + r.stderr, /--lenses needs (a value|at least one)/);
+  }
+});
+
+test("off refuses to abandon a run that is still in flight", () => {
+  const root = project();
+  mkdirSync(join(root, ".trio", "runs", "r1"), { recursive: true });
+  writeFileSync(
+    join(root, ".trio", "active"),
+    JSON.stringify({ run: "r1", pass: 1, pid: 424242 }),
+  );
+  const r = trio(root, ["off"]);
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /run is in progress: r1/);
+  assert.match(r.stdout, /trio:cancel/);
+  // The lock has to survive, or cancel can no longer find the run.
+  assert.equal(existsSync(join(root, ".trio", "active")), true);
+});
+
+test("off still works once the run has a verdict", () => {
+  const root = project();
+  mkdirSync(join(root, ".trio", "runs", "r1"), { recursive: true });
+  writeFileSync(
+    join(root, ".trio", "runs", "r1", "verdict.json"),
+    JSON.stringify({ verdict: "clean", passes: 1, runId: "r1" }),
+  );
+  writeFileSync(
+    join(root, ".trio", "active"),
+    JSON.stringify({ run: "r1", pass: 1 }),
+  );
+  const r = trio(root, ["off"]);
+  assert.equal(r.status, 0);
+  assert.equal(JSON.parse(trio(root, ["config", "get"]).stdout).enabled, false);
+});
+
 // A dashed value is a badly chosen value, not a missing one — it has to reach
 // the check that can say why.
 test("a negative --max still gets the message that explains it", () => {

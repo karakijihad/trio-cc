@@ -58,6 +58,22 @@ test("the unreadable marker is never written back to disk", () => {
   assert.equal("unreadable" in written, false);
 });
 
+// `"lenses": null` is valid JSON, survives merge, and used to reach
+// startRun's all-off check as an uncaught TypeError.
+test("a lens list that is not a non-empty array is refused, not crashed on", () => {
+  for (const lenses of [null, [], "auditor", [{ model: "m" }]]) {
+    const errs = configErrors({
+      ...DEFAULT_CONFIG,
+      codex: { ...DEFAULT_CONFIG.codex, lenses },
+    });
+    assert.ok(
+      errs.some((e) => /codex\.lenses|needs a name/.test(e)),
+      JSON.stringify(lenses),
+    );
+  }
+  assert.equal(configErrors(DEFAULT_CONFIG).length, 0);
+});
+
 test("loadConfig returns defaults when no file exists", () => {
   const cfg = loadConfig(tmp());
   assert.equal(cfg.maxIterations, 2);
