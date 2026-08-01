@@ -39,6 +39,8 @@ import {
   passDir,
   codexCommand,
   openUrlCommand,
+  isRunId,
+  processIsTrio,
 } from "../src/paths.mjs";
 
 const root = process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
@@ -186,6 +188,18 @@ const beforeFirstPass = async ({ runId }) => {
     opener.unref();
   } catch {
     /* a viewer must never block or fail a run */
+  }
+};
+
+// The run named by .trio/active, or null. Every reader of that file goes
+// through here: it is operator-writable state, so `run` is only returned when
+// it is shaped like an id Trio actually minted.
+const activeRun = (root) => {
+  try {
+    const { run } = JSON.parse(readFileSync(activeMarker(root), "utf8"));
+    return isRunId(run) ? run : null;
+  } catch {
+    return null;
   }
 };
 
@@ -367,14 +381,15 @@ switch (cmd) {
 
   case "serve": {
     const config = loadConfig(root);
-    const runId =
-      rest[0] ??
-      (existsSync(activeMarker(root))
-        ? JSON.parse(readFileSync(activeMarker(root), "utf8")).run
-        : null);
+    const runId = rest.find((a) => !a.startsWith("-")) ?? activeRun(root);
     if (!runId) {
       out("No active run — pass a run id.");
       process.exitCode = 1;
+      break;
+    }
+    if (!isRunId(runId)) {
+      out(`Not a run id: ${runId}`);
+      process.exitCode = 2;
       break;
     }
     const { url } = await start({
@@ -393,13 +408,16 @@ switch (cmd) {
     const config = loadConfig(root);
     const runId =
       rest.find((a) => !a.startsWith("--")) ??
-      (existsSync(activeMarker(root))
-        ? JSON.parse(readFileSync(activeMarker(root), "utf8")).run
-        : null) ??
+      activeRun(root) ??
       latestFinishedRun(root);
     if (!runId) {
       out("No finished run to promote.");
       process.exitCode = 1;
+      break;
+    }
+    if (!isRunId(runId)) {
+      out(`Not a run id: ${runId}`);
+      process.exitCode = 2;
       break;
     }
     const r = promoteRun({
@@ -419,9 +437,28 @@ switch (cmd) {
     break;
   }
 
+  // `trio render [runId]` — the id is advertised as optional, and with no
+  // active run this used to throw ENOENT as a raw stack trace.
   case "render": {
     const runId =
-      rest[0] ?? JSON.parse(readFileSync(activeMarker(root), "utf8")).run;
+      rest.find((a) => !a.startsWith("-")) ??
+      activeRun(root) ??
+      latestFinishedRun(root);
+    if (!runId) {
+      out("No run to render — pass a run id.");
+      process.exitCode = 1;
+      break;
+    }
+    if (!isRunId(runId)) {
+      out(`Not a run id: ${runId}`);
+      process.exitCode = 2;
+      break;
+    }
+    if (!existsSync(runDir(root, runId))) {
+      out(`No such run: ${runId}`);
+      process.exitCode = 1;
+      break;
+    }
     const { writeStatic } = await import("../src/render-html.mjs");
     out(writeStatic(runDir(root, runId)));
     break;
@@ -438,7 +475,7 @@ switch (cmd) {
       out("No active run.");
       break;
     }
-    const runId = marker.run;
+    const runId = isRunId(marker.run) ? marker.run : null;
     if (!runId) {
       // A start that claimed the marker but had not yet named its run.
       try {
@@ -460,20 +497,27 @@ switch (cmd) {
       JSON.stringify({ at: new Date().toISOString() }),
     );
 
+    // .trio/active is an ordinary file in the project, so its pid is not
+    // trustworthy input: a tampered or simply stale marker can name any
+    // process on the machine, and the next line signals it. Require a
+    // well-formed pid, require the run directory that marker claims to
+    // belong to, and refuse a pid positively identified as not ours.
+    const pid =
+      Number.isSafeInteger(marker.pid) && marker.pid > 0 ? marker.pid : null;
+    const ownsRun = existsSync(join(runDir(root, runId), "run.json"));
+    const identified = pid ? processIsTrio(pid, run) : null;
+
     let stopped = null;
-    if (marker.pid && marker.pid !== process.pid) {
+    if (pid && pid !== process.pid && ownsRun && identified !== false) {
       try {
         // Signal 0 is a liveness probe: it throws ESRCH when the run process
         // is already gone, and tells us nothing was there to stop.
-        process.kill(marker.pid, 0);
+        process.kill(pid, 0);
         // The worker has Codex children of its own. Signalling only the
         // worker orphans them on win32 — the same defect the lens deadline
         // had before killTree, and cancellation is where it costs most.
-        killTree({
-          pid: marker.pid,
-          kill: () => process.kill(marker.pid, "SIGTERM"),
-        });
-        stopped = marker.pid;
+        killTree({ pid, kill: () => process.kill(pid, "SIGTERM") });
+        stopped = pid;
       } catch {
         /* already gone */
       }

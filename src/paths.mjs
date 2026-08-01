@@ -7,6 +7,14 @@ export const codexHome = () =>
 export const trioDir = (root) => join(root, ".trio");
 export const runsDir = (root) => join(trioDir(root), "runs");
 export const runDir = (root, runId) => join(runsDir(root), runId);
+
+// Run ids are minted by newRunId: an ISO timestamp to the second with the
+// colons replaced, optionally suffixed for a same-second collision and
+// optionally prefixed for a consult. Anything else did not come from Trio,
+// and a runId reaches path.join — `../../..` is how a crafted one escapes
+// .trio/runs and writes live.html wherever it likes.
+const RUN_ID = /^(?:consult-)?\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:-\d+)?$/;
+export const isRunId = (v) => typeof v === "string" && RUN_ID.test(v);
 export const passDir = (root, runId, pass) =>
   join(runDir(root, runId), `pass-${pass}`);
 export const activeMarker = (root) => join(trioDir(root), "active");
@@ -52,6 +60,34 @@ export function codexCommand(args) {
 export function killTreeCommand(pid) {
   if (process.platform !== "win32" || !pid) return null;
   return { file: "taskkill", args: ["/pid", String(pid), "/t", "/f"] };
+}
+
+// Is this pid plausibly a Trio worker? `.trio/active` is an ordinary file in
+// the project, so its pid is attacker-influencable and `cancel` signals it.
+//
+// Deliberately three-valued and fail-open on "cannot tell": returning false
+// on a lookup that simply was not available would break cancelling a real
+// run, which is worse than the narrow case this closes. Only a positive
+// identification of something that is *not* ours stops the signal.
+export function processIsTrio(pid, run) {
+  const cmd =
+    process.platform === "win32"
+      ? { file: "tasklist", args: ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"] }
+      : { file: "ps", args: ["-o", "args=", "-p", String(pid)] };
+  let out;
+  try {
+    const r = run(cmd.file, cmd.args);
+    if (!r || r.status !== 0) return null;
+    out = String(r.stdout ?? "").trim();
+  } catch {
+    return null;
+  }
+  if (!out || /^INFO:/i.test(out)) return null;
+  // tasklist gives the image name only, so on win32 "a node process" is as
+  // much as can be established without a heavier query.
+  return process.platform === "win32"
+    ? /^"node\.exe"/i.test(out)
+    : /trio(\.mjs)?\b/.test(out);
 }
 
 // The OS default-browser launcher for a URL. cmd.exe here follows the D2a

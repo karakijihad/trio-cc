@@ -40,11 +40,20 @@ const waitForExit = async (pid, ms = 5000) => {
   return false;
 };
 
-const claimRun = (root, pid) => {
-  mkdirSync(join(root, ".trio", "runs", "r1"), { recursive: true });
+// A run id has to look like one Trio minted, and cancel now requires the run
+// directory it claims to belong to — a marker naming neither is exactly the
+// tampered state it must not act on.
+const RUN_ID = "2026-08-01T09-15-00";
+
+const claimRun = (root, pid, runId = RUN_ID) => {
+  mkdirSync(join(root, ".trio", "runs", runId), { recursive: true });
+  writeFileSync(
+    join(root, ".trio", "runs", runId, "run.json"),
+    JSON.stringify({ runId, target: root }),
+  );
   writeFileSync(
     join(root, ".trio", "active"),
-    JSON.stringify({ run: "r1", pass: 1, pid }),
+    JSON.stringify({ run: runId, pass: 1, pid }),
   );
 };
 
@@ -127,6 +136,50 @@ test("cancel does not claim to have stopped a process already gone", () => {
   const r = trio(root, ["cancel"]);
   assert.equal(r.status, 0);
   assert.match(r.stdout, /Run cancelled\./);
+  assert.doesNotMatch(r.stdout, /stopped pid/);
+});
+
+// The traversal the audit found: runId went straight into path.join, and
+// render then wrote live.html at whatever that resolved to.
+test("a runId that escapes .trio/runs is refused, not joined", () => {
+  const root = project();
+  const escape = join("..", "..", "escaped-run");
+  for (const cmd of [
+    ["render", escape],
+    ["serve", escape],
+    ["promote", escape],
+  ]) {
+    const r = trio(root, cmd);
+    assert.equal(r.status, 2, cmd.join(" "));
+    assert.match(r.stdout + r.stderr, /Not a run id/);
+  }
+  assert.equal(existsSync(join(root, "..", "..", "escaped-run")), false);
+});
+
+test("render with no run says so instead of throwing", () => {
+  const r = trio(project(), ["render"]);
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /No run to render/);
+  assert.doesNotMatch(r.stdout + r.stderr, /ENOENT|at Object|Error:/);
+});
+
+test("render names a run id that does not exist", () => {
+  const r = trio(project(), ["render", "2026-01-01T00-00-00"]);
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /No such run/);
+});
+
+// A marker naming a run that was never created is tampered or stale; either
+// way its pid must not be signalled.
+test("cancel will not signal a pid whose run directory is absent", () => {
+  const root = project();
+  mkdirSync(join(root, ".trio"), { recursive: true });
+  writeFileSync(
+    join(root, ".trio", "active"),
+    JSON.stringify({ run: "2026-08-01T09-15-00", pass: 1, pid: process.pid }),
+  );
+  const r = trio(root, ["cancel"]);
+  assert.equal(r.status, 0);
   assert.doesNotMatch(r.stdout, /stopped pid/);
 });
 

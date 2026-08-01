@@ -15,6 +15,19 @@ const RULES = [
     "<redacted:token>",
   ],
   [/\bBearer\s+[A-Za-z0-9._-]{16,}/gi, "Bearer <redacted:token>"],
+  // Whole-header redaction. The value carries the credential whatever the
+  // scheme, and `Authorization: Basic <base64>` matches none of the token
+  // shapes above — nor does an opaque session cookie. Bounded at a quote or
+  // end of line so a redacted header in a shell command does not swallow the
+  // rest of the command line with it.
+  [
+    /\b(Authorization|Proxy-Authorization)(\s*:\s*)([^"'\r\n]+)/gi,
+    (_m, header, sep) => `${header}${sep}<redacted:credential>`,
+  ],
+  [
+    /\b(Set-Cookie|Cookie)(\s*:\s*)([^"'\r\n]+)/gi,
+    (_m, header, sep) => `${header}${sep}<redacted:cookie>`,
+  ],
   [/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "<redacted:email>"],
   [
     /\b([A-Za-z0-9_-]*(?:key|token|secret|password|passwd|pwd)[A-Za-z0-9_-]*)(\s*[:=]\s*)(["']?)([A-Za-z0-9/+_.-]{12,})\3/gi,
