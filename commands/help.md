@@ -114,7 +114,7 @@ it thinks."
 
 | Key                             | Default                | Meaning                                        |
 | ------------------------------- | ---------------------- | ---------------------------------------------- |
-| `enabled`                       | `false`                | Whether Trio runs at all here.                 |
+| `enabled`                       | `true`                 | Whether Trio runs at all here; `/trio:off` opts this project out for good. |
 | `maxIterations`                 | `2`                    | Pass ceiling.                                  |
 | `codex.parallel`                | `2`                    | Lenses run at once.                            |
 | `codex.lenses[]`                | 5 entries, all `on`    | `{name, model, effort, on}` per lens.          |

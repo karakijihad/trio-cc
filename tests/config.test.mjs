@@ -13,8 +13,8 @@ import { codexHome, trioDir } from "../src/paths.mjs";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "trio-"));
 
-test("ships disabled with a ceiling of 2", () => {
-  assert.equal(DEFAULT_CONFIG.enabled, false);
+test("ships enabled with a ceiling of 2", () => {
+  assert.equal(DEFAULT_CONFIG.enabled, true);
   assert.equal(DEFAULT_CONFIG.maxIterations, 2);
 });
 

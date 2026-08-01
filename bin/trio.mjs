@@ -61,6 +61,43 @@ const run = (bin, args) => {
 };
 const out = (s) => process.stdout.write(s.endsWith("\n") ? s : s + "\n");
 
+const USAGE = `trio — Codex as a read-only second reviewer.
+
+  trio [status]                     the control panel (default)
+  trio on | off                     enable or disable Trio for this project
+  trio doctor                       re-probe Codex and report health
+  trio run [--max N] [--target PATH] [--lenses a,b|all]
+  trio continue                     run the next pass of the active run
+  trio cancel                       cancel the active run
+  trio consult <question>           ask Codex one question
+  trio config get | set <key> <value>
+  trio lens <name> [on|off] [model <slug>] [effort <level>]
+  trio models [--json]              Codex models and which lens uses each
+  trio promote [runId] [--create]   copy a finished run into artifacts.promoteTo
+  trio serve [runId] [--auto-exit]  start the viewer
+  trio render [runId]               write a static HTML report
+
+A run spends the operator's own OpenAI credit, so an unrecognised flag is
+refused rather than ignored.`;
+
+const RUN_FLAGS = new Set(["--max", "--target", "--lenses"]);
+
+const asksForHelp = (args) => args.includes("--help") || args.includes("-h");
+
+// Flags Trio does not know are a refusal, not a no-op: silently dropping one
+// means `trio run --help` reads as "run everything", and every lens that
+// starts is money spent. Values of known flags are stepped over so a value
+// that happens to begin with "-" is not mistaken for a flag of its own.
+const unknownFlags = (args, known) => {
+  const bad = [];
+  for (let i = 0; i < args.length; i++) {
+    if (!args[i].startsWith("-")) continue;
+    if (known.has(args[i])) i++;
+    else bad.push(args[i]);
+  }
+  return bad;
+};
+
 const gatherState = ({ force = false } = {}) => {
   const config = loadConfig(root);
   const { caps, pre, cached, probedAt } = probeState({ root, run, force });
@@ -149,7 +186,11 @@ const latestFinishedRun = (root) => {
   }
 };
 
+// .trio/ holds raw event streams that quote source and command output, so it
+// belongs in .gitignore — but only where there is a checkout to ignore it in.
+// Trio's root is wherever it was invoked, which is not always a repo.
 const ensureGitignore = () => {
+  if (!existsSync(join(root, ".git"))) return;
   const gi = join(root, ".gitignore");
   const body = existsSync(gi) ? readFileSync(gi, "utf8") : "";
   if (!/^\.trio\/$/m.test(body))
@@ -394,6 +435,19 @@ switch (cmd) {
   }
 
   case "run": {
+    if (asksForHelp(rest)) {
+      out(USAGE);
+      break;
+    }
+    const strays = unknownFlags(rest, RUN_FLAGS);
+    if (strays.length) {
+      out(
+        `unknown flag${strays.length > 1 ? "s" : ""}: ${strays.join(", ")}\n\n${USAGE}`,
+      );
+      process.exitCode = 2;
+      break;
+    }
+
     // Arguments and stored config are validated before Codex is probed or
     // anything is spawned — gatherState({force:true}) shells out to the real
     // CLI, so validating after it would mean a malformed flag still ran a
@@ -444,6 +498,10 @@ switch (cmd) {
     const lenses =
       lensesArg === "all" ? "all" : lensesArg?.split(",").filter(Boolean);
 
+    // Trio is on by default, so a first run can be the first thing that ever
+    // writes to .trio/ — /trio:on is no longer the guaranteed first touch.
+    ensureGitignore();
+
     const r = await startRun({
       root,
       config,
@@ -476,9 +534,10 @@ switch (cmd) {
   }
 
   case "consult": {
-    // Usage before probing, for the same reason as `run`.
+    // Usage before probing, for the same reason as `run`. A leading dash is a
+    // mistyped flag, not a question — asking Codex "--help" costs real money.
     const question = rest.join(" ");
-    if (!question) {
+    if (!question || rest[0].startsWith("-")) {
       out("usage: trio consult <question>");
       process.exitCode = 2;
       break;
@@ -523,7 +582,13 @@ switch (cmd) {
     break;
   }
 
+  case "help":
+  case "--help":
+  case "-h":
+    out(USAGE);
+    break;
+
   default:
-    out(`unknown command: ${cmd}`);
+    out(`unknown command: ${cmd}\n\n${USAGE}`);
     process.exitCode = 2;
 }

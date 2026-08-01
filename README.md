@@ -239,7 +239,7 @@ Every key in `.trio/config.json`, with its default:
 
 | Key                             | Default                | Meaning                                                                                                                                                                |
 | ------------------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`                       | `false`                | Whether Trio runs at all for this project. `/trio:on` sets it.                                                                                                         |
+| `enabled`                       | `true`                 | Whether Trio runs at all for this project. On everywhere by default; `/trio:off` writes the opt-out here and it persists, `/trio:on` reverses it.                      |
 | `maxIterations`                 | `2`                    | Pass ceiling. Hitting it without convergence ends the run `ceiling_reached`.                                                                                           |
 | `codex.parallel`                | `2`                    | How many lenses run at once. Affects wall-clock time only — every enabled lens still runs, so this does not change cost. To spend less, run fewer lenses (`--lenses`). |
 | `codex.lenses[]`                | five entries, all `on` | Each entry: `name`, `model`, `effort`, `on`. All five default to gpt-5.6-terra/medium; change any with `/trio:model` or `/trio:lens`.                                  |
@@ -253,7 +253,8 @@ Every key in `.trio/config.json`, with its default:
 
 Config lives at `.trio/config.json` in the project root — change it with
 `/trio:config set <key> <value>` or by editing the file directly. `.trio/` is
-added to `.gitignore` the first time you run `/trio:on`.
+added to `.gitignore` the first time a run starts in a git checkout, or when
+you run `/trio:on`.
 
 ### Where the audits end up
 

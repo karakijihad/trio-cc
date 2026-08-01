@@ -35,7 +35,7 @@ test("config get prints the whole config as JSON", () => {
   const r = trio(project(), ["config", "get"]);
   assert.equal(r.status, 0);
   const cfg = JSON.parse(r.stdout);
-  assert.equal(cfg.enabled, false);
+  assert.equal(cfg.enabled, true);
   assert.equal(cfg.maxIterations, 2);
 });
 
@@ -57,6 +57,55 @@ test("on and off flip the enabled flag", () => {
   assert.equal(JSON.parse(trio(root, ["config", "get"]).stdout).enabled, true);
   trio(root, ["off"]);
   assert.equal(JSON.parse(trio(root, ["config", "get"]).stdout).enabled, false);
+});
+
+// The bug this guards: /trio:on used to announce that .trio/ had been added
+// to .gitignore whether or not there was a checkout to add it to.
+test("on gitignores .trio/ inside a checkout", () => {
+  const root = project();
+  mkdirSync(join(root, ".git"));
+  trio(root, ["on"]);
+  assert.match(readFileSync(join(root, ".gitignore"), "utf8"), /^\.trio\/$/m);
+});
+
+test("on writes no .gitignore where there is no checkout", () => {
+  const root = project();
+  trio(root, ["on"]);
+  assert.equal(existsSync(join(root, ".gitignore")), false);
+});
+
+test("help prints usage and exits clean", () => {
+  for (const arg of ["help", "--help", "-h"]) {
+    const r = trio(project(), [arg]);
+    assert.equal(r.status, 0, arg);
+    assert.match(r.stdout, /trio run /);
+  }
+});
+
+// The regression this exists for: an unrecognised flag used to fall through
+// to a full five-lens run on the operator's OpenAI credit.
+test("run refuses an unrecognised flag instead of starting", () => {
+  const r = trio(project(), ["run", "--frobnicate"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stdout + r.stderr, /unknown flag: --frobnicate/);
+});
+
+test("run --help prints usage rather than running", () => {
+  const r = trio(project(), ["run", "--help"]);
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /trio run /);
+});
+
+test("run keeps accepting the flags it knows", () => {
+  const r = trio(project(), ["run", "--lenses", "auditor", "--max", "nope"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stdout + r.stderr, /--max takes a positive whole number/);
+});
+
+test("consult treats a leading dash as a typo, not a question", () => {
+  const r = trio(project(), ["consult", "--help"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stdout + r.stderr, /usage: trio consult/);
 });
 
 test("run rejects a non-numeric --max before probing anything", () => {
@@ -88,8 +137,11 @@ test("run rejects a stored maxIterations that is not a positive integer", () => 
   assert.match(r.stdout, /maxIterations/);
 });
 
+// Trio ships enabled, so the opt-out has to be written before this means
+// anything — and once written it has to hold, without reaching Codex at all.
 test("run refuses to start while Trio is off", () => {
   const root = project();
+  trio(root, ["off"]);
   const r = trio(root, ["run"]);
   assert.equal(r.status, 1);
   assert.match(r.stdout, /off/i);

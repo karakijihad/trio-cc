@@ -3,7 +3,10 @@ import { dirname } from "node:path";
 import { configPath } from "./paths.mjs";
 
 export const DEFAULT_CONFIG = Object.freeze({
-  enabled: false,
+  // On by default: a reviewer you have to remember to switch on is a reviewer
+  // that does not run. `/trio:off` writes false here, per project, and that
+  // opt-out persists — nothing turns it back on but `/trio:on`.
+  enabled: true,
   maxIterations: 2,
   codex: {
     parallel: 2,
