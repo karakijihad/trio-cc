@@ -539,6 +539,28 @@ test("startRun: an unknown lens name returns invalid_lenses and creates nothing"
   assert.equal(existsSync(trioDir(root)), false);
 });
 
+// A pass with no lenses reviews nothing, finds nothing, and converges — it
+// would have reported `clean` on the strength of no audit at all.
+test("startRun: an all-off config is refused rather than reported clean", async () => {
+  const root = tmp();
+  const config = twoLensCfg();
+  config.codex.lenses = config.codex.lenses.map((l) => ({ ...l, on: false }));
+  let ran = 0;
+  const r = await startRun({
+    root,
+    config,
+    target: "/repo",
+    runLensFn: async (a) => {
+      ran++;
+      return okLens([])(a);
+    },
+  });
+  assert.equal(r.status, "no_lenses");
+  assert.match(r.error, /without reviewing anything/);
+  assert.equal(ran, 0);
+  assert.equal(existsSync(trioDir(root)), false);
+});
+
 test("continueRun: pass 2 keeps the lens restriction startRun applied", async () => {
   const root = tmp();
   const config = twoLensCfg({ maxIterations: 2 });

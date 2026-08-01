@@ -217,6 +217,38 @@ test("run: an invalid --max is rejected without invoking Codex at all", () => {
   );
 });
 
+// Trio ships on, so /trio:off is the whole opt-out. It has to hold before the
+// forced probe, not after it — the fake records any invocation, for any
+// subcommand, so absence of the log is proof rather than inference.
+for (const [name, args] of [
+  ["run", ["run", "--lenses", "auditor"]],
+  ["consult", ["consult", "is this safe?"]],
+]) {
+  test(`${name}: an opted-out project never invokes Codex`, () => {
+    const root = mkdtempSync(join(tmpdir(), "trio-optout-"));
+    const pathDir = mkdtempSync(join(tmpdir(), "trio-bin-"));
+    const home = mkdtempSync(join(tmpdir(), "trio-home-"));
+    installFakeCodex(pathDir);
+    fakeCodexHome(home);
+    const touched = join(root, "codex-was-invoked.log");
+    const base = { pathDir, codexHome: home, project: root };
+    spawnSync("node", [CLI, "off"], { env: fakeEnv(base), encoding: "utf8" });
+
+    const res = spawnSync("node", [CLI, ...args], {
+      env: fakeEnv({ ...base, extra: { FAKE_CODEX_TOUCH: touched } }),
+      encoding: "utf8",
+    });
+    assert.equal(res.status, 1);
+    assert.match(res.stdout, /Trio is off/);
+    assert.equal(
+      existsSync(touched)
+        ? `codex was invoked with: ${readFileSync(touched, "utf8").trim()}`
+        : "not invoked",
+      "not invoked",
+    );
+  });
+}
+
 test("run: a hand-edited view.port is refused instead of reaching the browser launcher", () => {
   const { root, cli } = project();
   writeFileSync(

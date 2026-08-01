@@ -98,6 +98,23 @@ const unknownFlags = (args, known) => {
   return bad;
 };
 
+// Every flag `run` knows takes a value. Left unchecked, `--target --lenses x`
+// reads "--lenses" as the audit target and the unknown-flag walk above steps
+// straight over it, so the two guards have to be read together.
+//
+// "Flag-like" is deliberately narrower than "starts with a dash": a target
+// path or a negative --max is a value, badly chosen, and belongs to the check
+// that can say why. Only a long flag or a flag this command knows is a value
+// that never was.
+const valuelessFlags = (args, known) =>
+  args.filter(
+    (a, i) =>
+      known.has(a) &&
+      (i + 1 >= args.length ||
+        known.has(args[i + 1]) ||
+        args[i + 1].startsWith("--")),
+  );
+
 const gatherState = ({ force = false } = {}) => {
   const config = loadConfig(root);
   const { caps, pre, cached, probedAt } = probeState({ root, run, force });
@@ -447,6 +464,12 @@ switch (cmd) {
       process.exitCode = 2;
       break;
     }
+    const bare = valuelessFlags(rest, RUN_FLAGS);
+    if (bare.length) {
+      out(`${bare.join(", ")} needs a value\n\n${USAGE}`);
+      process.exitCode = 2;
+      break;
+    }
 
     // Arguments and stored config are validated before Codex is probed or
     // anything is spawned — gatherState({force:true}) shells out to the real
@@ -473,12 +496,15 @@ switch (cmd) {
       break;
     }
 
-    const { drift, pre } = gatherState({ force: true });
+    // Before the probe, not after: gatherState({force:true}) shells out to the
+    // real Codex CLI, and an opted-out project must reach Codex not at all.
     if (!config.enabled) {
       out("Trio is off. Run /trio:on first.");
       process.exitCode = 1;
       break;
     }
+
+    const { drift, pre } = gatherState({ force: true });
     if (pre.state === "not_installed" || pre.state === "not_logged_in") {
       out(`${pre.message}\n  ${pre.fix}`);
       process.exitCode = 1;
@@ -510,7 +536,7 @@ switch (cmd) {
       beforeFirstPass,
       lenses,
     });
-    if (r.status === "invalid_lenses") {
+    if (r.status === "invalid_lenses" || r.status === "no_lenses") {
       out(r.error);
       process.exitCode = 2;
       break;
@@ -542,7 +568,15 @@ switch (cmd) {
       process.exitCode = 2;
       break;
     }
-    const { config, pre } = gatherState();
+    // consult spends the operator's credit exactly as a run does, so the
+    // project opt-out has to hold here too — and hold before the probe.
+    const config = loadConfig(root);
+    if (!config.enabled) {
+      out("Trio is off. Run /trio:on first.");
+      process.exitCode = 1;
+      break;
+    }
+    const { pre } = gatherState();
     if (pre.state === "not_installed" || pre.state === "not_logged_in") {
       out(`${pre.message}\n  ${pre.fix}`);
       process.exitCode = 1;

@@ -377,6 +377,16 @@ export async function startRun({
   if (selection.error) return { status: "invalid_lenses", error: selection.error };
   config = selection.config;
 
+  // A pass with no lenses reviews nothing, finds nothing, and converges — so
+  // an all-off config would report `clean` on the strength of no audit at all.
+  // Refuse before the marker is claimed or anything is written.
+  if (!config.codex.lenses.some((l) => l.on))
+    return {
+      status: "no_lenses",
+      error:
+        "No lenses are on, so a run would report clean without reviewing anything. Turn one on with `trio lens <name> on`, or pass --lenses.",
+    };
+
   // Nothing below this line runs unless this process owns the marker.
   const claim = claimActiveRun(root);
   if (!claim.ok)

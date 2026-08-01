@@ -138,7 +138,8 @@ test("run rejects a stored maxIterations that is not a positive integer", () => 
 });
 
 // Trio ships enabled, so the opt-out has to be written before this means
-// anything — and once written it has to hold, without reaching Codex at all.
+// anything. That it holds *without reaching Codex* is proved in
+// cli-run.test.mjs, where a fake Codex can record its own invocation.
 test("run refuses to start while Trio is off", () => {
   const root = project();
   trio(root, ["off"]);
@@ -146,6 +147,42 @@ test("run refuses to start while Trio is off", () => {
   assert.equal(r.status, 1);
   assert.match(r.stdout, /off/i);
   assert.equal(existsSync(join(root, ".trio", "runs")), false);
+});
+
+test("consult honours the opt-out too", () => {
+  const root = project();
+  trio(root, ["off"]);
+  const r = trio(root, ["consult", "is this safe?"]);
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /off/i);
+});
+
+test("run rejects a flag that was given no value", () => {
+  for (const args of [
+    ["run", "--target"],
+    ["run", "--lenses"],
+    ["run", "--max"],
+  ]) {
+    const r = trio(project(), args);
+    assert.equal(r.status, 2, args.join(" "));
+    assert.match(r.stdout + r.stderr, /needs a value/);
+  }
+});
+
+// A dashed value is a badly chosen value, not a missing one — it has to reach
+// the check that can say why.
+test("a negative --max still gets the message that explains it", () => {
+  const r = trio(project(), ["run", "--max", "-1"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stdout + r.stderr, /positive whole number/);
+});
+
+// The unknown-flag walk steps over the token after a known flag, so without
+// this guard `--target --lenses auditor` audits a path named "--lenses".
+test("run does not let one flag be swallowed as another's value", () => {
+  const r = trio(project(), ["run", "--target", "--lenses", "auditor"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stdout + r.stderr, /--target needs a value/);
 });
 
 test("continue with no active run says so and exits non-zero", () => {
