@@ -48,21 +48,76 @@ const claimRun = (root, pid) => {
   );
 };
 
-// Cancelling has to stop the worker, not just forget about it — and on win32
-// the worker owns Codex children that a bare signal would orphan.
-test("cancel stops the run process it names", async () => {
-  const root = project();
-  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-    stdio: "ignore",
-    detached: true,
-  });
-  child.unref();
-  claimRun(root, child.pid);
+// Stands in for a Trio worker: it owns a Codex-like child of its own and
+// tears it down on SIGTERM, exactly as bin/trio.mjs now does via
+// stopAllLenses. A worker with no children proves nothing here — the old
+// single-PID implementation would pass that too.
+const WORKER = `
+const { spawn } = require("node:child_process");
+const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+  stdio: "ignore",
+});
+process.stdout.write(child.pid + "\\n");
+const stop = () => {
+  try { child.kill(); } catch {}
+  process.exit(1);
+};
+process.on("SIGTERM", stop);
+process.on("SIGINT", stop);
+setInterval(() => {}, 1000);
+`;
 
-  const r = trio(root, ["cancel"]);
-  assert.equal(r.status, 0);
-  assert.match(r.stdout, new RegExp(`stopped pid ${child.pid}`));
-  assert.equal(await waitForExit(child.pid), true, "process outlived cancel");
+const firstLine = (stream, ms = 5000) =>
+  new Promise((resolve, reject) => {
+    let buf = "";
+    const timer = setTimeout(() => reject(new Error("worker said nothing")), ms);
+    stream.setEncoding("utf8");
+    stream.on("data", (chunk) => {
+      buf += chunk;
+      const nl = buf.indexOf("\n");
+      if (nl === -1) return;
+      clearTimeout(timer);
+      resolve(buf.slice(0, nl).trim());
+    });
+  });
+
+// The grandchild is the point: a worker with no children proves nothing, and
+// the test this replaced had none.
+//
+// Honest limits. On win32 this passes even with killTreeCommand stubbed to
+// null — verified by mutation — because Windows tears the grandchild down
+// with its parent anyway, so nothing black-box can discriminate here. It does
+// discriminate on POSIX, where a bare SIGTERM to the worker leaves the child
+// running and only the worker's own handler reaches it. The mechanism that
+// handler depends on is tested directly in codex-lane.test.mjs
+// ("stopAllLenses tears down every lens still running"), which is
+// platform-independent; this test covers the wiring end to end.
+test("cancel stops the worker's children, not just the worker", async () => {
+  const root = project();
+  const worker = spawn(process.execPath, ["-e", WORKER], {
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  let childPid = null;
+  try {
+    childPid = Number(await firstLine(worker.stdout));
+    assert.ok(childPid > 0, "worker never reported a child");
+    claimRun(root, worker.pid);
+
+    const r = trio(root, ["cancel"]);
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, new RegExp(`stopped pid ${worker.pid}`));
+    assert.equal(await waitForExit(worker.pid), true, "worker outlived cancel");
+    assert.equal(await waitForExit(childPid), true, "child outlived cancel");
+  } finally {
+    for (const pid of [worker.pid, childPid])
+      if (pid) {
+        try {
+          process.kill(pid);
+        } catch {
+          /* already gone, which is the point */
+        }
+      }
+  }
 });
 
 test("cancel does not claim to have stopped a process already gone", () => {

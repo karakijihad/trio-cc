@@ -56,12 +56,14 @@ export function extractFindings(text) {
   };
 }
 
-// Where a finding points, independent of how it is worded. `findingId` hashes
-// the title, so a lens that rephrases itself mints a new id for a defect it
-// already reported — deliberately, since two findings at one line are often
-// two real defects and a false merge would hide one. Location is the coarser
-// key convergence needs, and only convergence uses it.
-export const locationOf = (f) => `${normalizeFile(f.file)}:${f.line ?? ""}`;
+// Where a finding points, independent of how it is worded. A finding with no
+// line falls back to its id rather than to the bare filename: collapsing every
+// line-less finding in a file to one key would merge defects that have nothing
+// to do with each other, which is the one error this must not make.
+export const locationOf = (f) =>
+  f.line === undefined || f.line === null || f.line === ""
+    ? `${normalizeFile(f.file)}#${f.id ?? ""}`
+    : `${normalizeFile(f.file)}:${f.line}`;
 
 // Two lenses reporting one defect is corroboration, not two defects. Merge on
 // id, keep the most severe reading, and carry every lens that raised it —
@@ -85,23 +87,30 @@ export function mergeFindings(results) {
   return [...byId.values()];
 }
 
+// Two findings describe the same defect when they share an id or point at the
+// same place. Wording is not part of it, and that is the whole point: keyed on
+// the id alone, a lens rephrasing its own title between passes made one defect
+// read as one closed and one new at the same time. Run 2026-08-01T12-27-09
+// closed 21 of 21 and opened 0 that way, while 14 of those defects were still
+// sitting in the code — a "closed" column claiming fixes that never happened.
+const matcher = (findings) => {
+  const ids = new Set(findings.map((x) => x.id));
+  const places = new Set(findings.map(locationOf));
+  return (f) => ids.has(f.id) || places.has(locationOf(f));
+};
+
+// Both directions are deliberately conservative, and they point opposite ways:
+// slower to call something new (so a rewrite cannot block convergence for
+// ever) and slower to call something closed (so nothing is reported fixed on
+// the strength of a rewrite). Severity blocking reads the current pass
+// directly and is unaffected by either.
 export function diffPasses(prev, curr) {
-  const prevIds = new Set(prev.map((x) => x.id));
-  const currIds = new Set(curr.map((x) => x.id));
-  const prevLocations = new Set(prev.map(locationOf));
+  const seenBefore = matcher(prev);
+  const seenNow = matcher(curr);
   return {
-    new: curr.filter((x) => !prevIds.has(x.id)),
-    open: curr.filter((x) => prevIds.has(x.id)),
-    closed: prev.filter((x) => !currIds.has(x.id)),
-    // What `requireNoNewFindings` actually means: a defect that is new by id
-    // *and* points somewhere the previous pass never reported. Keyed on id
-    // alone, a lens rewording its own title manufactured a "new" finding and
-    // blocked convergence for ever on the rewrite; keyed on location alone, a
-    // finding whose line merely shifted — because an earlier fix moved it —
-    // did the same. Severity blocking is untouched by either.
-    newHere: curr.filter(
-      (x) => !prevIds.has(x.id) && !prevLocations.has(locationOf(x)),
-    ),
+    new: curr.filter((x) => !seenBefore(x)),
+    open: curr.filter(seenBefore),
+    closed: prev.filter((x) => !seenNow(x)),
   };
 }
 
@@ -111,7 +120,7 @@ export function isConverged(curr, diff, converge) {
   if (blocking) return false;
   if (
     converge.requireNoNewFindings &&
-    (diff.newHere ?? diff.new).some((x) => x.verdict !== "refute")
+    diff.new.some((x) => x.verdict !== "refute")
   )
     return false;
   return true;

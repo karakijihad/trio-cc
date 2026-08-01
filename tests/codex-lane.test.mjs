@@ -10,6 +10,7 @@ import {
   mapEvent,
   runLens,
   killTree,
+  stopAllLenses,
   SANDBOX,
 } from "../src/codex-lane.mjs";
 import { readEvents } from "../src/bus.mjs";
@@ -210,6 +211,55 @@ test("killTree falls back to kill() when the tree-killer errors after launch", (
     },
   }));
   assert.equal(killed, 1);
+});
+
+// Off win32 the tree-killer is a no-op, so this registry is the only thing
+// that reaches a cancelled run's Codex children. Platform-independent, unlike
+// the end-to-end cancel test in cli.test.mjs.
+// Bounded: if the registry regresses, these lenses never settle, and a hang
+// is a much worse failure signal than a timeout.
+test("stopAllLenses tears down every lens still running", { timeout: 15_000 }, async () => {
+  const dir = tmp();
+  let killed = 0;
+  const pending = [1, 2, 3].map((i) =>
+    runLens({
+      lens: { ...LENS, name: `lens${i}` },
+      target: "/repo",
+      brief: "b",
+      runDirPath: dir,
+      run: "r1",
+      pass: 1,
+      spawnFn: hangingSpawn({ onKill: () => killed++ }),
+      timeoutMs: 600_000,
+    }),
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+
+  stopAllLenses();
+  const results = await Promise.all(pending);
+  assert.equal(killed, 3, "a lens was left running");
+  assert.deepEqual(
+    results.map((r) => r.status),
+    ["failed", "failed", "failed"],
+  );
+});
+
+test("stopAllLenses forgets lenses that already settled", async () => {
+  const dir = tmp();
+  let killed = 0;
+  await runLens({
+    lens: LENS,
+    target: "/repo",
+    brief: "b",
+    runDirPath: dir,
+    run: "r1",
+    pass: 1,
+    spawnFn: hangingSpawn({ onKill: () => killed++ }),
+    timeoutMs: 50,
+  });
+  assert.equal(killed, 1, "the deadline should have killed it once");
+  stopAllLenses();
+  assert.equal(killed, 1, "a settled lens must not be killed again");
 });
 
 test("runLens stops a lens that never produces output", async () => {

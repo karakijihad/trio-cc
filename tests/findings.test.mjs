@@ -63,57 +63,64 @@ test("locationOf ignores wording and path separator style", () => {
   );
 });
 
-// The trap this closes: a lens rephrasing its own title mints a new id for a
-// defect already reported, and requireNoNewFindings blocked on the rewrite.
-test("a re-worded finding at a known location does not block convergence", () => {
-  const prev = [f({ title: "all lenses off reports clean", line: 47 })].map(
-    (x) => ({ ...x, id: findingId(x.file, x.title), verdict: "confirm" }),
-  );
-  const curr = [f({ title: "an all-off config converges", line: 47 })].map(
-    (x) => ({ ...x, id: findingId(x.file, x.title), verdict: "confirm" }),
-  );
+const withId = (over) => {
+  const x = f(over);
+  return { ...x, id: findingId(x.file, x.title), verdict: "confirm" };
+};
+
+// The defect this closes, measured on run 2026-08-01T12-27-09: 21 of 21
+// findings reported closed and 0 open, while 14 of them were still in the
+// code — the lenses had merely reworded them.
+test("a re-worded finding is neither closed nor new", () => {
+  const prev = [withId({ title: "all lenses off reports clean", line: 47 })];
+  const curr = [withId({ title: "an all-off config converges", line: 47 })];
   const diff = diffPasses(prev, curr);
-  assert.equal(diff.new.length, 1, "still a distinct finding for reporting");
-  assert.equal(diff.newHere.length, 0, "but not a new place");
+  assert.equal(diff.closed.length, 0, "it was never fixed");
+  assert.equal(diff.new.length, 0, "and it is not a new defect");
+  assert.equal(diff.open.length, 1, "it is the same one, still open");
   assert.equal(
     isConverged(curr, diff, { blockOn: [], requireNoNewFindings: true }),
     true,
   );
 });
 
-// The other half: an earlier fix shifts later lines, so a finding that never
-// changed reports a new line number. Same id, so it is not new either.
-test("a known finding whose line shifted does not block convergence", () => {
-  const at = (line) =>
-    [f({ title: "t", line })].map((x) => ({
-      ...x,
-      id: findingId(x.file, x.title),
-      verdict: "confirm",
-    }));
+// The mirror: an earlier fix shifts later lines, so an unchanged finding
+// reports a new line number.
+test("a finding whose line shifted is neither closed nor new", () => {
+  const at = (line) => [withId({ title: "t", line })];
   const diff = diffPasses(at(47), at(63));
+  assert.equal(diff.closed.length, 0);
+  assert.equal(diff.new.length, 0);
   assert.equal(diff.open.length, 1);
-  assert.equal(diff.newHere.length, 0);
-  assert.equal(
-    isConverged(at(63), diff, { blockOn: [], requireNoNewFindings: true }),
-    true,
-  );
 });
 
-test("a finding at a genuinely new location still blocks convergence", () => {
-  const prev = [f({ title: "t", line: 47 })].map((x) => ({
-    ...x,
-    id: findingId(x.file, x.title),
-  }));
-  const curr = [f({ title: "t2", file: "b.rs", line: 9 })].map((x) => ({
-    ...x,
-    id: findingId(x.file, x.title),
-  }));
-  const diff = diffPasses(prev, curr);
-  assert.equal(diff.newHere.length, 1);
+test("a defect that really went away is reported closed", () => {
+  const diff = diffPasses([withId({ title: "t", line: 47 })], []);
+  assert.equal(diff.closed.length, 1);
+  assert.equal(diff.open.length, 0);
+});
+
+test("a finding at a genuinely new place is new and blocks convergence", () => {
+  const diff = diffPasses(
+    [withId({ title: "t", line: 47 })],
+    [withId({ title: "t2", file: "b.rs", line: 9 })],
+  );
+  assert.equal(diff.new.length, 1);
+  assert.equal(diff.closed.length, 1, "and the old one really is gone");
   assert.equal(
-    isConverged(curr, diff, { blockOn: [], requireNoNewFindings: true }),
+    isConverged(diff.new, diff, { blockOn: [], requireNoNewFindings: true }),
     false,
   );
+});
+
+// Line-less findings must not all collapse onto their filename, or two
+// unrelated whole-file findings would silently mask each other.
+test("line-less findings in one file stay distinct", () => {
+  const prev = [withId({ title: "file is too long", line: undefined })];
+  const curr = [withId({ title: "file has no header", line: undefined })];
+  const diff = diffPasses(prev, curr);
+  assert.equal(diff.new.length, 1);
+  assert.equal(diff.closed.length, 1);
 });
 
 test("findingId is 8 hex chars", () => {

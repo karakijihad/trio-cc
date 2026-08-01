@@ -64,9 +64,6 @@ export function mapEvent(ev) {
 // without a config in hand. runPass always passes the operator's value.
 export const DEFAULT_TIMEOUT_MS = 15 * 60_000;
 
-// Falls back to kill() whenever the tree-killer is unavailable or refuses to
-// launch: a lens that will not die is worse than one killed imprecisely, and
-// either way the settle promise below needs the pipes to close.
 // Lenses currently running in this process. `trio cancel` signals the worker,
 // and off win32 that signal reaches the worker alone: killTreeCommand is a
 // no-op there, Node installs no default cascade, and lens children are not in
@@ -78,6 +75,9 @@ export function stopAllLenses() {
   for (const proc of live) killTree(proc);
 }
 
+// Falls back to kill() whenever the tree-killer is unavailable or refuses to
+// launch: a lens that will not die is worse than one killed imprecisely, and
+// either way the settle promise below needs the pipes to close.
 export function killTree(proc, spawnFn = nodeSpawn) {
   const cmd = killTreeCommand(proc.pid);
   const direct = () => {
