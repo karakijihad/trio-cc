@@ -3,8 +3,13 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { normalize, laneOf, main } from "../src/hook-emit.mjs";
-import { readEvents } from "../src/bus.mjs";
+import {
+  normalize,
+  laneOf,
+  main,
+  TAP_CEILING_BYTES,
+} from "../src/hook-emit.mjs";
+import { readEvents, eventsFile } from "../src/bus.mjs";
 import { activeMarker, trioDir, runDir } from "../src/paths.mjs";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "trio-hook-"));
@@ -14,6 +19,59 @@ const activate = (root, runId = "r1") => {
   writeFileSync(activeMarker(root), JSON.stringify({ run: runId, pass: 1 }));
   return runDir(root, runId);
 };
+
+// The marker outlives a pass on purpose, so this tap would otherwise record
+// hours of unrelated work while a run sits parked between passes.
+test("the tap stops appending once the log is oversized", () => {
+  const root = tmp();
+  const dir = activate(root);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(eventsFile(dir), "x".repeat(TAP_CEILING_BYTES + 1));
+  main(
+    JSON.stringify({
+      hook_event_name: "MessageDisplay",
+      message_text: "after the ceiling",
+    }),
+    root,
+  );
+  assert.equal(
+    readEvents(dir).some((e) => e.payload?.text === "after the ceiling"),
+    false,
+  );
+});
+
+// A start that claimed the marker but has not named its run yet writes
+// {run: null}. A tap must never break a tool call, whatever it finds there.
+test("the tap survives a marker that names no run", () => {
+  const root = tmp();
+  mkdirSync(trioDir(root), { recursive: true });
+  writeFileSync(activeMarker(root), JSON.stringify({ run: null, pass: 0 }));
+  assert.doesNotThrow(() =>
+    main(
+      JSON.stringify({
+        hook_event_name: "MessageDisplay",
+        message_text: "mid-claim",
+      }),
+      root,
+    ),
+  );
+});
+
+test("the tap appends normally below the ceiling", () => {
+  const root = tmp();
+  const dir = activate(root);
+  main(
+    JSON.stringify({
+      hook_event_name: "MessageDisplay",
+      message_text: "under the ceiling",
+    }),
+    root,
+  );
+  assert.equal(
+    readEvents(dir).some((e) => e.payload?.text === "under the ceiling"),
+    true,
+  );
+});
 
 test("laneOf returns claude:main outside a subagent", () => {
   assert.equal(laneOf({ hook_event_name: "MessageDisplay" }), "claude:main");

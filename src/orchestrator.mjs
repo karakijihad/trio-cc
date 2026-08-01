@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { diffPasses, isConverged } from "./findings.mjs";
+import { diffPasses, isConverged, mergeFindings } from "./findings.mjs";
 import { makeEvent, appendEvent } from "./bus.mjs";
 import { runDir, passDir } from "./paths.mjs";
 import { writeMarker } from "./marker.mjs";
@@ -79,7 +79,7 @@ export async function runPass({
     )
   ).map(scrubDeep);
 
-  const raw = results.flatMap((r) => r.findings);
+  const raw = mergeFindings(results);
   const reconciled = await reconcileFn(raw, { pass, target, root });
   const diff = diffPasses(previous, reconciled);
   const degraded = results.filter((r) => r.status !== "ok");

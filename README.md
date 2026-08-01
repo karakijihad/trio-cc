@@ -241,7 +241,7 @@ Every key in `.trio/config.json`, with its default:
 | ------------------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `enabled`                       | `true`                 | Whether Trio runs at all for this project. On everywhere by default; `/trio:off` writes the opt-out here and it persists, `/trio:on` reverses it.                      |
 | `maxIterations`                 | `2`                    | Pass ceiling. Hitting it without convergence ends the run `ceiling_reached`.                                                                                           |
-| `codex.parallel`                | `2`                    | How many lenses run at once. Affects wall-clock time only — every enabled lens still runs, so this does not change cost. To spend less, run fewer lenses (`--lenses`). |
+| `codex.parallel`                | `5`                    | How many lenses run at once — one wave for the five that ship. Affects wall-clock time only; every enabled lens still runs, so this does not change cost. To spend less, run fewer lenses (`--lenses`). |
 | `codex.timeoutMinutes`          | `15`                   | How long one lens may run before Trio stops it. A lens that has stopped producing output looks exactly like one still thinking, and nothing else bounds a Codex process. A stopped lens is recorded as degraded, blocks convergence, and is never retried into a second hang. Typical lens: 1–2 minutes. |
 | `codex.lenses[]`                | five entries, all `on` | Each entry: `name`, `model`, `effort`, `on`. All five default to gpt-5.6-terra/medium; change any with `/trio:model` or `/trio:lens`.                                  |
 | `view.mode`                     | `window`               | `window` (OS browser window, opens itself) · `pane` (VS Code Simple Browser) · `off`. A static file is available on demand via `trio render`.                          |
@@ -370,7 +370,7 @@ Against the alternatives:
 | Multi-agent setups where every agent can write | Competing edits, worktrees, merge conflicts, diff-approval fatigue                            | Exactly one writer. Codex is `--sandbox read-only`, hardcoded — no coordination problem to solve                        |
 | Linters, type checkers, SAST in CI             | Deterministic and cheap, but bounded by their rule set                                        | Findings a rule set cannot express — "the README promises this flag and the code ignores it"                            |
 | Running Codex yourself in a second terminal    | The same second opinion, if you carry the context by hand each time                           | The handoff is automated: scoped briefs, parallel lenses, a pass-2 conversation that shows Codex its own prior findings |
-| One-shot "LLM as judge" review                 | A verdict, with no standard for accepting it                                                  | Every finding is adjudicated — confirm · refute · downgrade · escalate — and a refutation must cite code                |
+| One-shot "LLM as judge" review                 | A verdict, with no standard for accepting it                                                  | Every finding is adjudicated — confirm · refute · downgrade · escalate — a refutation must cite code, and anything not yet adjudicated reads `unreviewed`, never `confirm` |
 
 Two things make the difference in practice.
 

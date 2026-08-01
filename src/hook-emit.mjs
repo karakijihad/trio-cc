@@ -1,6 +1,6 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { makeEvent, appendEvent } from "./bus.mjs";
+import { makeEvent, appendEvent, eventsFile } from "./bus.mjs";
 import { unifiedDiff } from "./diff.mjs";
 import { activeMarker, runDir } from "./paths.mjs";
 
@@ -83,6 +83,22 @@ export function normalize(p) {
   return null;
 }
 
+// The marker deliberately outlives a pass so Claude's fixes reach the next
+// one, and this tap fires on every tool call for as long as it exists. A run
+// parked between passes therefore records hours of work that has nothing to
+// do with the audit — the 2026-08-01 run logged 23 minutes of it, and its
+// only "error" event was an unrelated shell exit code. The audit record
+// itself is written on the Codex lane and is never capped; only this is.
+export const TAP_CEILING_BYTES = 8 * 1024 * 1024;
+
+const tapIsFull = (dir) => {
+  try {
+    return statSync(eventsFile(dir)).size > TAP_CEILING_BYTES;
+  } catch {
+    return false; // no log yet — nothing to outgrow
+  }
+};
+
 export function main(rawStdin, root) {
   let marker;
   try {
@@ -90,6 +106,11 @@ export function main(rawStdin, root) {
   } catch {
     return; // Trio is off — the fast path
   }
+  // `run: null` is a real marker state — a start that claimed the marker but
+  // has not named its run yet. runDir would throw on it, and this line sits
+  // outside the catch below, so the guard has to come first: a tap must never
+  // break a tool call.
+  if (!marker.run || tapIsFull(runDir(root, marker.run))) return;
   try {
     const fields = normalize(JSON.parse(rawStdin));
     if (!fields) return;

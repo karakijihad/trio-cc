@@ -2,6 +2,16 @@ import { SEVERITIES } from "./findings.mjs";
 
 export const VERDICTS = ["confirm", "refute", "downgrade", "escalate"];
 
+// The absence of a verdict is not agreement. Every finding used to default to
+// "confirm", so a pass nobody had adjudicated reported sixteen confirmed
+// findings and an empty disagreement table — which reads as "the two agree"
+// when it means "nobody has looked yet".
+export const UNREVIEWED = "unreviewed";
+
+// Only these are disagreements. "confirm" is agreement and "unreviewed" is
+// silence; neither belongs in a table of where the two models differ.
+const DISAGREEMENTS = ["refute", "downgrade", "escalate"];
+
 const shift = (severity, by) => {
   const i = SEVERITIES.indexOf(severity);
   if (i === -1) return severity;
@@ -19,7 +29,7 @@ export function applyVerdicts(findings, verdicts) {
   }
   return findings.map((f) => {
     const v = byId.get(f.id);
-    if (!v) return { ...f, verdict: "confirm", basis: "" };
+    if (!v) return { ...f, verdict: UNREVIEWED, basis: "" };
     const severity =
       v.verdict === "downgrade"
         ? shift(f.severity, 1)
@@ -37,7 +47,7 @@ const LABEL = {
 };
 
 export function renderDisagreementTable(findings) {
-  const rows = findings.filter((f) => f.verdict && f.verdict !== "confirm");
+  const rows = findings.filter((f) => DISAGREEMENTS.includes(f.verdict));
   if (!rows.length)
     return "_No disagreements — every finding was confirmed as reported._\n";
   const lines = [

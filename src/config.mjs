@@ -9,7 +9,10 @@ export const DEFAULT_CONFIG = Object.freeze({
   enabled: true,
   maxIterations: 2,
   codex: {
-    parallel: 2,
+    // One wave. Five lenses ship, and a pass costs the sum of its waves:
+    // at 2 the 2026-08-01 run spent 7.6 minutes on a 4.5-minute lens. Every
+    // enabled lens runs either way, so this buys wall-clock, never cost.
+    parallel: 5,
     // A lens that has stopped producing output is indistinguishable from one
     // that is still thinking, and nothing else bounds a Codex process. Ten
     // times the observed per-lens time, so it only fires on a real hang.

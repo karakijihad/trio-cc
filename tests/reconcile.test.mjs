@@ -72,9 +72,16 @@ test("refute records the basis and keeps the finding for the record", () => {
   assert.equal(out[0].basis, "lines 394-834 are cfg(test)");
 });
 
-test("a finding with no verdict defaults to confirm", () => {
+// Silence is not agreement: an unadjudicated pass used to report every
+// finding "confirm" and an empty disagreement table.
+test("a finding with no verdict is unreviewed, not confirmed", () => {
   const out = applyVerdicts([f("a1")], []);
-  assert.equal(out[0].verdict, "confirm");
+  assert.equal(out[0].verdict, "unreviewed");
+});
+
+test("unreviewed findings are not listed as disagreements", () => {
+  const table = renderDisagreementTable(applyVerdicts([f("a1")], []));
+  assert.doesNotMatch(table, /unreviewed/i);
 });
 
 test("an unknown verdict is rejected", () => {
@@ -90,7 +97,7 @@ test("a verdict for an unknown id is ignored, not fatal", () => {
     [{ id: "zzzz", verdict: "refute", basis: "x" }],
   );
   assert.equal(out.length, 1);
-  assert.equal(out[0].verdict, "confirm");
+  assert.equal(out[0].verdict, "unreviewed");
 });
 
 test("the table lists only findings whose verdict changed something", () => {

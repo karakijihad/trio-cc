@@ -5,6 +5,8 @@ import {
   extractFindings,
   diffPasses,
   isConverged,
+  mergeFindings,
+  locationOf,
 } from "../src/findings.mjs";
 
 const CONVERGE = { blockOn: ["critical", "major"], requireNoNewFindings: true };
@@ -16,6 +18,102 @@ const f = (over) => ({
   impact: "",
   correction: "",
   ...over,
+});
+
+const lensResult = (lens, findings) => ({
+  lens,
+  status: "ok",
+  findings: findings.map((x) => ({ ...x, id: findingId(x.file, x.title) })),
+});
+
+test("mergeFindings keeps one entry per defect and names every lens", () => {
+  const out = mergeFindings([
+    lensResult("auditor", [f({ title: "leak" })]),
+    lensResult("security", [f({ title: "leak" })]),
+  ]);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].lens, "auditor, security");
+});
+
+test("mergeFindings keeps the most severe reading of one defect", () => {
+  const out = mergeFindings([
+    lensResult("auditor", [f({ title: "leak", severity: "major" })]),
+    lensResult("security", [f({ title: "leak", severity: "critical" })]),
+  ]);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].severity, "critical");
+});
+
+test("mergeFindings does not merge different defects in the same file", () => {
+  const out = mergeFindings([
+    lensResult("auditor", [f({ title: "leak" }), f({ title: "race" })]),
+  ]);
+  assert.equal(out.length, 2);
+  assert.deepEqual(
+    out.map((x) => x.lens),
+    ["auditor", "auditor"],
+  );
+});
+
+test("locationOf ignores wording and path separator style", () => {
+  assert.equal(locationOf({ file: ".\\src\\a.mjs", line: 47 }), "src/a.mjs:47");
+  assert.equal(
+    locationOf({ file: "src/a.mjs", line: 47, title: "one wording" }),
+    locationOf({ file: "src/a.mjs", line: 47, title: "another entirely" }),
+  );
+});
+
+// The trap this closes: a lens rephrasing its own title mints a new id for a
+// defect already reported, and requireNoNewFindings blocked on the rewrite.
+test("a re-worded finding at a known location does not block convergence", () => {
+  const prev = [f({ title: "all lenses off reports clean", line: 47 })].map(
+    (x) => ({ ...x, id: findingId(x.file, x.title), verdict: "confirm" }),
+  );
+  const curr = [f({ title: "an all-off config converges", line: 47 })].map(
+    (x) => ({ ...x, id: findingId(x.file, x.title), verdict: "confirm" }),
+  );
+  const diff = diffPasses(prev, curr);
+  assert.equal(diff.new.length, 1, "still a distinct finding for reporting");
+  assert.equal(diff.newHere.length, 0, "but not a new place");
+  assert.equal(
+    isConverged(curr, diff, { blockOn: [], requireNoNewFindings: true }),
+    true,
+  );
+});
+
+// The other half: an earlier fix shifts later lines, so a finding that never
+// changed reports a new line number. Same id, so it is not new either.
+test("a known finding whose line shifted does not block convergence", () => {
+  const at = (line) =>
+    [f({ title: "t", line })].map((x) => ({
+      ...x,
+      id: findingId(x.file, x.title),
+      verdict: "confirm",
+    }));
+  const diff = diffPasses(at(47), at(63));
+  assert.equal(diff.open.length, 1);
+  assert.equal(diff.newHere.length, 0);
+  assert.equal(
+    isConverged(at(63), diff, { blockOn: [], requireNoNewFindings: true }),
+    true,
+  );
+});
+
+test("a finding at a genuinely new location still blocks convergence", () => {
+  const prev = [f({ title: "t", line: 47 })].map((x) => ({
+    ...x,
+    id: findingId(x.file, x.title),
+  }));
+  const curr = [f({ title: "t2", file: "b.rs", line: 9 })].map((x) => ({
+    ...x,
+    id: findingId(x.file, x.title),
+  }));
+  const diff = diffPasses(prev, curr);
+  assert.equal(diff.newHere.length, 1);
+  assert.equal(
+    isConverged(curr, diff, { blockOn: [], requireNoNewFindings: true }),
+    false,
+  );
 });
 
 test("findingId is 8 hex chars", () => {
