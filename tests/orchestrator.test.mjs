@@ -1,4 +1,4 @@
-﻿import { test } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -23,8 +23,6 @@ const finding = (title, severity = "major") => ({
   correction: "",
   id: findingId("a.rs", title),
 });
-const passthrough = async (findings) => findings;
-
 const scripted = (perPass) => {
   let call = 0;
   return async ({ lens }) => {
@@ -65,7 +63,6 @@ test("the configured timeout reaches every lens", async () => {
       seen = timeoutMs;
       return { lens: lens.name, status: "ok", findings: [], threadId: "t", raw: "" };
     },
-    reconcileFn: passthrough,
     briefFor: () => "b",
   });
   assert.equal(seen, 7 * 60_000);
@@ -98,7 +95,6 @@ test("only enabled lenses run", async () => {
         raw: "",
       };
     },
-    reconcileFn: passthrough,
     briefFor: () => "b",
   });
   assert.deepEqual(seen, ["auditor"]);
@@ -132,7 +128,6 @@ test("respects the parallel cap", async () => {
         raw: "",
       };
     },
-    reconcileFn: passthrough,
     briefFor: () => "b",
   });
   assert.ok(peak <= 2, `peak concurrency was ${peak}`);
@@ -153,7 +148,6 @@ test("an unparseable lens blocks convergence even with no findings", async () =>
       threadId: null,
       raw: "oops",
     }),
-    reconcileFn: passthrough,
     briefFor: () => "b",
   });
   assert.equal(converged, false);
@@ -174,7 +168,6 @@ test("a failed lens blocks convergence and is named in the pass record", async (
       threadId: null,
       raw: "",
     }),
-    reconcileFn: passthrough,
     briefFor: () => "b",
   });
   assert.equal(converged, false);
@@ -183,8 +176,12 @@ test("a failed lens blocks convergence and is named in the pass record", async (
   );
 });
 
-test("a refuted critical does not block convergence", async () => {
-  const { converged } = await runPass({
+// A pass can no longer produce a refuted finding — refutation arrives later,
+// through applyAdjudication, and runPass marks everything `unreviewed`. That
+// an unreviewed critical still blocks is the property that matters here;
+// isConverged's handling of refuted ones is covered in findings.test.mjs.
+test("an unadjudicated critical blocks convergence", async () => {
+  const { record, converged } = await runPass({
     config: cfg({ codex: oneLens() }),
     target: "/repo",
     root: tmp(),
@@ -192,11 +189,10 @@ test("a refuted critical does not block convergence", async () => {
     pass: 1,
     prevRecord: null,
     runLensFn: scripted([[finding("phantom", "critical")]]),
-    reconcileFn: async (findings) =>
-      findings.map((f) => ({ ...f, verdict: "refute", basis: "not reachable" })),
     briefFor: () => "b",
   });
-  assert.equal(converged, true);
+  assert.equal(converged, false);
+  assert.equal(record.findings[0].verdict, "unreviewed");
 });
 
 test("a pass records its diff against the prior pass", async () => {
@@ -206,7 +202,6 @@ test("a pass records its diff against the prior pass", async () => {
     target: "/repo",
     root,
     runId: "r1",
-    reconcileFn: passthrough,
     briefFor: () => "b",
   };
   const first = await runPass({
@@ -236,7 +231,6 @@ test("briefFor is called with the lens, the pass number, and the prior record", 
     pass: 2,
     prevRecord,
     runLensFn: scripted([[]]),
-    reconcileFn: passthrough,
     briefFor: (lens, pass, prior) => {
       calls.push({ lens, pass, prior });
       return "b";
@@ -263,7 +257,6 @@ test("runPass alone executes one pass", async () => {
     pass: 1,
     prevRecord: null,
     runLensFn: scripted([[]]),
-    reconcileFn: passthrough,
     briefFor: () => "b",
   });
   assert.equal(converged, true);
@@ -332,7 +325,6 @@ test("a finding's secret-shaped evidence is scrubbed before it hits disk", async
       threadId: "t",
       raw: "",
     }),
-    reconcileFn: passthrough,
     briefFor: () => "b",
   });
 

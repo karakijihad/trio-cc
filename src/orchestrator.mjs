@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { diffPasses, isConverged, mergeFindings } from "./findings.mjs";
+import { applyVerdicts } from "./reconcile.mjs";
 import { makeEvent, appendEvent } from "./bus.mjs";
 import { runDir, passDir } from "./paths.mjs";
 import { writeMarker } from "./marker.mjs";
@@ -28,10 +29,15 @@ async function pool(items, limit, worker) {
   return results;
 }
 
-// One audit pass: run the enabled lenses, reconcile their findings, diff
-// against the prior pass, and write the pass's artifacts. `prevRecord` is the
+// One audit pass: run the enabled lenses, merge their findings, diff against
+// the prior pass, and write the pass's artifacts. `prevRecord` is the
 // previous pass's record (`null` for pass 1); `briefFor` is pass-aware
 // (D14) so pass 2+ can carry forward findings, diffs, and Claude's reply.
+//
+// There is no reconcile hook here. Both callers passed the same do-nothing
+// function, and adjudication genuinely happens later, in applyAdjudication,
+// once Claude's verdicts.json lands between passes — a seam that suggested
+// otherwise was worth more confusion than it was worth flexibility.
 export async function runPass({
   config,
   target,
@@ -40,7 +46,6 @@ export async function runPass({
   pass,
   prevRecord,
   runLensFn,
-  reconcileFn,
   briefFor,
 }) {
   const dir = runDir(root, runId);
@@ -79,8 +84,10 @@ export async function runPass({
     )
   ).map(scrubDeep);
 
-  const raw = mergeFindings(results);
-  const reconciled = await reconcileFn(raw, { pass, target, root });
+  // Unadjudicated until Claude says otherwise — applyVerdicts with no
+  // verdicts marks every finding `unreviewed`, which is what a pass that
+  // nobody has looked at should say.
+  const reconciled = applyVerdicts(mergeFindings(results), []);
   const diff = diffPasses(previous, reconciled);
   const degraded = results.filter((r) => r.status !== "ok");
 

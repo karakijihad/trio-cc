@@ -4,26 +4,20 @@ import {
   writeFileSync,
   mkdirSync,
   readdirSync,
-  rmSync,
 } from "node:fs";
 import { join } from "node:path";
 import { runPass, finalizeRun, newRunId } from "./orchestrator.mjs";
 import { buildLensPrompt, readPassResponse, claudeChanges } from "./prompt.mjs";
-import { diffPasses, isConverged } from "./findings.mjs";
-import { applyVerdicts } from "./reconcile.mjs";
+import {
+  readReconcile,
+  collectPasses,
+  applyAdjudication,
+} from "./adjudicate.mjs";
 import { promote, promoteTarget } from "./promote.mjs";
 import { readEvents, makeEvent, appendEvent } from "./bus.mjs";
 import { runDir, passDir, activeMarker, trioDir } from "./paths.mjs";
 import { readMarker, writeMarker, removeMarker } from "./marker.mjs";
-import { scrubDeep } from "./scrub.mjs";
 import { DEFAULT_CONFIG } from "./config.mjs";
-
-// The reconcileFn every runPass call gets from the driver. Claude's actual
-// adjudication is applied separately (see applyAdjudication) once its
-// verdicts.json lands on disk between passes (D18) — the pass itself always
-// defaults every finding to "confirm".
-const passthrough = (findings) => applyVerdicts(findings, []);
-
 
 // The durable half of cancellation: `trio cancel` signals the worker process,
 // but a signal can be missed (the pid is gone, the kill is refused). The token
@@ -84,26 +78,6 @@ function readRunJson(root, runId) {
   return { target: parsed.target, config: parsed.config };
 }
 
-function readReconcile(root, runId, pass) {
-  return JSON.parse(
-    readFileSync(join(passDir(root, runId, pass), "reconcile.json"), "utf8"),
-  );
-}
-
-// Collects every completed pass's record, in order, for finalization and
-// promotion. Passes are always written contiguously from 1 by runPass.
-function collectPasses(root, runId) {
-  const passes = [];
-  for (
-    let n = 1;
-    existsSync(join(passDir(root, runId, n), "reconcile.json"));
-    n++
-  ) {
-    passes.push(readReconcile(root, runId, n));
-  }
-  return passes;
-}
-
 // Promotes a run that has already finished — what "yes, create it" runs, so
 // the audit the operator just watched is written out too, not only the next
 // one. `create` is the operator's answer: without it this is a dry no-op,
@@ -146,17 +120,6 @@ function latestCompletedPass(root, runId) {
     .map((m) => Number(m[1]))
     .filter((n) => existsSync(join(passDir(root, runId, n), "reconcile.json")));
   return ns.length ? Math.max(...ns) : null;
-}
-
-function readVerdictsFile(root, runId, pass) {
-  try {
-    const parsed = JSON.parse(
-      readFileSync(join(passDir(root, runId, pass), "verdicts.json"), "utf8"),
-    );
-    return Array.isArray(parsed?.verdicts) ? parsed : null;
-  } catch {
-    return null;
-  }
 }
 
 // Finalization tail shared by every terminal outcome: writes verdict.json
@@ -286,48 +249,6 @@ function briefFor(root, runId) {
   };
 }
 
-// Applies Claude's adjudication (pass-<N>/verdicts.json, D18) to a stored
-// pass record, if present and parseable. An invalid verdict value must not
-// crash the run — it is logged and the pass proceeds unadjudicated.
-function applyAdjudication({ root, config, runId, pass, record }) {
-  const parsed = readVerdictsFile(root, runId, pass);
-  if (!parsed) {
-    const converged =
-      record.degraded.length === 0 &&
-      isConverged(record.findings, record.diff, config.converge);
-    return { record, converged };
-  }
-
-  let findings = record.findings;
-  try {
-    findings = applyVerdicts(record.findings, parsed.verdicts);
-  } catch (err) {
-    appendEvent(
-      runDir(root, runId),
-      makeEvent({
-        run: runId,
-        pass,
-        lane: "trio",
-        actor: "trio",
-        kind: "error",
-        payload: { error: `invalid verdict: ${err.message}` },
-      }),
-    );
-  }
-
-  const prevFindings =
-    pass > 1 ? readReconcile(root, runId, pass - 1).findings : [];
-  const diff = diffPasses(prevFindings, findings);
-  const updated = scrubDeep({ ...record, findings, diff });
-  writeFileSync(
-    join(passDir(root, runId, pass), "reconcile.json"),
-    JSON.stringify(updated, null, 2) + "\n",
-  );
-
-  const converged =
-    record.degraded.length === 0 && isConverged(findings, diff, config.converge);
-  return { record: updated, converged };
-}
 
 // Applies a per-run lens selection (optional `lenses`, D-lens-select) to a
 // config before it is ever written to disk. `names` is an array of lens
@@ -437,7 +358,6 @@ export async function startRun({
       pass: 1,
       prevRecord: null,
       runLensFn,
-      reconcileFn: passthrough,
       briefFor: briefFor(root, runId),
     });
 
@@ -534,7 +454,6 @@ export async function continueRun({ root, runLensFn }) {
       pass: N + 1,
       prevRecord: record,
       runLensFn,
-      reconcileFn: passthrough,
       briefFor: briefFor(root, runId),
     });
 

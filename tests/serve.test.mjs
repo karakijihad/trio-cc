@@ -57,12 +57,31 @@ test("/events replays the existing backlog as SSE data lines", async () => {
 
   const res = await fetch(`${url}/events`);
   assert.match(res.headers.get("content-type"), /text\/event-stream/);
+
+  // Reading one chunk and checking for the first event let a server that
+  // dropped everything after it pass. Read until both seeded events arrive.
   const reader = res.body.getReader();
-  const chunk = new TextDecoder().decode((await reader.read()).value);
-  assert.match(chunk, /^data: /m);
-  assert.match(chunk, /agent_message/);
+  const decoder = new TextDecoder();
+  let seen = "";
+  const deadline = Date.now() + 5000;
+  while (
+    !(seen.includes("agent_message") && seen.includes("command_execution")) &&
+    Date.now() < deadline
+  ) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    seen += decoder.decode(value, { stream: true });
+  }
   await reader.cancel();
   server.close();
+
+  assert.match(seen, /^data: /m);
+  assert.ok(seen.includes("agent_message"), "first backlog event missing");
+  assert.ok(seen.includes("command_execution"), "second backlog event missing");
+  assert.ok(
+    seen.indexOf("agent_message") < seen.indexOf("command_execution"),
+    "backlog replayed out of order",
+  );
 });
 
 test("unknown paths return 404", async () => {
@@ -92,12 +111,11 @@ test("/events survives a run directory with no log file yet", async () => {
   server.close();
 });
 
-test("autoExit closes the server once verdict.json exists", async () => {
+// The verdict has to land *after* the server is listening, or this never
+// exercises the poll at all — it just starts a server next to a file that
+// was already there.
+test("autoExit closes the server once verdict.json appears", async () => {
   const dir = tmp();
-  writeFileSync(
-    join(dir, "verdict.json"),
-    JSON.stringify({ verdict: "clean" }),
-  );
   const { server } = await start({
     runDirPath: dir,
     port: 0,
@@ -105,7 +123,7 @@ test("autoExit closes the server once verdict.json exists", async () => {
     pollMs: 20,
     lingerMs: 20,
   });
-  await new Promise((resolve, reject) => {
+  const closed = new Promise((resolve, reject) => {
     const guard = setTimeout(
       () => reject(new Error("server did not auto-exit")),
       2000,
@@ -115,4 +133,11 @@ test("autoExit closes the server once verdict.json exists", async () => {
       resolve();
     });
   });
+
+  // Still up before the verdict exists — the poll must be what closes it.
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(server.listening, true, "closed before any verdict was written");
+
+  writeFileSync(join(dir, "verdict.json"), JSON.stringify({ verdict: "clean" }));
+  await closed;
 });

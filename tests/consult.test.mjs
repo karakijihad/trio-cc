@@ -87,7 +87,17 @@ test("askCodex records its activity on the codex:consult lane", async () => {
     run: "c1",
     spawnFn: fakeSpawn(STREAM),
   });
-  assert.ok(readEvents(dir).every((e) => e.lane === "codex:consult"));
+  // `[].every(...)` is true, so this asserted nothing until it also required
+  // events to exist: recording none at all used to pass.
+  const events = readEvents(dir);
+  assert.ok(events.length > 0, "no consult activity was recorded");
+  assert.ok(events.every((e) => e.lane === "codex:consult"));
+  assert.ok(events.every((e) => e.actor === "codex"));
+  for (const kind of ["agent_message", "usage"])
+    assert.ok(
+      events.some((e) => e.kind === kind),
+      `no ${kind} event`,
+    );
 });
 
 test("askCodex reports a failure rather than throwing", async () => {

@@ -183,6 +183,45 @@ test("cancel will not signal a pid whose run directory is absent", () => {
   assert.doesNotMatch(r.stdout, /stopped pid/);
 });
 
+// The old parser stepped in twos from index 0, so the "on" token shifted
+// everything after it and the model was dropped — with a success message.
+test("lens rejects malformed arguments instead of reporting success", () => {
+  const cases = [
+    [["lens", "auditor", "model"], /model needs a value/],
+    [["lens", "auditor", "effort"], /effort needs a value/],
+    [["lens", "auditor", "frobnicate", "x"], /unexpected argument: frobnicate/],
+    [["lens", "auditor", "model", "a", "model", "b"], /model given twice/],
+    [["lens", "auditor", "on", "wat"], /unexpected argument: wat/],
+  ];
+  for (const [args, expected] of cases) {
+    const r = trio(project(), args);
+    assert.equal(r.status, 2, args.join(" "));
+    assert.match(r.stdout + r.stderr, expected, args.join(" "));
+  }
+});
+
+// `lens auditor on model X` used to drop the model and still exit 0. Whether
+// the capability check then accepts X depends on the machine, so this asserts
+// the one thing that must hold everywhere: the model was seen, not discarded.
+test("lens does not silently drop a value after on/off", () => {
+  const root = project();
+  const modelOf = () =>
+    JSON.parse(trio(root, ["config", "get"]).stdout).codex.lenses.find(
+      (l) => l.name === "auditor",
+    ).model;
+  const before = modelOf();
+  const r = trio(root, ["lens", "auditor", "on", "model", "not-a-real-model"]);
+
+  if (r.status === 0) {
+    assert.equal(modelOf(), "not-a-real-model", "the model was dropped");
+    return;
+  }
+  // Rejected — by the capability check, which must have been given the model
+  // to reject. Anything that never mentions it means it never arrived.
+  assert.equal(modelOf(), before, "a rejected change must not persist");
+  if (r.status === 2) assert.match(r.stdout + r.stderr, /not-a-real-model/);
+});
+
 test("an unknown command exits non-zero with usage", () => {
   const r = trio(project(), ["frobnicate"]);
   assert.notEqual(r.status, 0);

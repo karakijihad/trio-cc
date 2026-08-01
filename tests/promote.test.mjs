@@ -205,7 +205,6 @@ test("promote never leaks a lens finding's secret-shaped evidence into the codex
       threadId: "t",
       raw: "",
     }),
-    reconcileFn: async (findings) => findings,
     briefFor: () => "b",
   });
 

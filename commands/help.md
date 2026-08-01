@@ -119,7 +119,7 @@ it thinks."
 | `codex.parallel`                | `5`                    | Lenses run at once. Wall-clock only, not cost. |
 | `codex.timeoutMinutes`          | `15`                   | How long one lens may run before it is stopped and marked degraded. |
 | `codex.lenses[]`                | 5 entries, all `on`    | `{name, model, effort, on}` per lens.          |
-| `view.mode`                     | `window`               | `window`/`pane`/`off`.                         |
+| `view.mode`                     | `window`               | `window` opens a browser · `pane` prints the viewer URL to open yourself · `off`. |
 | `view.port`                     | `4319`                 | Viewer's local port.                           |
 | `view.autoOpen`                 | `true`                 | Auto-open the browser in `window` mode.        |
 | `converge.blockOn`              | `["critical","major"]` | Severities that must be all-clear to converge. |

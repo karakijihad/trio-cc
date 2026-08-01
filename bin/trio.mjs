@@ -42,6 +42,15 @@ import {
   isRunId,
   processIsTrio,
 } from "../src/paths.mjs";
+import {
+  USAGE,
+  RUN_FLAGS,
+  asksForHelp,
+  unknownFlags,
+  valuelessFlags,
+  lensSelection,
+  parseLensArgs,
+} from "../src/cli-args.mjs";
 
 const root = process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
 const [cmd, ...rest] = process.argv.slice(2);
@@ -62,63 +71,6 @@ const run = (bin, args) => {
   return spawnSync(bin, args, { encoding: "utf8" });
 };
 const out = (s) => process.stdout.write(s.endsWith("\n") ? s : s + "\n");
-
-const USAGE = `trio — Codex as a read-only second reviewer.
-
-  trio [status]                     the control panel (default)
-  trio on | off                     enable or disable Trio for this project
-  trio doctor                       re-probe Codex and report health
-  trio run [--max N] [--target PATH] [--lenses a,b|all]
-  trio continue                     run the next pass of the active run
-  trio cancel                       cancel the active run
-  trio consult <question>           ask Codex one question
-  trio config get | set <key> <value>
-  trio lens <name> [on|off] [model <slug>] [effort <level>]
-  trio models [--json]              Codex models and which lens uses each
-  trio promote [runId] [--create]   copy a finished run into artifacts.promoteTo
-  trio serve [runId] [--auto-exit]  start the viewer
-  trio render [runId]               write a static HTML report
-
-A run spends the operator's own OpenAI credit, so an unrecognised flag is
-refused rather than ignored.`;
-
-const RUN_FLAGS = new Set(["--max", "--target", "--lenses"]);
-
-const asksForHelp = (args) => args.includes("--help") || args.includes("-h");
-
-// Flags Trio does not know are a refusal, not a no-op: silently dropping one
-// means `trio run --help` reads as "run everything", and every lens that
-// starts is money spent. Values of known flags are stepped over so a value
-// that happens to begin with "-" is not mistaken for a flag of its own.
-const unknownFlags = (args, known) => {
-  const bad = [];
-  for (let i = 0; i < args.length; i++) {
-    if (!args[i].startsWith("-")) continue;
-    if (known.has(args[i])) i++;
-    else bad.push(args[i]);
-  }
-  return bad;
-};
-
-// Every flag `run` knows takes a value. Left unchecked, `--target --lenses x`
-// reads "--lenses" as the audit target and the unknown-flag walk above steps
-// straight over it, so the two guards have to be read together.
-//
-// "Flag-like" is deliberately narrower than "starts with a dash": a target
-// path or a negative --max is a value, badly chosen, and belongs to the check
-// that can say why. Only a long flag or a flag this command knows is a value
-// that never was.
-const valuelessFlags = (args, known) =>
-  args.filter(
-    (a, i) =>
-      known.has(a) &&
-      (i + 1 >= args.length ||
-        known.has(args[i + 1]) ||
-        args[i + 1].startsWith("--") ||
-        // `--lenses ""` parsed to an empty list, which applyLensSelection
-        // reads as "no selection given" and quietly runs every lens.
-        args[i + 1].trim() === ""),
-  );
 
 const gatherState = ({ force = false } = {}) => {
   const config = loadConfig(root);
@@ -163,20 +115,26 @@ const beforeFirstPass = async ({ runId }) => {
 
     const bin = fileURLToPath(import.meta.url);
     const wantsBrowser = view.mode === "window" && view.autoOpen;
+    // Always piped now. The server walks forward from the configured port
+    // when it is taken, so only the server knows which one it got — and in
+    // pane mode nothing opened it and nothing printed it, leaving a viewer
+    // running on a port the operator had no way to discover.
     const viewer = spawn(
       process.execPath,
       [bin, "serve", runId, "--auto-exit"],
-      {
-        detached: true,
-        stdio: ["ignore", wantsBrowser ? "pipe" : "ignore", "ignore"],
-      },
+      { detached: true, stdio: ["ignore", "pipe", "ignore"] },
     );
     viewer.on("error", () => {});
     viewer.unref();
-    if (!wantsBrowser) return;
 
     const url = await firstLine(viewer.stdout, 10_000);
     if (!url || !/^http:\/\/127\.0\.0\.1:\d+\/?$/.test(url)) return;
+
+    // stderr, not stdout: `run` prints a JSON result its callers parse.
+    if (!wantsBrowser) {
+      process.stderr.write(`Viewer: ${url}\n`);
+      return;
+    }
 
     const o = openUrlCommand(url);
     const opener = spawn(o.file, o.args, {
@@ -338,10 +296,20 @@ switch (cmd) {
       process.exitCode = 2;
       break;
     }
-    if (pairs[0] === "on" || pairs[0] === "off") lens.on = pairs[0] === "on";
-    for (let i = 0; i + 1 < pairs.length; i += 2) {
-      if (pairs[i] === "model") lens.model = pairs[i + 1];
-      if (pairs[i] === "effort") lens.effort = pairs[i + 1];
+    const parsed = parseLensArgs(pairs);
+    if (parsed.error) {
+      out(parsed.error);
+      process.exitCode = 2;
+      break;
+    }
+    Object.assign(lens, parsed.changes);
+
+    // No arguments is a query, not a change: report the lens and touch nothing.
+    if (!Object.keys(parsed.changes).length) {
+      out(
+        `${lens.name}  ${lens.model}  ${lens.effort}  ${lens.on ? "on" : "off"}`,
+      );
+      break;
     }
     const { caps, pre } = gatherState();
     if (!caps) {
@@ -562,14 +530,7 @@ switch (cmd) {
     // A value can be present and still name nothing: `--lenses ,` parses to an
     // empty list, which applyLensSelection reads as "no selection given" and
     // runs every lens. What has to be non-empty is the parsed list.
-    const lensFlagAt = rest.indexOf("--lenses");
-    const lensNames =
-      lensFlagAt === -1
-        ? null
-        : (rest[lensFlagAt + 1] ?? "")
-            .split(",")
-            .map((s) => s.trim())
-            .filter(Boolean);
+    const lensNames = lensSelection(rest);
     if (lensNames && !lensNames.length) {
       out(`--lenses needs at least one lens name\n\n${USAGE}`);
       process.exitCode = 2;
@@ -625,7 +586,7 @@ switch (cmd) {
       ? rest[rest.indexOf("--target") + 1]
       : root;
     const lenses =
-      lensFlagAt !== -1 && rest[lensFlagAt + 1] === "all"
+      lensNames?.length === 1 && lensNames[0] === "all"
         ? "all"
         : (lensNames ?? undefined);
 
