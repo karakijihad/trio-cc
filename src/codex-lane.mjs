@@ -2,7 +2,7 @@ import { spawn as nodeSpawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { makeEvent, appendEvent } from "./bus.mjs";
 import { extractFindings } from "./findings.mjs";
-import { codexCommand } from "./paths.mjs";
+import { codexCommand, killTreeCommand } from "./paths.mjs";
 
 export const SANDBOX = "read-only";
 
@@ -60,6 +60,30 @@ export function mapEvent(ev) {
   return null;
 }
 
+// Mirrors DEFAULT_CONFIG.codex.timeoutMinutes, for callers that reach runLens
+// without a config in hand. runPass always passes the operator's value.
+export const DEFAULT_TIMEOUT_MS = 15 * 60_000;
+
+// Falls back to kill() whenever the tree-killer is unavailable or refuses to
+// launch: a lens that will not die is worse than one killed imprecisely, and
+// either way the settle promise below needs the pipes to close.
+export function killTree(proc, spawnFn = nodeSpawn) {
+  const cmd = killTreeCommand(proc.pid);
+  const direct = () => {
+    try {
+      proc.kill();
+    } catch {
+      /* already gone */
+    }
+  };
+  if (!cmd) return direct();
+  try {
+    spawnFn(cmd.file, cmd.args, { stdio: "ignore" }).on("error", direct);
+  } catch {
+    direct();
+  }
+}
+
 export async function runLens({
   lens,
   target,
@@ -68,6 +92,7 @@ export async function runLens({
   run,
   pass,
   spawnFn = nodeSpawn,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
   retried = false,
 }) {
   const lane = `codex:${lens.name}`;
@@ -86,6 +111,16 @@ export async function runLens({
   proc.on("error", (err) => {
     launchError = err;
   });
+
+  // Nothing else bounds a Codex process: the settle promise below waits on
+  // 'close', so a lens that stops producing output waits forever and the run
+  // with it. Not unref'd — the timer has to survive to fire, and it is
+  // cleared the moment the process settles on its own.
+  let timedOut = false;
+  const deadline = setTimeout(() => {
+    timedOut = true;
+    killTree(proc);
+  }, timeoutMs);
   proc.stdin?.on?.("error", () => {
     /* the child never started; the close handler reports it */
   });
@@ -132,7 +167,29 @@ export async function runLens({
     proc.on("close", done);
     proc.on("error", () => done(null));
   });
+  clearTimeout(deadline);
   const raw = messages.join("\n");
+
+  // Before the exit-code check, and before the retry: killing the process is
+  // what made the code non-zero, so reporting "codex exited null" here would
+  // bury the only fact that matters, and a hang must not be retried into a
+  // second hang.
+  if (timedOut) {
+    appendEvent(
+      runDirPath,
+      makeEvent({
+        run,
+        pass,
+        lane,
+        actor: "codex",
+        kind: "error",
+        payload: {
+          error: `codex timed out after ${Math.round(timeoutMs / 60_000)}m and was stopped — raise codex.timeoutMinutes if this lens legitimately needs longer`,
+        },
+      }),
+    );
+    return { lens: lens.name, status: "timeout", findings: [], threadId, raw };
+  }
 
   if (launchError) {
     appendEvent(
@@ -174,7 +231,23 @@ export async function runLens({
       raw,
     };
 
+  // The retry is a second full Codex session — the single largest thing that
+  // can double a lens's wall-clock time. It used to happen silently, so a
+  // three-minute lens was indistinguishable from a slow one. Say so.
   if (!retried) {
+    appendEvent(
+      runDirPath,
+      makeEvent({
+        run,
+        pass,
+        lane,
+        actor: "codex",
+        kind: "lens_retry",
+        payload: {
+          error: `findings block ${parsed.reason} — running this lens once more`,
+        },
+      }),
+    );
     return runLens({
       lens,
       target,
@@ -183,6 +256,7 @@ export async function runLens({
       run,
       pass,
       spawnFn,
+      timeoutMs,
       retried: true,
     });
   }

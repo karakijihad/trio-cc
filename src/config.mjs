@@ -10,6 +10,10 @@ export const DEFAULT_CONFIG = Object.freeze({
   maxIterations: 2,
   codex: {
     parallel: 2,
+    // A lens that has stopped producing output is indistinguishable from one
+    // that is still thinking, and nothing else bounds a Codex process. Ten
+    // times the observed per-lens time, so it only fires on a real hang.
+    timeoutMinutes: 15,
     lenses: [
       { name: "auditor", model: "gpt-5.6-terra", effort: "medium", on: true },
       { name: "security", model: "gpt-5.6-terra", effort: "medium", on: true },
@@ -46,6 +50,7 @@ const ENUMS = {
 const POSITIVE_INTEGERS = new Set([
   "maxIterations",
   "codex.parallel",
+  "codex.timeoutMinutes",
   "view.port",
 ]);
 

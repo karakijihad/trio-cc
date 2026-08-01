@@ -42,6 +42,18 @@ export function codexCommand(args) {
   );
 }
 
+// Stopping a lens means stopping the tree, not the process Trio spawned.
+// On win32 codexCommand spawns node.exe running Codex's JS shim, and that
+// shim spawns the native binary as its own child, forwarding SIGTERM to it
+// from a JS handler. Node's kill() on Windows is TerminateProcess, which no
+// handler survives — so killing the shim orphans the native process, still
+// working and still spending. taskkill /t takes the whole tree. On POSIX the
+// shim receives a real signal and forwards it itself, so kill() is enough.
+export function killTreeCommand(pid) {
+  if (process.platform !== "win32" || !pid) return null;
+  return { file: "taskkill", args: ["/pid", String(pid), "/t", "/f"] };
+}
+
 // The OS default-browser launcher for a URL. cmd.exe here follows the D2a
 // precedent: Node has no built-in opener and this is the platform mechanism.
 export function openUrlCommand(url) {

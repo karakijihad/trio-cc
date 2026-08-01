@@ -74,6 +74,7 @@ export async function runPass({
         runDirPath: dir,
         run: runId,
         pass,
+        timeoutMs: config.codex.timeoutMinutes * 60_000,
       }),
     )
   ).map(scrubDeep);

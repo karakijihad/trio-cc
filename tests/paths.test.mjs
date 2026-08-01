@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   resolveCodexScript,
   codexCommand,
+  killTreeCommand,
   openUrlCommand,
 } from "../src/paths.mjs";
 
@@ -26,6 +27,23 @@ test("resolveCodexScript ignores a shim with no sibling entry point", () => {
   const dir = mkdtempSync(join(tmpdir(), "trio-badshim-"));
   writeFileSync(join(dir, "codex.cmd"), "@echo off\n");
   assert.equal(resolveCodexScript(dir), null);
+});
+
+// On win32 the Codex process Trio spawns is a JS shim whose native child
+// would survive a plain kill(); the whole tree has to go.
+test("killTreeCommand takes the tree on win32 and defers to kill() elsewhere", () => {
+  const cmd = killTreeCommand(4321);
+  if (process.platform === "win32") {
+    assert.equal(cmd.file, "taskkill");
+    assert.deepEqual(cmd.args, ["/pid", "4321", "/t", "/f"]);
+  } else {
+    assert.equal(cmd, null);
+  }
+});
+
+test("killTreeCommand refuses a process with no pid", () => {
+  assert.equal(killTreeCommand(undefined), null);
+  assert.equal(killTreeCommand(0), null);
 });
 
 test("codexCommand never asks for a shell", () => {

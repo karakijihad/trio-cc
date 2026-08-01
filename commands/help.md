@@ -116,7 +116,8 @@ it thinks."
 | ------------------------------- | ---------------------- | ---------------------------------------------- |
 | `enabled`                       | `true`                 | Whether Trio runs at all here; `/trio:off` opts this project out for good. |
 | `maxIterations`                 | `2`                    | Pass ceiling.                                  |
-| `codex.parallel`                | `2`                    | Lenses run at once.                            |
+| `codex.parallel`                | `2`                    | Lenses run at once. Wall-clock only, not cost. |
+| `codex.timeoutMinutes`          | `15`                   | How long one lens may run before it is stopped and marked degraded. |
 | `codex.lenses[]`                | 5 entries, all `on`    | `{name, model, effort, on}` per lens.          |
 | `view.mode`                     | `window`               | `window`/`pane`/`off`.                         |
 | `view.port`                     | `4319`                 | Viewer's local port.                           |

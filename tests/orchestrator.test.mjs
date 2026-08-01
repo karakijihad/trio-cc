@@ -52,6 +52,25 @@ test("newRunId distinguishes two runs started in the same minute", () => {
   );
 });
 
+test("the configured timeout reaches every lens", async () => {
+  let seen = null;
+  await runPass({
+    config: cfg({ codex: { ...oneLens(), timeoutMinutes: 7 } }),
+    target: "/repo",
+    root: tmp(),
+    runId: "r1",
+    pass: 1,
+    prevRecord: null,
+    runLensFn: async ({ lens, timeoutMs }) => {
+      seen = timeoutMs;
+      return { lens: lens.name, status: "ok", findings: [], threadId: "t", raw: "" };
+    },
+    reconcileFn: passthrough,
+    briefFor: () => "b",
+  });
+  assert.equal(seen, 7 * 60_000);
+});
+
 test("only enabled lenses run", async () => {
   const seen = [];
   await runPass({

@@ -5,7 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { EventEmitter } from "node:events";
-import { buildArgs, mapEvent, runLens, SANDBOX } from "../src/codex-lane.mjs";
+import {
+  buildArgs,
+  mapEvent,
+  runLens,
+  killTree,
+  SANDBOX,
+} from "../src/codex-lane.mjs";
 import { readEvents } from "../src/bus.mjs";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "trio-lane-"));
@@ -21,6 +27,24 @@ function fakeSpawn(stdout, { code = 0 } = {}) {
     proc.stderr = Readable.from([]);
     proc.stdin = { write() {}, end() {}, on() {} };
     proc.stdout.on("end", () => setImmediate(() => proc.emit("close", code)));
+    return proc;
+  };
+}
+
+// A Codex process that produces nothing and never exits on its own — the
+// hang the deadline exists for. kill() is what settles it, as the real one does.
+function hangingSpawn({ onSpawn = () => {}, onKill = () => {} } = {}) {
+  return () => {
+    onSpawn();
+    const proc = new EventEmitter();
+    proc.stdout = new Readable({ read() {} });
+    proc.stderr = Readable.from([]);
+    proc.stdin = { write() {}, end() {}, on() {} };
+    proc.kill = () => {
+      onKill();
+      proc.stdout.push(null);
+      setImmediate(() => proc.emit("close", null));
+    };
     return proc;
   };
 }
@@ -148,6 +172,108 @@ test("runLens retries once, then reports unparseable", async () => {
   assert.equal(calls, 2);
   assert.equal(r.status, "unparseable");
   assert.match(r.raw, /no block here/);
+});
+
+test("killTree takes the whole tree when the platform needs it", () => {
+  const calls = [];
+  let killed = 0;
+  const proc = { pid: 4321, kill: () => killed++ };
+  killTree(proc, (file, args) => {
+    calls.push([file, args]);
+    return { on: () => {} };
+  });
+  if (process.platform === "win32") {
+    assert.deepEqual(calls, [["taskkill", ["/pid", "4321", "/t", "/f"]]]);
+    assert.equal(killed, 0);
+  } else {
+    assert.deepEqual(calls, []);
+    assert.equal(killed, 1);
+  }
+});
+
+// A lens that will not die is worse than one killed imprecisely.
+test("killTree falls back to kill() when the tree-killer will not launch", () => {
+  let killed = 0;
+  const proc = { pid: 4321, kill: () => killed++ };
+  killTree(proc, () => {
+    throw new Error("ENOENT: taskkill");
+  });
+  assert.equal(killed, 1);
+});
+
+test("killTree falls back to kill() when the tree-killer errors after launch", () => {
+  let killed = 0;
+  const proc = { pid: 4321, kill: () => killed++ };
+  killTree(proc, () => ({
+    on: (ev, fn) => {
+      if (ev === "error") fn(new Error("spawn failed"));
+    },
+  }));
+  assert.equal(killed, 1);
+});
+
+test("runLens stops a lens that never produces output", async () => {
+  const dir = tmp();
+  let killed = 0;
+  const r = await runLens({
+    lens: LENS,
+    target: "/repo",
+    brief: "b",
+    runDirPath: dir,
+    run: "r1",
+    pass: 1,
+    spawnFn: hangingSpawn({ onKill: () => killed++ }),
+    timeoutMs: 50,
+  });
+  assert.equal(killed, 1);
+  assert.equal(r.status, "timeout");
+  const errs = readEvents(dir).filter((e) => e.kind === "error");
+  assert.equal(errs.length, 1);
+  assert.match(errs[0].payload.error, /timed out after/);
+});
+
+// A hang retried is two hangs. The timeout has to short-circuit the retry
+// path, and must not be reported as a plain non-zero exit.
+test("a timed-out lens is not retried", async () => {
+  const dir = tmp();
+  let spawns = 0;
+  const r = await runLens({
+    lens: LENS,
+    target: "/repo",
+    brief: "b",
+    runDirPath: dir,
+    run: "r1",
+    pass: 1,
+    spawnFn: hangingSpawn({ onSpawn: () => spawns++ }),
+    timeoutMs: 50,
+  });
+  assert.equal(spawns, 1);
+  assert.equal(r.status, "timeout");
+  assert.equal(
+    readEvents(dir).some((e) => /exited/.test(e.payload.error ?? "")),
+    false,
+  );
+});
+
+test("runLens announces the retry instead of silently doubling", async () => {
+  const dir = tmp();
+  const spawnFn = () =>
+    fakeSpawn(
+      '{"type":"item.completed","item":{"type":"agent_message","text":"no block here"}}\n',
+    )();
+  await runLens({
+    lens: LENS,
+    target: "/repo",
+    brief: "b",
+    runDirPath: dir,
+    run: "r1",
+    pass: 1,
+    spawnFn,
+  });
+  const retries = readEvents(dir).filter((e) => e.kind === "lens_retry");
+  assert.equal(retries.length, 1);
+  assert.equal(retries[0].lane, "codex:auditor");
+  assert.match(retries[0].payload.error, /running this lens once more/);
 });
 
 test("runLens reports failed on a non-zero exit", async () => {

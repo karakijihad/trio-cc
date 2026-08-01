@@ -8,14 +8,34 @@ import {
   loadConfig,
   saveConfig,
   setConfigValue,
+  configErrors,
 } from "../src/config.mjs";
 import { codexHome, trioDir } from "../src/paths.mjs";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "trio-"));
 
-test("ships enabled with a ceiling of 2", () => {
+test("ships enabled with a ceiling of 2 and a lens deadline", () => {
   assert.equal(DEFAULT_CONFIG.enabled, true);
   assert.equal(DEFAULT_CONFIG.maxIterations, 2);
+  assert.equal(DEFAULT_CONFIG.codex.timeoutMinutes, 15);
+});
+
+test("codex.timeoutMinutes must be a positive whole number", () => {
+  for (const bad of ["0", "-3", "1.5", "forever"])
+    assert.throws(() =>
+      setConfigValue(DEFAULT_CONFIG, "codex.timeoutMinutes", bad),
+    );
+  assert.equal(
+    setConfigValue(DEFAULT_CONFIG, "codex.timeoutMinutes", "30").codex
+      .timeoutMinutes,
+    30,
+  );
+  assert.ok(
+    configErrors({
+      ...DEFAULT_CONFIG,
+      codex: { ...DEFAULT_CONFIG.codex, timeoutMinutes: 0 },
+    }).some((e) => /timeoutMinutes/.test(e)),
+  );
 });
 
 test("loadConfig returns defaults when no file exists", () => {
