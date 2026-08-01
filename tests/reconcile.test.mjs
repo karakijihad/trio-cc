@@ -81,7 +81,21 @@ test("a finding with no verdict is unreviewed, not confirmed", () => {
 
 test("unreviewed findings are not listed as disagreements", () => {
   const table = renderDisagreementTable(applyVerdicts([f("a1")], []));
-  assert.doesNotMatch(table, /unreviewed/i);
+  assert.doesNotMatch(table, /\| /);
+});
+
+// "No disagreements" and "nobody has looked" are different reports.
+test("an unadjudicated pass does not report its findings as confirmed", () => {
+  const table = renderDisagreementTable(applyVerdicts([f("a1"), f("a2")], []));
+  assert.match(table, /2 finding\(s\) not yet adjudicated/);
+  assert.doesNotMatch(table, /confirmed as reported/);
+});
+
+test("a fully confirmed pass still says so", () => {
+  const table = renderDisagreementTable(
+    applyVerdicts([f("a1")], [{ id: "a1", verdict: "confirm", basis: "" }]),
+  );
+  assert.match(table, /confirmed as reported/);
 });
 
 test("an unknown verdict is rejected", () => {

@@ -31,7 +31,7 @@ import {
   promoteRun,
 } from "../src/driver.mjs";
 import { finalizeRun, newRunId } from "../src/orchestrator.mjs";
-import { runLens } from "../src/codex-lane.mjs";
+import { runLens, killTree } from "../src/codex-lane.mjs";
 import { start } from "../src/serve.mjs";
 import {
   activeMarker,
@@ -112,7 +112,10 @@ const valuelessFlags = (args, known) =>
       known.has(a) &&
       (i + 1 >= args.length ||
         known.has(args[i + 1]) ||
-        args[i + 1].startsWith("--")),
+        args[i + 1].startsWith("--") ||
+        // `--lenses ""` parsed to an empty list, which applyLensSelection
+        // reads as "no selection given" and quietly runs every lens.
+        args[i + 1].trim() === ""),
   );
 
 const gatherState = ({ force = false } = {}) => {
@@ -426,11 +429,19 @@ switch (cmd) {
     let stopped = null;
     if (marker.pid && marker.pid !== process.pid) {
       try {
-        process.kill(marker.pid, "SIGTERM");
+        // Signal 0 is a liveness probe: it throws ESRCH when the run process
+        // is already gone, and tells us nothing was there to stop.
+        process.kill(marker.pid, 0);
+        // The worker has Codex children of its own. Signalling only the
+        // worker orphans them on win32 — the same defect the lens deadline
+        // had before killTree, and cancellation is where it costs most.
+        killTree({
+          pid: marker.pid,
+          kill: () => process.kill(marker.pid, "SIGTERM"),
+        });
         stopped = marker.pid;
-      } catch (err) {
-        // ESRCH simply means the run process is already gone.
-        if (err.code !== "ESRCH") stopped = null;
+      } catch {
+        /* already gone */
       }
     }
 
@@ -597,6 +608,7 @@ switch (cmd) {
         effort: lens.effort,
         runDirPath: runDir(root, runId),
         run: runId,
+        timeoutMs: config.codex.timeoutMinutes * 60_000,
       });
     } catch (err) {
       // Codex being uninvokable is a failed consult, not a crashed CLI —

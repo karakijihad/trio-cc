@@ -13,7 +13,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawnSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const CLI = fileURLToPath(new URL("../bin/trio.mjs", import.meta.url));
@@ -24,6 +24,56 @@ const trio = (root, args) =>
     env: { ...process.env, CLAUDE_PROJECT_DIR: root },
     encoding: "utf8",
   });
+
+// The tree-killer is asynchronous on win32 (it shells out to taskkill), so
+// the process is gone shortly after cancel returns, not the instant it does.
+const waitForExit = async (pid, ms = 5000) => {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return false;
+};
+
+const claimRun = (root, pid) => {
+  mkdirSync(join(root, ".trio", "runs", "r1"), { recursive: true });
+  writeFileSync(
+    join(root, ".trio", "active"),
+    JSON.stringify({ run: "r1", pass: 1, pid }),
+  );
+};
+
+// Cancelling has to stop the worker, not just forget about it — and on win32
+// the worker owns Codex children that a bare signal would orphan.
+test("cancel stops the run process it names", async () => {
+  const root = project();
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    stdio: "ignore",
+    detached: true,
+  });
+  child.unref();
+  claimRun(root, child.pid);
+
+  const r = trio(root, ["cancel"]);
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, new RegExp(`stopped pid ${child.pid}`));
+  assert.equal(await waitForExit(child.pid), true, "process outlived cancel");
+});
+
+test("cancel does not claim to have stopped a process already gone", () => {
+  const root = project();
+  // spawnSync has waited for this one, so its pid is dead by definition.
+  claimRun(root, spawnSync(process.execPath, ["-e", ""]).pid);
+  const r = trio(root, ["cancel"]);
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /Run cancelled\./);
+  assert.doesNotMatch(r.stdout, /stopped pid/);
+});
 
 test("an unknown command exits non-zero with usage", () => {
   const r = trio(project(), ["frobnicate"]);
@@ -167,6 +217,14 @@ test("run rejects a flag that was given no value", () => {
     assert.equal(r.status, 2, args.join(" "));
     assert.match(r.stdout + r.stderr, /needs a value/);
   }
+});
+
+// `--lenses ""` parsed to an empty list, which reads as "no selection given"
+// and quietly ran every lens — the opposite of what was asked for.
+test("run rejects an empty flag value rather than running everything", () => {
+  const r = trio(project(), ["run", "--lenses", ""]);
+  assert.equal(r.status, 2);
+  assert.match(r.stdout + r.stderr, /--lenses needs a value/);
 });
 
 // A dashed value is a badly chosen value, not a missing one — it has to reach

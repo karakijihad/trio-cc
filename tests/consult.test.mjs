@@ -21,6 +21,40 @@ function fakeSpawn(stdout, code = 0) {
   };
 }
 
+// A consult is a Codex process like any other and hangs like one; this file
+// duplicates runLens's spawn-and-settle shape, so it needs the same deadline.
+function hangingSpawn(onKill = () => {}) {
+  return () => {
+    const p = new EventEmitter();
+    p.stdout = new Readable({ read() {} });
+    p.stderr = Readable.from([]);
+    p.stdin = { write() {}, end() {}, on() {} };
+    p.kill = () => {
+      onKill();
+      p.stdout.push(null);
+      setImmediate(() => p.emit("close", null));
+    };
+    return p;
+  };
+}
+
+test("askCodex stops a consult that never answers", async () => {
+  let killed = 0;
+  const r = await askCodex({
+    question: "why?",
+    target: "/repo",
+    model: "m",
+    effort: "low",
+    runDirPath: tmp(),
+    run: "c1",
+    spawnFn: hangingSpawn(() => killed++),
+    timeoutMs: 50,
+  });
+  assert.equal(killed, 1);
+  assert.equal(r.failed, true);
+  assert.match(r.error, /timed out after/);
+});
+
 const STREAM =
   [
     '{"type":"thread.started","thread_id":"th-1"}',

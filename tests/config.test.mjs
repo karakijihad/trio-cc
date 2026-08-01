@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -36,6 +36,26 @@ test("codex.timeoutMinutes must be a positive whole number", () => {
       codex: { ...DEFAULT_CONFIG.codex, timeoutMinutes: 0 },
     }).some((e) => /timeoutMinutes/.test(e)),
   );
+});
+
+// Trio ships enabled, so falling back to defaults on an unparseable file
+// would silently re-enable a project that had opted out.
+test("an unreadable config fails closed instead of restoring the on default", () => {
+  const root = tmp();
+  mkdirSync(trioDir(root), { recursive: true });
+  writeFileSync(join(trioDir(root), "config.json"), "{ this is not json");
+  const cfg = loadConfig(root);
+  assert.equal(cfg.enabled, false);
+  assert.match(configErrors(cfg).join(" "), /not valid JSON/);
+});
+
+test("the unreadable marker is never written back to disk", () => {
+  const root = tmp();
+  saveConfig(root, { ...DEFAULT_CONFIG, unreadable: true });
+  const written = JSON.parse(
+    readFileSync(join(trioDir(root), "config.json"), "utf8"),
+  );
+  assert.equal("unreadable" in written, false);
 });
 
 test("loadConfig returns defaults when no file exists", () => {

@@ -70,6 +70,10 @@ const at = (obj, dotted) =>
 // this first, so a malformed file is refused rather than executed.
 export function configErrors(cfg) {
   const errors = [];
+  if (cfg.unreadable)
+    return [
+      ".trio/config.json exists but is not valid JSON — fix or delete it (deleting restores the defaults)",
+    ];
   for (const key of POSITIVE_INTEGERS) {
     const v = at(cfg, key);
     if (!Number.isSafeInteger(v) || v < 1)
@@ -101,20 +105,29 @@ const merge = (base, over) => {
 };
 
 export function loadConfig(root) {
+  let raw;
   try {
-    return merge(
-      DEFAULT_CONFIG,
-      JSON.parse(readFileSync(configPath(root), "utf8")),
-    );
+    raw = readFileSync(configPath(root), "utf8");
   } catch {
-    return clone(DEFAULT_CONFIG);
+    return clone(DEFAULT_CONFIG); // no config yet — a fresh project
+  }
+  try {
+    return merge(DEFAULT_CONFIG, JSON.parse(raw));
+  } catch {
+    // A config that exists but cannot be parsed is not a fresh project. Now
+    // that Trio ships enabled, falling back to defaults here would silently
+    // re-enable a project that had opted out, on the strength of a corrupt
+    // file. Fail closed and let configErrors say why.
+    return { ...clone(DEFAULT_CONFIG), enabled: false, unreadable: true };
   }
 }
 
 export function saveConfig(root, cfg) {
+  // `unreadable` is a load-time signal, never a stored setting.
+  const { unreadable, ...stored } = cfg;
   const p = configPath(root);
   mkdirSync(dirname(p), { recursive: true });
-  writeFileSync(p, JSON.stringify(cfg, null, 2) + "\n");
+  writeFileSync(p, JSON.stringify(stored, null, 2) + "\n");
 }
 
 export function setConfigValue(cfg, dottedKey, raw) {

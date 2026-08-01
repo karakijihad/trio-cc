@@ -48,8 +48,14 @@ const LABEL = {
 
 export function renderDisagreementTable(findings) {
   const rows = findings.filter((f) => DISAGREEMENTS.includes(f.verdict));
-  if (!rows.length)
-    return "_No disagreements — every finding was confirmed as reported._\n";
+  if (!rows.length) {
+    // "No disagreements" and "nobody has looked" are different reports, and
+    // this line claimed the first while meaning the second.
+    const pending = findings.filter((f) => f.verdict === UNREVIEWED).length;
+    return pending
+      ? `_No disagreements recorded — ${pending} finding(s) not yet adjudicated._\n`
+      : "_No disagreements — every finding was confirmed as reported._\n";
+  }
   const lines = [
     "| Finding | Lens | Verdict | Basis |",
     "| --- | --- | --- | --- |",
