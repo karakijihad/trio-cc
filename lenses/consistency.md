@@ -9,12 +9,16 @@ the code does not honour.
 
 Do not modify anything.
 
+Report only what you can point at. If you cannot cite the file and line that
+proves a finding, leave it out — a false finding costs more than a missed one,
+because someone has to disprove it. Finding nothing is a good answer.
+
 Severity: critical (an inconsistency that produces wrong behavior now), major
 (two sources of truth that will diverge), minor (drift that misleads a
 reader), info (note).
 
 End your message with exactly one fenced ```json block and nothing after it:
 
-{"findings":[{"severity":"major","file":"path/to/file","line":12,"title":"short claim","evidence":"what you observed, with file:line","impact":"what breaks","correction":"the specific fix"}]}
+{"findings":[{"severity":"major","file":"path/to/file","line":12,"title":"short claim","evidence":"what you observed, with file:line","impact":"what breaks","correction":"the specific fix, or null if you are not sure"}]}
 
 If you found nothing, return {"findings":[]}.

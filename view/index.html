@@ -79,6 +79,22 @@
     font-size: 11.5px;
     letter-spacing: 0.02em;
   }
+  /* The run is a loop, and which time round it is on changes what the events
+     below mean — a finding in pass 3 is one that survived two fix waves. */
+  #pass {
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    border-radius: 999px;
+    color: var(--fg);
+    background: var(--inset);
+    border: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  #pass:empty {
+    display: none;
+  }
   #meta.off {
     color: var(--bad);
   }
@@ -164,6 +180,7 @@
     flex: 1 1 0;
     display: flex;
     flex-direction: column;
+    position: relative;
   }
   .lane > h2 {
     font-size: 11.5px;
@@ -206,6 +223,20 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  /* Per lane, because lanes do not move through the passes together: a lens
+     that finished pass 2 sits beside one still working through it. */
+  .lane-pass {
+    color: var(--faint);
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    padding: 0 5px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    flex: none;
+  }
+  .lane-pass:empty {
+    display: none;
+  }
   .tokens {
     margin-left: auto;
     padding-left: 8px;
@@ -220,6 +251,42 @@
     padding: 10px 12px 24px;
     scrollbar-width: thin;
     scrollbar-color: var(--line) transparent;
+    /* Scroll anchoring competes with the tail-follow below: the browser tries
+       to hold the reader's position as events arrive, which is the opposite of
+       what a live log wants. Pinning is decided here, not by the heuristic. */
+    overflow-anchor: none;
+  }
+
+  /* A lane only follows its tail while the reader is already at the tail —
+     scrolling up to read something has to mean the stream stops moving under
+     you. This is the way back, and it only exists while a lane is behind. */
+  .jump {
+    position: absolute;
+    right: 14px;
+    bottom: 12px;
+    display: none;
+    appearance: none;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--dim);
+    font: inherit;
+    font-size: 11px;
+    line-height: 1;
+    padding: 5px 9px;
+    border-radius: 999px;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  }
+  .lane.detached .jump {
+    display: block;
+  }
+  .jump:hover {
+    color: var(--fg);
+    border-color: var(--dim);
+  }
+  .jump:focus-visible {
+    outline: 2px solid var(--claude);
+    outline-offset: 1px;
   }
   .events::-webkit-scrollbar {
     width: 9px;
@@ -232,6 +299,28 @@
     margin: 0 0 9px;
     white-space: pre-wrap;
     word-break: break-word;
+  }
+  /* Where one pass ends and the next begins, inline in the stream — scrolling
+     back through a long lane, the boundary is the thing you are looking for. */
+  .pass-rule {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 14px 0 11px;
+    color: var(--faint);
+    font-size: 10.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .pass-rule::after {
+    content: "";
+    height: 1px;
+    background: var(--rule);
+    flex: 1;
+  }
+  .pass-rule:first-child {
+    margin-top: 0;
   }
   .ev.reasoning {
     color: var(--dim);
@@ -326,6 +415,7 @@
 <header>
   <h1>Trio</h1>
   <span id="meta">connecting…</span>
+  <span id="pass"></span>
   <span class="spacer"></span>
   <button id="theme" type="button" aria-live="polite">◐ theme</button>
 </header>
@@ -359,7 +449,25 @@
   const el = document.getElementById("lanes");
   const hood = document.getElementById("hood");
   const meta = document.getElementById("meta");
+  const passEl = document.getElementById("pass");
   let count = 0;
+  let topPass = 0;
+
+  // Every event carries the pass it belongs to. Pass 0 is the window where a
+  // start has claimed the lock but not yet numbered its first pass, and the
+  // hook stamps its events with it — real, but not a pass to label.
+  const passOf = (ev) =>
+    Number.isFinite(ev.pass) && ev.pass > 0 ? ev.pass : null;
+
+  // Highest seen, not most recent. Between passes the marker still names the
+  // pass just finished, so Claude's fix-wave events arrive stamped with the
+  // older number — and the header must not count backwards when they do.
+  function notePass(ev) {
+    const p = passOf(ev);
+    if (p === null || p <= topPass) return;
+    topPass = p;
+    passEl.textContent = "pass " + p;
+  }
 
   // Run-level events (pass boundaries, verdict) go to the strip under the
   // header rather than claiming a column, so the columns stay with the agents
@@ -371,13 +479,17 @@
     const label = document.createElement("span");
     label.textContent = String(ev.kind).replace(/_/g, " ");
     const value = document.createElement("b");
+    // The pass number lives on the envelope, not in the payload — pass_started
+    // carries only its lens list, so reading the payload alone printed a bare
+    // "pass started" chip with nothing to say which pass had started.
+    const p1 = passOf(ev);
     value.textContent =
       p.verdict ??
       p.error ??
       (p.findings !== undefined
         ? `${p.findings} findings`
-        : p.pass !== undefined
-          ? `pass ${p.pass}`
+        : p1 !== null
+          ? `pass ${p1}`
           : "");
     if (p.verdict === "clean") chip.className = "chip good";
     if (p.error || p.verdict === "failed" || p.verdict === "ceiling_reached")
@@ -386,6 +498,10 @@
     if (String(value.textContent)) chip.append(value);
     hood.append(chip);
   }
+
+  // Within a line or so of the tail counts as "at the tail" — an exact
+  // comparison loses to sub-pixel scroll heights and stops following.
+  const nearBottom = (n) => n.scrollHeight - n.scrollTop - n.clientHeight < 40;
 
   function laneFor(name, actor) {
     if (lanes.has(name)) return lanes.get(name);
@@ -405,22 +521,57 @@
     const rl = document.createElement("span");
     rl.className = "role";
     rl.textContent = role ? who : "";
+    const pb = document.createElement("span");
+    pb.className = "lane-pass";
     const tk = document.createElement("span");
     tk.className = "tokens";
-    h.append(dot, nm, rl, tk);
+    h.append(dot, nm, rl, pb, tk);
 
     const body = document.createElement("div");
     body.className = "events";
-    wrap.append(h, body);
+
+    const jump = document.createElement("button");
+    jump.type = "button";
+    jump.className = "jump";
+    jump.textContent = "↓ latest";
+    jump.addEventListener("click", () => {
+      body.scrollTop = body.scrollHeight;
+    });
+
+    // The reader's own scrolling is the only thing that detaches a lane, and
+    // scrolling back to the tail is what re-attaches it. Pinning below assigns
+    // scrollTop, which fires this too, so the two agree by construction.
+    body.addEventListener("scroll", () => {
+      wrap.classList.toggle("detached", !nearBottom(body));
+    });
+
+    wrap.append(h, body, jump);
     el.append(wrap);
 
-    const lane = { body, tokens: tk };
+    const lane = { body, tokens: tk, wrap, badge: pb, pass: null };
     lanes.set(name, lane);
     return lane;
   }
 
+  // A rule in the stream wherever the pass changes, and the lane's own badge
+  // moved to match. Called for every event a lane renders, including the
+  // first, so a lane that only starts producing in pass 2 still says so.
+  function markPass(lane, ev) {
+    const p = passOf(ev);
+    if (p === null || p === lane.pass) return;
+    lane.pass = p;
+    lane.badge.textContent = "p" + p;
+    const rule = document.createElement("div");
+    rule.className = "pass-rule";
+    rule.textContent = "pass " + p;
+    lane.body.append(rule);
+  }
+
   function render(ev) {
     const p = ev.payload || {};
+    // Before the trio-lane branch below returns: pass_started is a trio event,
+    // and it is the one that announces a new pass has begun.
+    notePass(ev);
     if ((ev.lane || "") === "trio" || ev.actor === "trio") {
       toHood(ev);
       meta.textContent = `${++count} events · ${lanes.size} lanes`;
@@ -428,9 +579,19 @@
     }
     const lane = laneFor(ev.lane || "unknown", ev.actor);
 
+    // Measured here, before anything is appended, because both the pass rule
+    // and the event itself are content: measuring after either would read
+    // every lane as behind and stop the tail-follow.
+    const follow = nearBottom(lane.body);
+    // Before the usage return below, not after it. A lens whose first event in
+    // a new pass is its token count would otherwise never get that pass's rule
+    // or badge — the lane would sit showing the pass before it.
+    markPass(lane, ev);
+
     // Token usage belongs in the lane header, not the event stream.
     if (ev.kind === "usage") {
       lane.tokens.textContent = `${p.input_tokens || 0} in / ${p.output_tokens || 0} out`;
+      if (follow) lane.body.scrollTop = lane.body.scrollHeight;
       meta.textContent = `${++count} events · ${lanes.size} lanes`;
       return;
     }
@@ -496,11 +657,12 @@
       node.append(k);
     }
 
-    const atBottom =
-      lane.body.scrollHeight - lane.body.scrollTop - lane.body.clientHeight <
-      40;
+    // Measured before the append, not after: once the node is in the document
+    // the lane is already taller than the viewport and every lane would read
+    // as behind.
     lane.body.append(node);
-    if (atBottom) lane.body.scrollTop = lane.body.scrollHeight;
+    if (follow) lane.body.scrollTop = lane.body.scrollHeight;
+    else lane.wrap.classList.add("detached");
     meta.textContent = `${++count} events · ${lanes.size} lanes`;
   }
 

@@ -169,3 +169,46 @@ test("empty prior findings and changes produce fallback statements", () => {
   assert.match(out, /no findings/i);
   assert.match(out, /no file changes/i);
 });
+
+test("scope is absent from the prompt when no scope was given", () => {
+  const out = buildLensPrompt({ brief: "BRIEF", pass: 1, prior: null });
+  assert.equal(out, "BRIEF");
+});
+
+test("scope reaches pass 1, which has no prior turn to carry it", () => {
+  const out = buildLensPrompt({
+    brief: "BRIEF",
+    pass: 1,
+    prior: null,
+    scope: "src/driver.mjs",
+  });
+  assert.match(out, /^BRIEF/);
+  assert.match(out, /## Scope/);
+  assert.match(out, /Concentrate on: src\/driver\.mjs/);
+});
+
+// A lens that narrowed on pass 1 and widened on pass 2 would report the whole
+// repository as newly found, and the convergence check would never settle.
+test("scope rides every later pass too", () => {
+  const out = buildLensPrompt({
+    brief: "BRIEF",
+    pass: 2,
+    scope: "src/driver.mjs",
+    prior: { findings: [], changes: [], response: null },
+  });
+  assert.match(out, /## Scope/);
+  assert.match(out, /## Your findings from pass 1/);
+  // Scope belongs to the brief, before the conversation history it frames.
+  assert.ok(out.indexOf("## Scope") < out.indexOf("## Your findings"));
+});
+
+// The findings block has no field for "resolved" — omission is the channel.
+test("the pass-2 instruction asks for omission, not a resolved field", () => {
+  const out = buildLensPrompt({
+    brief: "BRIEF",
+    pass: 2,
+    prior: { findings: [], changes: [], response: null },
+  });
+  assert.match(out, /Omit a finding the changes resolved/);
+  assert.doesNotMatch(out, /which are resolved/);
+});

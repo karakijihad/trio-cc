@@ -27,6 +27,25 @@ test("includes a meta refresh so the file updates itself", () => {
   assert.match(html, /http-equiv=["']refresh["']/i);
 });
 
+// The meta refresh above puts every scroll box back at the top, so the tail
+// has to be re-pinned on each load or the view shows only the oldest events.
+test("each lane column is its own scroll box, pinned to the newest event", () => {
+  const dir = tmp();
+  seed(dir, "codex:auditor", "agent_message", { text: "alpha" });
+  const html = renderStatic(dir);
+  assert.match(html, /section\{[^}]*overflow-y:\s*auto/);
+  assert.match(html, /data-lane="codex:auditor"/);
+  assert.match(html, /scrollTop\s*=[\s\S]*scrollHeight/);
+});
+
+test("the scroll offset is keyed by lane, not by column position", () => {
+  const dir = tmp();
+  seed(dir, "codex:auditor", "agent_message", { text: "alpha" });
+  seed(dir, "claude:main", "agent_message", { text: "beta" });
+  const html = renderStatic(dir);
+  assert.match(html, /"trio-scroll-"\s*\+\s*\(?s\.dataset\.lane/);
+});
+
 test("groups events into one section per lane", () => {
   const dir = tmp();
   seed(dir, "codex:auditor", "agent_message", { text: "alpha" });
@@ -107,4 +126,36 @@ test("non-claude file_change still renders the diff body", () => {
   const html = renderStatic(dir);
   assert.match(html, /src\/b\.js/);
   assert.match(html, /new line/);
+});
+
+// Which time round the loop an event belongs to changes what it means: a
+// finding in pass 3 is one that survived two fix waves.
+test("marks where each pass begins, once per lane", () => {
+  const dir = tmp();
+  const at = (lane, pass, text) =>
+    appendEvent(
+      dir,
+      makeEvent({ run: "r", pass, lane, actor: "codex", kind: "agent_message", payload: { text } }),
+    );
+  at("codex:auditor", 1, "first look");
+  at("codex:auditor", 1, "still looking");
+  at("codex:auditor", 2, "second look");
+  const html = renderStatic(dir);
+  assert.equal(html.match(/class="pass">pass 1</g).length, 1);
+  assert.equal(html.match(/class="pass">pass 2</g).length, 1);
+  assert.ok(html.indexOf("pass 1") < html.indexOf("first look"));
+  assert.ok(html.indexOf("second look") > html.indexOf("pass 2"));
+});
+
+// The hook stamps events with pass 0 while a start holds the lock but has not
+// numbered its first pass. Real, but not a pass to label.
+test("pass 0 gets no rule", () => {
+  const dir = tmp();
+  appendEvent(
+    dir,
+    makeEvent({ run: "r", pass: 0, lane: "claude:main", actor: "claude", kind: "agent_message", payload: { text: "early" } }),
+  );
+  const html = renderStatic(dir);
+  assert.doesNotMatch(html, /class="pass">pass 0</);
+  assert.match(html, /early/);
 });

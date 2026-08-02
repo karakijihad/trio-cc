@@ -36,7 +36,16 @@ export const DEFAULT_CONFIG = Object.freeze({
     ],
   },
   view: { mode: "window", port: 4319, autoOpen: true },
-  converge: { blockOn: ["critical", "major"], requireNoNewFindings: true },
+  // offerExtension: hitting the ceiling with blocking findings still open is
+  // ambiguous — a pass that closed twelve and opened eight was still
+  // converging, one that closed nothing was thrashing. A finished run carries
+  // both counts and Claude asks once whether to spend another pass; setting
+  // this false stops the offer without changing the ceiling.
+  converge: {
+    blockOn: ["critical", "major"],
+    requireNoNewFindings: true,
+    offerExtension: true,
+  },
   // offerToCreate: promotion needs artifacts.promoteTo to exist, and Trio does
   // not create directory trees in a project uninvited. When it is missing, a
   // finished run says so and Claude offers to create it once; answering no

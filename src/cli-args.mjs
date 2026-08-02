@@ -4,11 +4,14 @@
 
 export const USAGE = `trio — Codex as a read-only second reviewer.
 
-  trio [status]                     the control panel (default)
+  trio [status] [--json]            the control panel (default); --json
+                                    reports the lock without probing Codex
   trio on | off                     enable or disable Trio for this project
   trio doctor                       re-probe Codex and report health
-  trio run [--max N] [--target PATH] [--lenses a,b|all]
-  trio continue                     run the next pass of the active run
+  trio run [--max N] [--target PATH] [--lenses a,b|all] [--scope TEXT]
+                 [--claude-findings PATH]   Claude's own audit of the same scope
+  trio continue [--claude-findings PATH]  run the next pass of the active run
+  trio extend [runId]               one more pass on a ceiling-reached run
   trio cancel                       cancel the active run
   trio consult <question>           ask Codex one question
   trio config get | set <key> <value>
@@ -18,10 +21,28 @@ export const USAGE = `trio — Codex as a read-only second reviewer.
   trio serve [runId] [--auto-exit]  start the viewer
   trio render [runId]               write a static HTML report
 
+Exit codes: 0 did what was asked (a run that found defects still exits 0 —
+the verdict is in the JSON, not the code), 1 refused or nothing to do, 2 you
+called it wrong, 3 another run holds this project's lock (retry later).
+
 A run spends the operator's own OpenAI credit, so an unrecognised flag is
 refused rather than ignored.`;
 
-export const RUN_FLAGS = new Set(["--max", "--target", "--lenses"]);
+export const RUN_FLAGS = new Set([
+  "--max",
+  "--target",
+  "--lenses",
+  "--scope",
+  "--claude-findings",
+]);
+
+// `continue` and `extend` take neither the target, the scope, nor the lens
+// selection: all three are snapshotted into run.json at pass 1 and inherited.
+// Accepting them anyway would let `trio continue --lenses security` look like
+// it narrowed the run while the old set kept running — the silent no-op the
+// unknown-flag guard exists to prevent.
+export const CONTINUE_FLAGS = new Set(["--claude-findings"]);
+export const EXTEND_FLAGS = new Set(["--claude-findings"]);
 
 export const LENS_USAGE =
   "usage: trio lens <name> [on|off] [model <slug>] [effort <level>]";

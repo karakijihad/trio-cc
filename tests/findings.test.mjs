@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   findingId,
   extractFindings,
+  validateFindings,
   diffPasses,
   isConverged,
   mergeFindings,
@@ -277,4 +278,28 @@ test("findingId ignores path separator style", () => {
 
 test("findingId ignores a leading ./", () => {
   assert.equal(findingId("a.rs", "t"), findingId("./a.rs", "t"));
+});
+
+// mergeFindings resolves provenance as `f.lens ?? r.lens`, so a finding that
+// arrives carrying its own lens outranks the lane that produced it. This
+// validator is the boundary where findings authored outside Trio come in.
+test("validateFindings strips a lens the payload tried to declare", () => {
+  const r = validateFindings({
+    findings: [
+      { severity: "major", file: "a.js", title: "t", lens: "auditor, security" },
+    ],
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.findings[0].lens, undefined);
+});
+
+// The rejected value is quoted back to whoever ran the command, and the file
+// it came from was not necessarily written by them.
+test("validateFindings neutralises control characters and bounds the echo", () => {
+  const r = validateFindings({
+    findings: [{ severity: "\u001b[2J" + "x".repeat(300), file: "a", title: "t" }],
+  });
+  assert.equal(r.ok, false);
+  assert.doesNotMatch(r.reason, /\u001b/);
+  assert.ok(r.reason.length < 140, `reason was ${r.reason.length} chars`);
 });

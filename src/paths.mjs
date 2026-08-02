@@ -67,12 +67,36 @@ export function killTreeCommand(pid) {
 //
 // Deliberately three-valued and fail-open on "cannot tell": returning false
 // on a lookup that simply was not available would break cancelling a real
-// run, which is worse than the narrow case this closes. Only a positive
+// run, and a run whose signal is withheld keeps its lenses spending until it
+// notices the cancel token — up to a lens deadline. Only a positive
 // identification of something that is *not* ours stops the signal.
+//
+// That policy is only ever as good as the identification behind it, and on
+// win32 the identification was `tasklist`, which reports the image name and
+// nothing more. Every node.exe on the machine answered to "is this Trio", so
+// a forged marker naming any live node pid got that pid's whole tree killed
+// by `trio cancel` — fail-open was never reached, because the weak check
+// returned a confident, wrong `true`. The command line is what actually
+// separates one node process from another, and CIM is how win32 gives it up.
+//
+// A lookup that fails still reads as "cannot tell" rather than falling back
+// to the image name: that fallback is the hole, not a safety net.
 export function processIsTrio(pid, run) {
+  // This is interpolated into a CIM filter string below, so it has to be a
+  // number before it goes anywhere near one. A pid that is not one identifies
+  // nothing, and nothing is what should be killed on its say-so.
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
   const cmd =
     process.platform === "win32"
-      ? { file: "tasklist", args: ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"] }
+      ? {
+          file: "powershell",
+          args: [
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`,
+          ],
+        }
       : { file: "ps", args: ["-o", "args=", "-p", String(pid)] };
   let out;
   try {
@@ -82,12 +106,12 @@ export function processIsTrio(pid, run) {
   } catch {
     return null;
   }
+  // CIM prints nothing for a pid it cannot find — a process that exited
+  // between the marker being read and this lookup reads as "cannot tell".
   if (!out || /^INFO:/i.test(out)) return null;
-  // tasklist gives the image name only, so on win32 "a node process" is as
-  // much as can be established without a heavier query.
-  return process.platform === "win32"
-    ? /^"node\.exe"/i.test(out)
-    : /trio(\.mjs)?\b/.test(out);
+  // One test on both platforms now, because both are finally looking at the
+  // same thing: the command line the process was started with.
+  return /trio(\.mjs)?\b/.test(out);
 }
 
 // The OS default-browser launcher for a URL. cmd.exe here follows the D2a

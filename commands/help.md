@@ -95,7 +95,7 @@ name the closest match.
 | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `/trio`                                                                | Control panel: install/auth state, Codex version, drift, loop settings, every lens, view mode, artifact paths.        |
 | `/trio:on` / `/trio:off`                                               | Enable/disable Trio for this project. `off` stays loaded but dormant — Claude names what it would have sent to Codex. |
-| `/trio:loop [--max N] [--target PATH] [--lenses a,b\|all]`             | Run the audit loop. Omit `--lenses` for all five.                                                                     |
+| `/trio:loop [--max N] [--target PATH] [--lenses a,b\|all] [--scope TEXT]` | Run the audit loop. Omit `--lenses` for all five; `--scope` names what the lenses concentrate on.                    |
 | `/trio:consult <question>`                                             | Ask Claude and Codex the same question independently; compare, disagreements named.                                   |
 | `/trio:cancel`                                                         | Stop the active run: cancellation token, run process stopped, `cancelled` recorded.                                   |
 | `/trio:lenses [preset\|list]`                                          | Interactive picker for which lenses run — preset or custom, this run or saved.                                        |

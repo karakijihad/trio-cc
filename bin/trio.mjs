@@ -29,6 +29,9 @@ import {
   continueRun,
   cancelToken,
   promoteRun,
+  releaseOwnClaim,
+  reopenRun,
+  readClaudeFindings,
 } from "../src/driver.mjs";
 import { finalizeRun, newRunId } from "../src/orchestrator.mjs";
 import { runLens, killTree, stopAllLenses } from "../src/codex-lane.mjs";
@@ -42,9 +45,12 @@ import {
   isRunId,
   processIsTrio,
 } from "../src/paths.mjs";
+import { readMarker, removeMarker } from "../src/marker.mjs";
 import {
   USAGE,
   RUN_FLAGS,
+  CONTINUE_FLAGS,
+  EXTEND_FLAGS,
   asksForHelp,
   unknownFlags,
   valuelessFlags,
@@ -188,6 +194,11 @@ const latestFinishedRun = (root) => {
 const stopLensesOnSignal = () => {
   const stop = () => {
     stopAllLenses();
+    try {
+      releaseOwnClaim({ root });
+    } catch {
+      /* best effort — a signal must still stop the process */
+    }
     process.exit(1);
   };
   process.on("SIGTERM", stop);
@@ -206,6 +217,31 @@ switch (cmd) {
   case undefined:
   case "status":
   case "panel": {
+    // --json is the lock check a second session polls before it starts, so it
+    // reads the marker and the config and stops there. gatherState probes the
+    // real Codex CLI when its cache has aged out, and a poll loop must not
+    // spawn a process every time it asks whether the repo is busy.
+    if (rest.includes("--json")) {
+      const held = readMarker(root);
+      const runId = held && isRunId(held.run) ? held.run : null;
+      out(
+        JSON.stringify(
+          {
+            enabled: loadConfig(root).enabled,
+            // The file's existence is the lock, not whether it parses. A claim
+            // with no run yet is a start mid-flight, and a corrupt marker still
+            // fails the `wx` create that every start begins with — reporting
+            // either as free sends a polling caller into a refusal.
+            busy: existsSync(activeMarker(root)),
+            activeRun: runId,
+            pass: held?.pass ?? null,
+          },
+          null,
+          2,
+        ),
+      );
+      break;
+    }
     const s = gatherState();
     out(renderPanel(s));
     break;
@@ -585,6 +621,15 @@ switch (cmd) {
     const target = rest.includes("--target")
       ? rest[rest.indexOf("--target") + 1]
       : root;
+    // Reaches Codex inside the brief, which is written to the child's stdin —
+    // never a command line — so this needs no shell quoting. It is trimmed
+    // because an all-whitespace scope would print an empty "concentrate on".
+    const scope = rest.includes("--scope")
+      ? rest[rest.indexOf("--scope") + 1].trim() || null
+      : null;
+    const claudeFindingsPath = rest.includes("--claude-findings")
+      ? rest[rest.indexOf("--claude-findings") + 1]
+      : null;
     const lenses =
       lensNames?.length === 1 && lensNames[0] === "all"
         ? "all"
@@ -603,17 +648,105 @@ switch (cmd) {
       runLensFn: runLens,
       beforeFirstPass,
       lenses,
+      scope,
+      claudeFindingsPath,
     });
+    if (r.status === "invalid_findings") {
+      out(`--claude-findings: ${r.error}`);
+      process.exitCode = 2;
+      break;
+    }
     if (r.status === "invalid_lenses" || r.status === "no_lenses") {
       out(r.error);
       process.exitCode = 2;
       break;
     }
+    // Exit 3, not 1: "the lock is held, try later" is the one refusal where
+    // waiting is the right response, and every other exit-1 refusal (Trio
+    // off, not logged in, drift) is one where waiting never helps. A caller
+    // that polls has to be able to tell them apart without parsing prose.
     if (r.status === "run_in_progress") {
       out(
-        `A run is already in progress: ${r.runId}${r.pass ? ` (pass ${r.pass})` : ""}.\n  /trio:cancel to end it, then start again.`,
+        `A run is already in progress: ${r.runId}${r.pass ? ` (pass ${r.pass})` : ""}.\n  Wait for it to finish, or /trio:cancel to end it.`,
       );
+      process.exitCode = 3;
+      break;
+    }
+    out(JSON.stringify(r, null, 2));
+    break;
+  }
+
+  // The "yes" half of the offer a ceiling-reached run makes: one more pass on
+  // the same run, rather than a fresh run that would re-find everything from
+  // scratch and compare against nothing.
+  case "extend": {
+    const strays = unknownFlags(rest, EXTEND_FLAGS);
+    if (strays.length) {
+      out(`unknown flag${strays.length > 1 ? "s" : ""}: ${strays.join(", ")}`);
+      process.exitCode = 2;
+      break;
+    }
+    // `--claude-findings` with nothing after it reads as "no lane given",
+    // which is the one answer that quietly halves the audit.
+    const bareExtend = valuelessFlags(rest, EXTEND_FLAGS);
+    if (bareExtend.length) {
+      out(`${bareExtend.join(", ")} needs a value`);
+      process.exitCode = 2;
+      break;
+    }
+    // Every flag extend knows takes a value, so a bare scan for the first
+    // non-flag token picks up `--claude-findings`'s path and calls it a run
+    // id. Step over a known flag's value the way unknownFlags does.
+    const positional = [];
+    for (let i = 0; i < rest.length; i++) {
+      if (EXTEND_FLAGS.has(rest[i])) i++;
+      else if (!rest[i].startsWith("-")) positional.push(rest[i]);
+    }
+    const runId = positional[0] ?? latestFinishedRun(root);
+    if (!runId) {
+      out("No finished run to extend.");
       process.exitCode = 1;
+      break;
+    }
+    // Before reopenRun, not after. reopenRun deletes the verdict, raises the
+    // ceiling and claims the lock; a handover file rejected afterwards would
+    // leave the run torn open with the claim held and nothing to release it.
+    // Validate the cheap thing first and mutate nothing until it passes.
+    const extendFindings = rest.includes("--claude-findings")
+      ? rest[rest.indexOf("--claude-findings") + 1]
+      : null;
+    const checked = readClaudeFindings(extendFindings);
+    if (!checked.ok) {
+      out(`--claude-findings: ${checked.error}`);
+      process.exitCode = 2;
+      break;
+    }
+
+    const opened = reopenRun({
+      root,
+      runId,
+      hasClaudeFindings: Boolean(checked.findings),
+    });
+    if (!opened.ok) {
+      out(opened.error);
+      process.exitCode = opened.inProgress ? 3 : 1;
+      break;
+    }
+    process.stderr.write(
+      `Extended ${opened.runId} to ${opened.maxIterations} passes.\n`,
+    );
+    stopLensesOnSignal();
+    // The extra pass is a pass like any other, so it gets both lanes. Without
+    // this the pass the operator paid extra for would quietly be Codex-only,
+    // and continueRun would refuse it outright once the run has a Claude lane.
+    const r = await continueRun({
+      root,
+      runLensFn: runLens,
+      claudeFindingsPath: extendFindings,
+    });
+    if (r.status === "invalid_findings" || r.status === "claude_lane_missing") {
+      out(r.error);
+      process.exitCode = 2;
       break;
     }
     out(JSON.stringify(r, null, 2));
@@ -621,8 +754,41 @@ switch (cmd) {
   }
 
   case "continue": {
+    const strays = unknownFlags(rest, CONTINUE_FLAGS);
+    if (strays.length) {
+      out(`unknown flag${strays.length > 1 ? "s" : ""}: ${strays.join(", ")}`);
+      process.exitCode = 2;
+      break;
+    }
+    const bareContinue = valuelessFlags(rest, CONTINUE_FLAGS);
+    if (bareContinue.length) {
+      out(`${bareContinue.join(", ")} needs a value`);
+      process.exitCode = 2;
+      break;
+    }
     stopLensesOnSignal();
-    const r = await continueRun({ root, runLensFn: runLens });
+    const r = await continueRun({
+      root,
+      runLensFn: runLens,
+      claudeFindingsPath: rest.includes("--claude-findings")
+        ? rest[rest.indexOf("--claude-findings") + 1]
+        : null,
+    });
+    if (r.status === "invalid_findings") {
+      out(`--claude-findings: ${r.error}`);
+      process.exitCode = 2;
+      break;
+    }
+    if (r.status === "claude_lane_missing") {
+      out(r.error);
+      process.exitCode = 2;
+      break;
+    }
+    if (r.status === "invalid_marker") {
+      out(r.error);
+      process.exitCode = 1;
+      break;
+    }
     out(JSON.stringify(r, null, 2));
     if (r.status === "no_active_run") process.exitCode = 1;
     break;

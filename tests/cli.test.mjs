@@ -61,8 +61,10 @@ const claimRun = (root, pid, runId = RUN_ID) => {
 // tears it down on SIGTERM, exactly as bin/trio.mjs now does via
 // stopAllLenses. A worker with no children proves nothing here — the old
 // single-PID implementation would pass that too.
+// ESM, because it is written out as trio.mjs — see the spawn below for why
+// the name matters.
 const WORKER = `
-const { spawn } = require("node:child_process");
+import { spawn } from "node:child_process";
 const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
   stdio: "ignore",
 });
@@ -103,7 +105,12 @@ const firstLine = (stream, ms = 5000) =>
 // platform-independent; this test covers the wiring end to end.
 test("cancel stops the worker's children, not just the worker", async () => {
   const root = project();
-  const worker = spawn(process.execPath, ["-e", WORKER], {
+  // Spawned from a file named trio.mjs, not `node -e`: cancel identifies its
+  // target by command line, and a stand-in that no honest identification
+  // would accept is not standing in for anything.
+  const workerPath = join(mkdtempSync(join(tmpdir(), "trio-worker-")), "trio.mjs");
+  writeFileSync(workerPath, WORKER);
+  const worker = spawn(process.execPath, [workerPath], {
     stdio: ["ignore", "pipe", "ignore"],
   });
   let childPid = null;
@@ -181,6 +188,52 @@ test("cancel will not signal a pid whose run directory is absent", () => {
   const r = trio(root, ["cancel"]);
   assert.equal(r.status, 0);
   assert.doesNotMatch(r.stdout, /stopped pid/);
+});
+
+// The whole exploit, end to end. `.trio/active` is an ordinary file in the
+// project, so a hostile repo can pre-seed one naming a live pid, and a
+// matching run.json is just as easy to plant. On win32 the identification
+// used to be `tasklist`, which reports the image name alone — so every
+// node.exe on the machine passed, and cancel killed its whole tree.
+test("cancel will not kill an unrelated node process a forged marker names", async () => {
+  const root = project();
+  const bystander = spawn(
+    process.execPath,
+    ["-e", "setInterval(() => {}, 1000)"],
+    { stdio: "ignore" },
+  );
+  try {
+    const runId = "2026-08-01T09-15-00";
+    // Everything the attacker controls, planted: a valid-format run id, the
+    // run directory that gates the signal, and the victim's pid.
+    mkdirSync(join(root, ".trio", "runs", runId), { recursive: true });
+    writeFileSync(
+      join(root, ".trio", "runs", runId, "run.json"),
+      JSON.stringify({ runId, target: root }),
+    );
+    mkdirSync(join(root, ".trio"), { recursive: true });
+    writeFileSync(
+      join(root, ".trio", "active"),
+      JSON.stringify({ run: runId, pass: 1, pid: bystander.pid }),
+    );
+
+    const r = trio(root, ["cancel"]);
+    assert.equal(r.status, 0);
+    assert.doesNotMatch(r.stdout, /stopped pid/);
+    // Cancellation still happens — it is the signal that is withheld, not the
+    // record — but the bystander is untouched.
+    assert.equal(
+      await waitForExit(bystander.pid, 1500),
+      false,
+      "cancel killed a process that was never Trio's",
+    );
+  } finally {
+    try {
+      bystander.kill();
+    } catch {
+      /* already gone */
+    }
+  }
 });
 
 // The old parser stepped in twos from index 0, so the "on" token shifted

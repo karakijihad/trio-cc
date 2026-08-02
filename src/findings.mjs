@@ -17,6 +17,59 @@ export function findingId(file, title) {
     .slice(0, 8);
 }
 
+// The findings contract itself, independent of how the JSON arrived. Codex
+// wraps it in a fenced block at the end of a message; Claude hands over a
+// file. One shape, one validator — a second copy would drift, and the two
+// lanes' findings have to be mergeable to be comparable at all.
+// A rejected value gets quoted back to the operator, and the file it came
+// from may have been written by something other than the operator. Control
+// characters are what turn an error message into a terminal escape sequence,
+// and an unbounded one turns it into a screenful — neither belongs in a line
+// whose only job is to name the field that was wrong.
+const quoteForTerminal = (v) => {
+  const s = typeof v === "string" ? v : JSON.stringify(v) ?? String(v);
+  const flat = [...s]
+    .map((ch) => {
+      const c = ch.codePointAt(0);
+      return c < 0x20 || (c >= 0x7f && c <= 0x9f) ? "?" : ch;
+    })
+    .join("");
+  return flat.length > 60 ? `${flat.slice(0, 60)}…` : flat;
+};
+
+export function validateFindings(parsed) {
+  if (!Array.isArray(parsed?.findings))
+    return { ok: false, reason: "no findings array" };
+
+  for (const item of parsed.findings) {
+    if (!item || typeof item !== "object") {
+      return { ok: false, reason: "every finding must be an object" };
+    }
+    if (!SEVERITIES.includes(item.severity)) {
+      return {
+        ok: false,
+        reason: `unknown severity "${quoteForTerminal(item.severity)}". valid: ${SEVERITIES.join(", ")}`,
+      };
+    }
+    if (!item.file || !item.title)
+      return { ok: false, reason: "every finding needs a file and a title" };
+  }
+  return {
+    ok: true,
+    // `lens` is stripped, never trusted. mergeFindings resolves provenance as
+    // `f.lens ?? r.lens`, so a finding that arrives carrying its own lens wins
+    // over the lane that actually produced it — and this validator is the
+    // boundary where findings authored outside Trio come in. A handover file
+    // claiming `"lens": "auditor, security"` would otherwise read as
+    // corroborated by two Codex lenses that never saw it, which is the one
+    // claim in the whole report that has to be earned.
+    findings: parsed.findings.map(({ lens: _ignored, ...x }) => ({
+      ...x,
+      id: findingId(x.file, x.title),
+    })),
+  };
+}
+
 export function extractFindings(text) {
   const blocks = [...String(text ?? "").matchAll(/```json\s*([\s\S]*?)```/g)];
   if (!blocks.length)
@@ -31,29 +84,10 @@ export function extractFindings(text) {
       reason: `could not parse the json block: ${e.message}`,
     };
   }
-  if (!Array.isArray(parsed?.findings))
-    return { ok: false, reason: "json block has no findings array" };
-
-  for (const item of parsed.findings) {
-    if (!item || typeof item !== "object") {
-      return { ok: false, reason: "every finding must be an object" };
-    }
-    if (!SEVERITIES.includes(item.severity)) {
-      return {
-        ok: false,
-        reason: `unknown severity "${item.severity}". valid: ${SEVERITIES.join(", ")}`,
-      };
-    }
-    if (!item.file || !item.title)
-      return { ok: false, reason: "every finding needs a file and a title" };
-  }
-  return {
-    ok: true,
-    findings: parsed.findings.map((x) => ({
-      ...x,
-      id: findingId(x.file, x.title),
-    })),
-  };
+  const checked = validateFindings(parsed);
+  return checked.ok
+    ? checked
+    : { ok: false, reason: `json block has ${checked.reason}` };
 }
 
 // Where a finding points, independent of how it is worded. A finding with no

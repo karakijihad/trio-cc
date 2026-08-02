@@ -25,6 +25,41 @@ const bySeverity = (findings) =>
     findings.filter((f) => f.severity === sev),
   ]).filter(([, list]) => list.length);
 
+// What each lane saw that the other did not. `lens` carries every lane that
+// raised a finding, joined — so "claude" alone means Codex's five lenses all
+// missed it, and that column is the reason the second lane exists at all.
+// Corroboration is the cheap half; the disagreement is the interesting half.
+export function renderLaneSplit(record) {
+  const lanes = (f) => String(f.lens ?? "").split(", ").filter(Boolean);
+  // Partitioned on whether "claude" is among the lanes, not on how many lanes
+  // there are. Counting them dropped every finding two Codex lenses agreed on:
+  // too many lanes to be "codex only", no claude to be "both", so it fell out
+  // of all three columns — the corroborated findings, silently missing from
+  // the section about corroboration.
+  const hasClaude = (f) => lanes(f).includes("claude");
+  const both = record.findings.filter((f) => hasClaude(f) && lanes(f).length > 1);
+  const only = (who) =>
+    record.findings.filter((f) =>
+      who === "claude"
+        ? hasClaude(f) && lanes(f).length === 1
+        : !hasClaude(f) && lanes(f).length > 0,
+    );
+  const line = (f) =>
+    `- [${f.severity}] \`${f.file}${f.line ? `:${f.line}` : ""}\` — ${f.title}`;
+  const block = (title, list, empty) =>
+    `**${title}** (${list.length})\n\n${list.length ? list.map(line).join("\n") : `_${empty}_`}`;
+
+  return [
+    `Claude audited the same scope independently, writing its findings before reading Codex's.`,
+    "",
+    block("Both lanes", both, "Nothing was found by both — the lanes agreed on nothing, which is itself worth reading twice."),
+    "",
+    block("Codex only", only("codex"), "Nothing Codex found was missed by Claude."),
+    "",
+    block("Claude only", only("claude"), "Claude found nothing Codex missed."),
+  ].join("\n");
+}
+
 export function renderCodexAudit({ runId, passes, date }) {
   const last = passes.at(-1);
   const counts =
@@ -71,6 +106,7 @@ export function renderCodexAudit({ runId, passes, date }) {
       ? `Lenses that did not complete cleanly: ${last.degraded.join(", ")}. Coverage is partial.`
       : "All enabled lenses completed and returned a parseable findings block.",
     "",
+    ...(last.claude ? ["## Two Lanes", "", renderLaneSplit(last), ""] : []),
     "## Overall Assessment",
     "",
     `${last.findings.length} finding(s) across ${last.lenses.length} lens(es).`,

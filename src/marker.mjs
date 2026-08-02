@@ -39,3 +39,20 @@ export function removeMarker(root, runId) {
     return false; /* already gone */
   }
 }
+
+// Release by pid, for the claim that has no run id to compare — the window
+// between `claimActiveRun` writing {run: null} and startRun naming the run.
+// removeMarker cannot guard that case: with no runId it deletes whatever is
+// there, so a claim released after another process had already replaced it
+// would take the replacement with it. The pid is what identifies a claim
+// before it has a name.
+export function removeMarkerOwnedBy(root, pid) {
+  try {
+    const held = readMarker(root);
+    if (!held || held.pid !== pid) return false;
+    rmSync(activeMarker(root), { force: true });
+    return true;
+  } catch {
+    return false; /* already gone */
+  }
+}

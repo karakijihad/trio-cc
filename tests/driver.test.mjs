@@ -355,9 +355,9 @@ test("startRun: a throwing lens finalizes failed, not a crash", async () => {
 
 test("continueRun: a corrupt run.json finalizes failed instead of throwing", async () => {
   const root = tmp();
-  mkdirSync(runDir(root, "r1"), { recursive: true });
-  writeFileSync(join(runDir(root, "r1"), "run.json"), "{ not json");
-  writeFileSync(activeMarker(root), JSON.stringify({ run: "r1", pass: 1 }));
+  mkdirSync(runDir(root, "2026-01-01T00-00-00"), { recursive: true });
+  writeFileSync(join(runDir(root, "2026-01-01T00-00-00"), "run.json"), "{ not json");
+  writeFileSync(activeMarker(root), JSON.stringify({ run: "2026-01-01T00-00-00", pass: 1 }));
 
   const r = await continueRun({ root, runLensFn: okLens([]) });
   assert.equal(r.status, "finished");
@@ -367,17 +367,17 @@ test("continueRun: a corrupt run.json finalizes failed instead of throwing", asy
 
 test("continueRun: no completed pass on disk finalizes failed", async () => {
   const root = tmp();
-  mkdirSync(runDir(root, "r1"), { recursive: true });
+  mkdirSync(runDir(root, "2026-01-01T00-00-00"), { recursive: true });
   writeFileSync(
-    join(runDir(root, "r1"), "run.json"),
+    join(runDir(root, "2026-01-01T00-00-00"), "run.json"),
     JSON.stringify({
-      runId: "r1",
+      runId: "2026-01-01T00-00-00",
       target: "/repo",
       startedAt: new Date().toISOString(),
       config: cfg(),
     }),
   );
-  writeFileSync(activeMarker(root), JSON.stringify({ run: "r1", pass: 1 }));
+  writeFileSync(activeMarker(root), JSON.stringify({ run: "2026-01-01T00-00-00", pass: 1 }));
 
   const r = await continueRun({ root, runLensFn: okLens([]) });
   assert.equal(r.status, "finished");
@@ -439,14 +439,14 @@ test("startRun: a promote() throw does not corrupt the verdict or escape", async
 
 test("continueRun: a corrupt run.json does not prevent an existing verdict.json from winning", async () => {
   const root = tmp();
-  mkdirSync(runDir(root, "r1"), { recursive: true });
-  writeFileSync(join(runDir(root, "r1"), "run.json"), "{ not json");
-  const verdictPath = join(runDir(root, "r1"), "verdict.json");
+  mkdirSync(runDir(root, "2026-01-01T00-00-00"), { recursive: true });
+  writeFileSync(join(runDir(root, "2026-01-01T00-00-00"), "run.json"), "{ not json");
+  const verdictPath = join(runDir(root, "2026-01-01T00-00-00"), "verdict.json");
   const canceled =
-    JSON.stringify({ verdict: "cancelled", passes: 1, runId: "r1" }, null, 2) +
+    JSON.stringify({ verdict: "cancelled", passes: 1, runId: "2026-01-01T00-00-00" }, null, 2) +
     "\n";
   writeFileSync(verdictPath, canceled);
-  writeFileSync(activeMarker(root), JSON.stringify({ run: "r1", pass: 1 }));
+  writeFileSync(activeMarker(root), JSON.stringify({ run: "2026-01-01T00-00-00", pass: 1 }));
 
   const r = await continueRun({ root, runLensFn: okLens([]) });
   assert.equal(r.status, "already_finished");
@@ -606,4 +606,252 @@ test("continueRun: a corrupt reconcile.json still degrades to a safe failed resu
   assert.ok(r.error);
   assert.ok(r.finalizeError);
   assert.equal(existsSync(activeMarker(root)), false);
+});
+
+// The graceful half of lock release, exercised directly. Testing it by
+// signalling a real CLI process would prove nothing on win32, where kill is
+// TerminateProcess and no JS handler ever runs — which is exactly why
+// isAbandonedClaim exists as the other half.
+test("releaseOwnClaim: frees this process's claim and records a verdict", async () => {
+  const { releaseOwnClaim } = await import("../src/driver.mjs");
+  const root = mkdtempSync(join(tmpdir(), "trio-release-"));
+  const runId = "2026-01-01T00-00-00";
+  mkdirSync(runDir(root, runId), { recursive: true });
+  mkdirSync(trioDir(root), { recursive: true });
+  writeFileSync(
+    activeMarker(root),
+    JSON.stringify({ run: runId, pass: 1, pid: process.pid }),
+  );
+
+  assert.equal(releaseOwnClaim({ root }), true);
+  assert.equal(existsSync(activeMarker(root)), false);
+  assert.equal(
+    JSON.parse(readFileSync(join(runDir(root, runId), "verdict.json"), "utf8"))
+      .verdict,
+    "cancelled",
+  );
+});
+
+// Ownership is by pid so a signal can never free a concurrent run's lock.
+test("releaseOwnClaim: leaves another process's claim alone", async () => {
+  const { releaseOwnClaim } = await import("../src/driver.mjs");
+  const root = mkdtempSync(join(tmpdir(), "trio-release-other-"));
+  const runId = "2026-01-01T00-00-00";
+  mkdirSync(runDir(root, runId), { recursive: true });
+  mkdirSync(trioDir(root), { recursive: true });
+  writeFileSync(
+    activeMarker(root),
+    JSON.stringify({ run: runId, pass: 1, pid: process.pid + 1 }),
+  );
+
+  assert.equal(releaseOwnClaim({ root }), false);
+  assert.ok(existsSync(activeMarker(root)));
+  assert.equal(existsSync(join(runDir(root, runId), "verdict.json")), false);
+});
+
+// A claim taken before the run was named — the window claimActiveRun opens
+// with. There is no run to finalize, but the lock still has to come off.
+test("releaseOwnClaim: frees an unnamed claim without inventing a run", async () => {
+  const { releaseOwnClaim } = await import("../src/driver.mjs");
+  const root = mkdtempSync(join(tmpdir(), "trio-release-unnamed-"));
+  mkdirSync(trioDir(root), { recursive: true });
+  writeFileSync(
+    activeMarker(root),
+    JSON.stringify({ run: null, pass: 0, pid: process.pid }),
+  );
+
+  assert.equal(releaseOwnClaim({ root }), true);
+  assert.equal(existsSync(activeMarker(root)), false);
+});
+
+// A run that already finished keeps the verdict it earned — releasing a lock
+// must never overwrite the record of what the run actually decided.
+test("releaseOwnClaim: does not overwrite an existing verdict", async () => {
+  const { releaseOwnClaim } = await import("../src/driver.mjs");
+  const root = mkdtempSync(join(tmpdir(), "trio-release-done-"));
+  const runId = "2026-01-01T00-00-00";
+  mkdirSync(runDir(root, runId), { recursive: true });
+  mkdirSync(trioDir(root), { recursive: true });
+  writeFileSync(
+    join(runDir(root, runId), "verdict.json"),
+    JSON.stringify({ verdict: "clean" }),
+  );
+  writeFileSync(
+    activeMarker(root),
+    JSON.stringify({ run: runId, pass: 1, pid: process.pid }),
+  );
+
+  assert.equal(releaseOwnClaim({ root }), true);
+  assert.equal(
+    JSON.parse(readFileSync(join(runDir(root, runId), "verdict.json"), "utf8"))
+      .verdict,
+    "clean",
+  );
+});
+
+// The same contract claimActiveRun holds to. continueRun writes: it creates
+// pass directories and finalizes verdicts, so a crafted marker run id here
+// escapes .trio/runs exactly as it would there.
+test("continueRun: refuses a marker naming a run id Trio did not mint", async () => {
+  const root = mkdtempSync(join(tmpdir(), "trio-cont-bad-"));
+  mkdirSync(trioDir(root), { recursive: true });
+  writeFileSync(
+    activeMarker(root),
+    JSON.stringify({ run: "../../escaped", pass: 1, pid: process.pid }),
+  );
+
+  const r = await continueRun({
+    root,
+    runLensFn: () => {
+      throw new Error("no lens may run for an unminted run id");
+    },
+  });
+  assert.equal(r.status, "invalid_marker");
+  assert.equal(existsSync(join(root, "..", "..", "escaped")), false);
+  // The claim is left standing: clearing it is /trio:cancel's job, and
+  // deleting a marker on the strength of its own bad contents is how the
+  // reclaim path got into trouble in the first place.
+  assert.ok(existsSync(activeMarker(root)));
+});
+
+// The window between claimActiveRun writing {run: null} and startRun naming
+// the run. With no run id to compare, the pid is the only thing identifying
+// the claim — releasing on anything less takes the replacement with it.
+test("releaseOwnClaim: an unnamed claim will not delete another process's replacement", async () => {
+  const { releaseOwnClaim } = await import("../src/driver.mjs");
+  const root = mkdtempSync(join(tmpdir(), "trio-release-race-"));
+  mkdirSync(trioDir(root), { recursive: true });
+
+  // Ours was unnamed; by the time we release, somebody else holds the lock.
+  writeFileSync(
+    activeMarker(root),
+    JSON.stringify({ run: null, pass: 0, pid: process.pid + 1 }),
+  );
+  assert.equal(releaseOwnClaim({ root }), false);
+  assert.ok(existsSync(activeMarker(root)), "released a claim that was not ours");
+  assert.equal(
+    JSON.parse(readFileSync(activeMarker(root), "utf8")).pid,
+    process.pid + 1,
+  );
+});
+
+// verdict.json is an ordinary file in the project, and its pass count is
+// joined into a path that gets written to.
+test("reopenRun: refuses a pass count that is not a pass count", async () => {
+  const { reopenRun } = await import("../src/driver.mjs");
+  const root = mkdtempSync(join(tmpdir(), "trio-reopen-bad-"));
+  const runId = "2026-01-01T00-00-00";
+  mkdirSync(passDir(root, runId, 1), { recursive: true });
+  mkdirSync(trioDir(root), { recursive: true });
+  writeFileSync(
+    join(runDir(root, runId), "run.json"),
+    JSON.stringify({ runId, config: { maxIterations: 1 } }),
+  );
+  writeFileSync(
+    join(runDir(root, runId), "verdict.json"),
+    JSON.stringify({ verdict: "ceiling_reached", passes: "../../../escaped" }),
+  );
+  writeFileSync(
+    join(passDir(root, runId, 1), "reconcile.json"),
+    JSON.stringify({ pass: 1, findings: [], diff: {}, degraded: [], lenses: [] }),
+  );
+
+  const r = reopenRun({ root, runId });
+  assert.equal(r.ok, true, "a bad pass count falls back rather than failing");
+  assert.equal(existsSync(join(root, "..", "..", "..", "escaped")), false);
+  // It fell back to counting the passes on disk, and archived in the real one.
+  assert.ok(existsSync(join(passDir(root, runId, 1), "verdict-at-ceiling.json")));
+});
+
+// claimActiveRun writes an *unnamed* claim, and writeMarker is the only line
+// that ever names it. A throw before that left removeMarker(root, runId)
+// comparing against a null run, refusing, and isAbandonedClaim would not
+// reclaim it either (it requires pass > 0) — one failed extend used to lock
+// the project out of every future run.
+test("reopenRun: a failure releases the claim instead of wedging the project", async () => {
+  const { reopenRun } = await import("../src/driver.mjs");
+  const root = mkdtempSync(join(tmpdir(), "trio-reopen-fail-"));
+  const runId = "2026-01-01T00-00-00";
+  mkdirSync(runDir(root, runId), { recursive: true });
+  mkdirSync(trioDir(root), { recursive: true });
+  writeFileSync(
+    join(runDir(root, runId), "verdict.json"),
+    JSON.stringify({ verdict: "ceiling_reached", passes: 1 }),
+  );
+  // No run.json: the first read inside the try throws.
+  const r = reopenRun({ root, runId });
+  assert.equal(r.ok, false);
+  assert.equal(
+    existsSync(activeMarker(root)),
+    false,
+    "a failed extend left a claim nothing can reclaim",
+  );
+});
+
+// reopenRun deletes the verdict, raises the ceiling and takes the lock. A
+// refusal that arrives after all that leaves the run in pieces with a claim
+// nothing releases, so the lane requirement is asked before anything moves.
+test("reopenRun: refuses a missing Claude lane before it touches the run", async () => {
+  const { reopenRun } = await import("../src/driver.mjs");
+  const root = mkdtempSync(join(tmpdir(), "trio-reopen-lane-"));
+  const runId = "2026-01-01T00-00-00";
+  mkdirSync(passDir(root, runId, 1), { recursive: true });
+  mkdirSync(trioDir(root), { recursive: true });
+  writeFileSync(
+    join(runDir(root, runId), "run.json"),
+    JSON.stringify({ runId, config: { maxIterations: 1 } }),
+  );
+  writeFileSync(
+    join(runDir(root, runId), "verdict.json"),
+    JSON.stringify({ verdict: "ceiling_reached", passes: 1 }),
+  );
+  writeFileSync(
+    join(passDir(root, runId, 1), "reconcile.json"),
+    JSON.stringify({ pass: 1, findings: [], diff: {}, degraded: [], lenses: [], claude: [] }),
+  );
+
+  const r = reopenRun({ root, runId, hasClaudeFindings: false });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /carries a Claude audit/);
+  // Nothing moved: verdict intact, ceiling unchanged, no claim taken.
+  assert.ok(existsSync(join(runDir(root, runId), "verdict.json")));
+  assert.equal(existsSync(activeMarker(root)), false);
+  assert.equal(
+    JSON.parse(readFileSync(join(runDir(root, runId), "run.json"), "utf8"))
+      .config.maxIterations,
+    1,
+  );
+
+  // And with the lane supplied it proceeds.
+  assert.equal(reopenRun({ root, runId, hasClaudeFindings: true }).ok, true);
+});
+
+// .trio/config.json is an ordinary file in the project, and a lens name is
+// joined into two paths and read into a brief that is sent to Codex.
+test("baseBrief refuses a lens name that is not a lens name", async () => {
+  const { startRun } = await import("../src/driver.mjs");
+  const root = mkdtempSync(join(tmpdir(), "trio-lensname-"));
+  mkdirSync(trioDir(root), { recursive: true });
+  const config = {
+    ...DEFAULT_CONFIG,
+    enabled: true,
+    codex: {
+      ...DEFAULT_CONFIG.codex,
+      lenses: [{ name: "../../../../etc/passwd", model: "m", effort: "low", on: true }],
+    },
+  };
+  const r = await startRun({
+    root,
+    config,
+    target: root,
+    runLensFn: async ({ brief }) => ({
+      lens: "x",
+      status: "ok",
+      findings: [],
+      raw: brief,
+    }),
+  });
+  // The run fails rather than reading and forwarding an arbitrary file.
+  assert.equal(r.verdict, "failed");
+  assert.match(String(r.error ?? ""), /not a lens name/);
 });

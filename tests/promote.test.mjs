@@ -234,3 +234,51 @@ test("promote returns null when the promote root does not exist", () => {
     null,
   );
 });
+
+// The provenance the merge produces is a joined string, and this is the only
+// place it is decoded back into lanes. A change to that separator would
+// mis-sort every finding with nothing else noticing.
+test("renderLaneSplit separates both-lanes, codex-only and claude-only", async () => {
+  const { renderLaneSplit } = await import("../src/promote.mjs");
+  const out = renderLaneSplit({
+    findings: [
+      { severity: "major", file: "a.js", line: 1, title: "both saw it", lens: "auditor, claude" },
+      { severity: "minor", file: "b.js", line: 2, title: "codex alone", lens: "security" },
+      { severity: "critical", file: "c.js", line: 3, title: "claude alone", lens: "claude" },
+    ],
+  });
+  assert.match(out, /\*\*Both lanes\*\* \(1\)/);
+  assert.match(out, /\*\*Codex only\*\* \(1\)/);
+  assert.match(out, /\*\*Claude only\*\* \(1\)/);
+  // Each finding lands in exactly one column.
+  assert.equal((out.match(/both saw it/g) || []).length, 1);
+  assert.equal((out.match(/claude alone/g) || []).length, 1);
+  assert.ok(out.indexOf("both saw it") < out.indexOf("codex alone"));
+  assert.ok(out.indexOf("codex alone") < out.indexOf("claude alone"));
+});
+
+test("renderLaneSplit says so plainly when a column is empty", async () => {
+  const { renderLaneSplit } = await import("../src/promote.mjs");
+  const out = renderLaneSplit({
+    findings: [{ severity: "major", file: "a.js", title: "codex alone", lens: "auditor" }],
+  });
+  assert.match(out, /\*\*Claude only\*\* \(0\)/);
+  assert.match(out, /Claude found nothing Codex missed/);
+});
+
+// Counting lanes instead of checking for "claude" dropped every finding two
+// Codex lenses agreed on: too many lanes to be codex-only, no claude to be
+// both. The corroborated findings went missing from the corroboration section.
+test("renderLaneSplit keeps findings two Codex lenses agreed on", async () => {
+  const { renderLaneSplit } = await import("../src/promote.mjs");
+  const out = renderLaneSplit({
+    findings: [
+      { severity: "major", file: "a.js", title: "two codex lenses", lens: "auditor, security" },
+      { severity: "major", file: "b.js", title: "all three", lens: "auditor, security, claude" },
+    ],
+  });
+  assert.match(out, /\*\*Codex only\*\* \(1\)/);
+  assert.match(out, /two codex lenses/);
+  assert.match(out, /\*\*Both lanes\*\* \(1\)/);
+  assert.match(out, /all three/);
+});

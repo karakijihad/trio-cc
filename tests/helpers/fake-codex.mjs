@@ -45,6 +45,14 @@ let brief = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (d) => (brief += d));
 process.stdin.on("end", () => {
+  // Trio never persists the brief it sent, so this is the only way a test can
+  // assert on what actually reached a lens — scope, prior findings, all of it.
+  if (process.env.FAKE_CODEX_BRIEF_LOG) {
+    require("node:fs").appendFileSync(
+      process.env.FAKE_CODEX_BRIEF_LOG,
+      "\\n===BRIEF===\\n" + brief,
+    );
+  }
   if (process.env.FAKE_CODEX_EXIT) process.exit(Number(process.env.FAKE_CODEX_EXIT));
   const findings = process.env.FAKE_CODEX_FINDINGS || "[]";
   emit({ type: "thread.started", thread_id: "thread-fake" });

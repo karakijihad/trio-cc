@@ -187,8 +187,10 @@ command to fix it, instead of failing partway through a run.
 - `/trio:on` / `/trio:off` — enable or disable Trio for this project. `off`
   leaves the plugin loaded but dormant: Claude still tells you when something
   _would_ have gone to Codex, instead of silently skipping it.
-- `/trio:loop [--max N] [--target PATH] [--lenses a,b|all]` — run the audit
-  loop on the current work. Omitting `--lenses` runs all five.
+- `/trio:loop [--max N] [--target PATH] [--lenses a,b|all] [--scope TEXT]` —
+  run the audit loop on the current work. Omitting `--lenses` runs all five;
+  `--scope` names what to concentrate on, and without it every lens re-reads
+  the whole target on every pass.
 - `/trio:consult <question>` — ask Claude and Codex the same question
   independently and compare the answers, disagreements named. Claude answers
   first, so it doesn't anchor on Codex.
