@@ -56,6 +56,76 @@ test("mergeFindings does not merge different defects in the same file", () => {
   );
 });
 
+// The whole point of two lanes: when Codex and Claude both find something,
+// that agreement has to survive them wording it differently. Run
+// 2026-08-03T10-06-14 promoted bin/trio.mjs:356 twice for want of this.
+test("mergeFindings merges the two lanes' own wording of one defect", () => {
+  const out = mergeFindings([
+    lensResult("consistency", [
+      f({
+        file: "bin/trio.mjs",
+        line: 356,
+        title: "Configured model slugs are validated only by the lens command",
+      }),
+    ]),
+    lensResult("claude", [
+      f({
+        file: "bin/trio.mjs",
+        line: 356,
+        title: "nothing validates a configured slug before a run spends on it",
+      }),
+    ]),
+  ]);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].lens, "consistency, claude");
+});
+
+test("a cross-lane merge still keeps the most severe reading", () => {
+  const out = mergeFindings([
+    lensResult("consistency", [
+      f({ file: "a.rs", line: 12, title: "one wording", severity: "minor" }),
+    ]),
+    lensResult("claude", [
+      f({ file: "a.rs", line: 12, title: "another entirely", severity: "critical" }),
+    ]),
+  ]);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].severity, "critical");
+});
+
+// A finding absorbed by place still has to answer to its own id, or a third
+// lens matching only the absorbed wording would open a duplicate.
+test("mergeFindings stays transitive across both keys", () => {
+  const out = mergeFindings([
+    lensResult("auditor", [f({ file: "a.rs", line: 12, title: "first" })]),
+    lensResult("security", [f({ file: "a.rs", line: 12, title: "second" })]),
+    lensResult("claude", [f({ file: "a.rs", title: "second" })]),
+  ]);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].lens, "auditor, security, claude");
+});
+
+// The cost of keying on place, stated so it is a decision and not a surprise:
+// one line is treated as one defect, exactly as diffPasses already treats it.
+test("mergeFindings collapses two unrelated defects reported at one line", () => {
+  const out = mergeFindings([
+    lensResult("security", [f({ file: "a.rs", line: 12, title: "leaks a key" })]),
+    lensResult("simplifier", [f({ file: "a.rs", line: 12, title: "duplicated block" })]),
+  ]);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].title, "leaks a key");
+});
+
+// Bounded: with no line there is no place to collide on, so a line-less
+// finding can only ever merge by id.
+test("line-less findings in one file never merge by place", () => {
+  const out = mergeFindings([
+    lensResult("auditor", [f({ file: "a.rs", title: "leak" })]),
+    lensResult("security", [f({ file: "a.rs", title: "race" })]),
+  ]);
+  assert.equal(out.length, 2);
+});
+
 test("locationOf ignores wording and path separator style", () => {
   assert.equal(locationOf({ file: ".\\src\\a.mjs", line: 47 }), "src/a.mjs:47");
   assert.equal(

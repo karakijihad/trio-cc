@@ -149,6 +149,15 @@ Half the findings it rules on are Claude's own, from the Claude lane. They are
 adjudicated on the same standard as Codex's — not a softer one for being the
 caller's, and not a harder one to compensate.
 
+**Corroboration** — when both lanes raise the same defect it promotes as one
+finding carrying both names, because two reviewers agreeing is the strongest
+signal the design produces and it would be worth nothing if it read as two
+separate problems. Sameness is the same place _or_ the same wording, not both,
+so the two lanes describing one line in their own words still merge. The trade
+is deliberate: two genuinely different defects reported at one `file:line`
+collapse into one, keeping the more severe reading. It is the same rule the
+pass-to-pass diff already uses to decide what closed.
+
 **The conversation** — what makes pass 2 different from asking twice: Codex
 sees its own prior findings for that lens, a diff of what Claude actually
 changed since, and which findings Claude declined and why. It then agrees,

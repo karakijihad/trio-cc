@@ -99,16 +99,37 @@ export const locationOf = (f) =>
     ? `${normalizeFile(f.file)}#${f.id ?? ""}`
     : `${normalizeFile(f.file)}:${f.line}`;
 
-// Two lenses reporting one defect is corroboration, not two defects. Merge on
-// id, keep the most severe reading, and carry every lens that raised it —
-// provenance the promoted report renders and, until now, dropped on the floor.
+// Two lenses reporting one defect is corroboration, not two defects. Keep the
+// most severe reading and carry every lens that raised it — provenance the
+// promoted report renders.
+//
+// Same rule as `matcher` below, and for the same reason: same id OR same
+// place. Merging on id alone made wording the test of identity, so the two
+// lanes describing one defect in their own words promoted as two findings —
+// which reads as two independent problems when it is the single strongest
+// signal the two-lane design produces. Run 2026-08-03T10-06-14 promoted
+// `bin/trio.mjs:356` twice, once per lane, for exactly this.
+//
+// The cost is the mirror of the benefit: two genuinely different defects
+// reported at one file:line by different lenses now collapse into one, and
+// the later title is lost. That is the same trade `matcher` already makes,
+// pointed the same way — a place is treated as a defect. It is bounded by
+// requiring a line: findings without one fall back to `file#id` (locationOf),
+// so a line-less finding can only ever merge by id.
 export function mergeFindings(results) {
-  const byId = new Map();
+  // Both keys address the same entry, so this cannot be the return value —
+  // every merged finding is registered twice.
+  const byKey = new Map();
+  const merged = [];
   for (const r of results ?? []) {
     for (const f of r.findings ?? []) {
-      const seen = byId.get(f.id);
+      const place = locationOf(f);
+      const seen = byKey.get(f.id) ?? byKey.get(place);
       if (!seen) {
-        byId.set(f.id, { ...f, lens: f.lens ?? r.lens });
+        const entry = { ...f, lens: f.lens ?? r.lens };
+        byKey.set(f.id, entry);
+        byKey.set(place, entry);
+        merged.push(entry);
         continue;
       }
       if (SEVERITIES.indexOf(f.severity) < SEVERITIES.indexOf(seen.severity))
@@ -116,9 +137,14 @@ export function mergeFindings(results) {
       const lenses = String(seen.lens ?? "").split(", ").filter(Boolean);
       if (r.lens && !lenses.includes(r.lens))
         seen.lens = [...lenses, r.lens].join(", ");
+      // Alias both of the absorbed finding's keys onto the survivor, or a
+      // third lens matching only the key that lost would start a new entry
+      // and the merge would stop being transitive.
+      if (!byKey.has(f.id)) byKey.set(f.id, seen);
+      if (!byKey.has(place)) byKey.set(place, seen);
     }
   }
-  return [...byId.values()];
+  return merged;
 }
 
 // Two findings describe the same defect when they share an id or point at the
