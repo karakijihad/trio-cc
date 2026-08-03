@@ -127,9 +127,16 @@ Skip this only if the operator explicitly asks for a Codex-only run.
    a. Read `.trio/runs/<runId>/pass-N/reconcile.json` — **now**, not earlier.
    Findings carry a `lens` naming every lane that raised them; one reading
    `claude` alone is yours and Codex's lenses all missed it. If there are
-   findings, dispatch the `trio-reconciler` agent with the findings array;
-   write its verdicts block to `.trio/runs/<runId>/pass-N/verdicts.json`.
+   findings, dispatch the `trio-reconciler` agent with the findings array.
    Your own findings are adjudicated too — being yours earns them nothing.
+
+   Do not write `verdicts.json` yourself. Pipe the reconciler's reply to
+   `node "${CLAUDE_PLUGIN_ROOT}/bin/trio.mjs" verdicts <runId> N`, which
+   validates it and writes the file only if it is sound — it takes the whole
+   reply, so a fenced block inside prose is fine. It exits 2 and writes
+   **nothing** when something is wrong, listing every problem at once: fix
+   them and resubmit. A pass was once lost to a hand-written file nobody
+   checked until it was too late to recover.
    b. Fix what the verdicts confirm. Do not accept a finding because Codex
    is confident — verify against the code; a refuted finding needs cited
    evidence.

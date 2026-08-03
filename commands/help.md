@@ -61,6 +61,10 @@ name the closest match.
   `confirm`, `refute` (must cite evidence), `downgrade` (real but
   overstated), `escalate` (worse than reported, or composes with another
   finding into one bigger defect). Codex being confident is not evidence.
+  There is no fifth verdict. Its ruling is submitted through
+  `trio verdicts <runId> <pass>`, which refuses the whole submission and
+  writes nothing if a verdict is unrecognised, a finding is left without one,
+  or a disagreement cites nothing — every problem reported at once.
 - **The conversation** — pass 2 differs from a second opinion: Codex sees
   its own prior findings, the diff of what Claude changed, and which
   findings Claude declined and why. It then agrees, pushes back, or reports

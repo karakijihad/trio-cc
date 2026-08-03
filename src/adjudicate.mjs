@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { diffPasses, isConverged } from "./findings.mjs";
-import { applyVerdicts } from "./reconcile.mjs";
+import { applyVerdicts, VERDICTS } from "./reconcile.mjs";
 import { makeEvent, appendEvent } from "./bus.mjs";
 import { runDir, passDir } from "./paths.mjs";
 import { scrubDeep } from "./scrub.mjs";
@@ -54,9 +54,16 @@ export function applyAdjudication({ root, config, runId, pass, record }) {
   }
 
   let findings = record.findings;
+  const rejected = [];
   try {
-    findings = applyVerdicts(record.findings, parsed.verdicts);
+    findings = applyVerdicts(record.findings, parsed.verdicts, {
+      onInvalid: (bad) => rejected.push(...bad),
+    });
   } catch (err) {
+    // An unrecognized verdict no longer throws — it rejects its own entry. So
+    // reaching here means the file was malformed in a way readVerdictsFile
+    // could not see, and the pass still proceeds unadjudicated rather than
+    // taking the run down.
     appendEvent(
       runDir(root, runId),
       makeEvent({
@@ -65,7 +72,32 @@ export function applyAdjudication({ root, config, runId, pass, record }) {
         lane: "trio",
         actor: "trio",
         kind: "error",
-        payload: { error: `invalid verdict: ${err.message}` },
+        payload: { error: `verdicts could not be applied: ${err.message}` },
+      }),
+    );
+  }
+
+  // One event for the whole file, not one per bad entry and not just the
+  // first: the operator needs to know how much adjudication survived, which
+  // findings lost theirs, and what was written that Trio would not take.
+  if (rejected.length) {
+    const total = parsed.verdicts.length;
+    const named = rejected
+      .map((r) => `${r.id ?? "(no id)"}=${r.verdict ?? "(none)"}`)
+      .join(", ");
+    appendEvent(
+      runDir(root, runId),
+      makeEvent({
+        run: runId,
+        pass,
+        lane: "trio",
+        actor: "trio",
+        kind: "error",
+        payload: {
+          error: `rejected ${rejected.length} of ${total} verdicts — those findings stay unreviewed: ${named}. valid: ${VERDICTS.join(", ")}`,
+          rejected,
+          applied: total - rejected.length,
+        },
       }),
     );
   }

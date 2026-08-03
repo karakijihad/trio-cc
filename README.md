@@ -149,6 +149,14 @@ Half the findings it rules on are Claude's own, from the Claude lane. They are
 adjudicated on the same standard as Codex's — not a softer one for being the
 caller's, and not a harder one to compensate.
 
+The adjudication is submitted, not written. Claude pipes the reconciler's
+reply through `trio verdicts`, which checks it against the pass it claims to
+rule on and writes nothing at all if anything is wrong: an unrecognised
+verdict, a finding left without one, a verdict for a finding that pass never
+raised, a `refute` that cites nothing. It reports every problem at once and
+exits non-zero, so the fix is one resubmission rather than one per round trip.
+A malformed adjudication has to be corrected; it cannot be half-accepted.
+
 **Corroboration** — when both lanes raise the same defect it promotes as one
 finding carrying both names, because two reviewers agreeing is the strongest
 signal the design produces and it would be worth nothing if it read as two
@@ -289,8 +297,9 @@ nothing to your home directory and nothing outside the project.
 
 - **`.trio/runs/<runId>/`** — every run's raw record: `events.jsonl` (the
   append-only stream both agents write and the viewer tails), each pass's
-  `reconcile.json`, each lens's own JSON, and the final `verdict.json`. This
-  is gitignored, because raw event streams can carry command output.
+  `reconcile.json` and `verdicts.json` (Claude's adjudication of that pass),
+  each lens's own JSON, and the final `verdict.json`. This is gitignored,
+  because raw event streams can carry command output.
 - **`Docs/Audit/codex/YYYY-MM-DD/audit-N.md`** and
   **`Docs/Audit/claude/YYYY-MM-DD/audit-N.md`** — the readable pair promoted
   when a run finishes: Codex's findings, and Claude's adjudication with the
@@ -428,6 +437,15 @@ rather than failing three minutes into an audit.
 
 **The loop never talks to the view.** Both agents write to one append-only event
 log; the pane tails it. Kill the viewer mid-run and the audit carries on.
+
+**Strict where the author is still there, forgiving where they are gone.** The
+two ends of adjudication run opposite policies on purpose. Submitting it is
+all-or-nothing: refusing costs nothing, because whoever submitted it still has
+the data and can send it again. Reading it back is per-entry and salvages what
+it can, because by then the author is gone and a rejected verdict is work
+nobody can recreate — one bad entry must not discard the sound ones beside it.
+Anything that does not survive the read lands on `unreviewed`, never on
+agreement.
 
 **No network calls of its own.** The viewer binds `127.0.0.1` only. Codex talks
 to OpenAI on your credentials; Claude talks to Anthropic on yours. Trio talks to

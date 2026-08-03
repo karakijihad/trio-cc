@@ -11,6 +11,10 @@ export const USAGE = `trio — Codex as a read-only second reviewer.
   trio run [--max N] [--target PATH] [--lenses a,b|all] [--scope TEXT]
                  [--claude-findings PATH]   Claude's own audit of the same scope
   trio continue [--claude-findings PATH]  run the next pass of the active run
+  trio verdicts [runId] [pass] [--file PATH]   validate adjudication and write
+                                    pass-N/verdicts.json; reads stdin by
+                                    default, and writes nothing if anything
+                                    is wrong
   trio extend [runId]               one more pass on a ceiling-reached run
   trio cancel                       cancel the active run
   trio consult <question>           ask Codex one question

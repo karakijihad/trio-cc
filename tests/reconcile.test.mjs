@@ -129,11 +129,101 @@ test("a fully confirmed pass still says so", () => {
   assert.match(table, /confirmed as reported/);
 });
 
-test("an unknown verdict is rejected", () => {
-  assert.throws(
-    () => applyVerdicts([f("a1")], [{ id: "a1", verdict: "maybe", basis: "" }]),
-    /unknown verdict/i,
+// The uppercase past tense is Trio's own vocabulary coming back at it: LABEL
+// renders `refute` as REFUTED, so a model that has read one report writes
+// REFUTED into the next set of verdicts. The meaning is unambiguous; only the
+// spelling is wrong, and rejecting on spelling threw away real adjudication.
+test("a verdict is read case- and tense-insensitively", () => {
+  for (const [written, canonical] of [
+    ["CONFIRMED", "confirm"],
+    ["REFUTED", "refute"],
+    ["DOWNGRADED", "downgrade"],
+    ["ESCALATED", "escalate"],
+    ["  Confirm  ", "confirm"],
+  ]) {
+    const out = applyVerdicts([f("a1")], [{ id: "a1", verdict: written }]);
+    assert.equal(out[0].verdict, canonical, `${written} -> ${canonical}`);
+  }
+});
+
+test("a normalized downgrade still moves severity", () => {
+  const out = applyVerdicts(
+    [f("a1", { severity: "critical" })],
+    [{ id: "a1", verdict: "DOWNGRADED", basis: "dormant" }],
   );
+  assert.equal(out[0].severity, "major");
+  assert.equal(out[0].verdict, "downgrade");
+});
+
+// The incident this guards: one invented verdict at the head of the array
+// threw, and fourteen findings — thirteen of them adjudicated correctly —
+// were all discarded and left unreviewed.
+test("an unrecognized verdict does not discard the valid ones", () => {
+  const out = applyVerdicts(
+    [f("a1"), f("a2"), f("a3")],
+    [
+      { id: "a1", verdict: "OUT_OF_SCOPE", basis: "not in the diff" },
+      { id: "a2", verdict: "CONFIRMED", basis: "reproduced" },
+      { id: "a3", verdict: "refute", basis: "line 4 disproves it" },
+    ],
+  );
+  assert.equal(out[0].verdict, "unreviewed");
+  assert.equal(out[1].verdict, "confirm");
+  assert.equal(out[2].verdict, "refute");
+});
+
+// Skipping is only safe because the finding lands on `unreviewed`, which
+// blocks convergence and reports as "not yet adjudicated". It must never
+// inherit a verdict from anywhere.
+test("a finding whose verdict was rejected keeps no basis or bounds", () => {
+  const out = applyVerdicts(
+    [f("a1")],
+    [{ id: "a1", verdict: "maybe", basis: "b", bounds: "everywhere" }],
+  );
+  assert.equal(out[0].verdict, "unreviewed");
+  assert.equal(out[0].basis, "");
+  assert.equal(out[0].bounds, "");
+});
+
+test("every rejected verdict is reported, not just the first", () => {
+  const seen = [];
+  applyVerdicts(
+    [f("a1"), f("a2"), f("a3")],
+    [
+      { id: "a1", verdict: "maybe" },
+      { id: "a2", verdict: "confirm" },
+      { id: "a3", verdict: "OUT_OF_SCOPE" },
+    ],
+    { onInvalid: (r) => seen.push(...r) },
+  );
+  assert.deepEqual(seen, [
+    { id: "a1", verdict: "maybe" },
+    { id: "a3", verdict: "OUT_OF_SCOPE" },
+  ]);
+});
+
+test("nothing rejected means nothing reported", () => {
+  let called = false;
+  applyVerdicts([f("a1")], [{ id: "a1", verdict: "confirm" }], {
+    onInvalid: () => {
+      called = true;
+    },
+  });
+  assert.equal(called, false);
+});
+
+// A malformed verdicts file must not crash the run — it is the one input
+// written by hand between passes.
+test("a missing or non-string verdict is rejected, not thrown on", () => {
+  const seen = [];
+  const out = applyVerdicts(
+    [f("a1"), f("a2")],
+    [{ id: "a1" }, { id: "a2", verdict: 3 }],
+    { onInvalid: (r) => seen.push(...r) },
+  );
+  assert.equal(out[0].verdict, "unreviewed");
+  assert.equal(out[1].verdict, "unreviewed");
+  assert.equal(seen.length, 2);
 });
 
 test("a verdict for an unknown id is ignored, not fatal", () => {

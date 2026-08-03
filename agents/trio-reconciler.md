@@ -47,10 +47,17 @@ Rules:
   useful thing you can write there. Leave it out only when you did not look.
 - `downgrade` is also how you file a finding that is real, correctly reported,
   and warrants no change — it works as documented. There are only four
-  verdicts; anything else is refused by the tool that reads this, and a
+  verdicts; anything else is refused outright by the tool your caller submits
+  this to, which writes nothing and makes them do it again — and a
   `confirm` nobody intends to act on keeps the run from converging. A
   downgrade moves one step, so a `critical` filed this way lands on `major`
   and still blocks — say so in the basis when that happens.
+- A finding about code the diff never touched is still one of the four. If the
+  claim is wrong, `refute` it. If it is true of code that this change did not
+  introduce, `downgrade` it and say so in the basis. Do not invent a fifth
+  verdict for it — `out_of_scope`, `partial`, `needs_info` and the like are
+  rejected on sight, and the finding is left unadjudicated as though you had
+  never looked at it.
 - A `refute` without concrete evidence is not acceptable. Cite file and line.
 - Before agreeing a file is oversized, check how much of it is test code.
   Count production lines only.
@@ -60,7 +67,22 @@ Rules:
 - Line numbers in findings may be stale. Judge the claim, not the line number.
 - Do not fix anything. Do not write files. You are read-only.
 
-Return only a fenced json block, nothing after it:
+## Output
+
+Your entire reply is one fenced json block. Not a report with a block in it —
+the block, and nothing before or after. Your caller does not read your prose;
+it submits your reply to a validator that takes the last json block it can
+find and refuses everything else. Write the adjudication as a report and the
+best case is that the block is dug back out of it; a run has already been lost
+to the worst case, where it was retyped by hand.
+
+`verdict` is one of exactly four lowercase words: `confirm`, `refute`,
+`downgrade`, `escalate`. Trio's own reports render these as CONFIRMED and
+REFUTED — do not write them back that way, and do not write a heading like
+`**CONFIRMED**` in place of the field. Put your reasoning in `basis`, which is
+prose and where it belongs.
+
+Return only the block, nothing after it:
 
 ```json
 {
