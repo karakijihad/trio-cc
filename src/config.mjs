@@ -27,14 +27,19 @@ export const DEFAULT_CONFIG = Object.freeze({
     // means "whatever the Codex CLI defaults to" — the flag is then omitted
     // entirely — but the run record can only report `codex default`, so prefer
     // naming one. `trio models` lists what your CLI actually offers.
-    // security reaches for the stronger model because a missed auth or input
-    // defect costs more than the tokens; simplifier drops to low because
-    // "this is longer than it needs to be" does not need deep reasoning.
+    // All five ship the same model and effort: one baseline is easier to
+    // reason about than five, and per-lens tuning is a decision for whoever
+    // sees their own runs, not a default to inherit.
     lenses: [
       { name: "auditor", model: "gpt-5.6-terra", effort: "medium", on: true },
-      { name: "security", model: "gpt-5.6-sol", effort: "medium", on: true },
+      { name: "security", model: "gpt-5.6-terra", effort: "medium", on: true },
       { name: "tester", model: "gpt-5.6-terra", effort: "medium", on: true },
-      { name: "simplifier", model: "gpt-5.6-terra", effort: "low", on: true },
+      {
+        name: "simplifier",
+        model: "gpt-5.6-terra",
+        effort: "medium",
+        on: true,
+      },
       {
         name: "consistency",
         model: "gpt-5.6-terra",
