@@ -18,6 +18,13 @@ const shift = (severity, by) => {
   return SEVERITIES[Math.min(SEVERITIES.length - 1, Math.max(0, i + by))];
 };
 
+// `bounds` is where a confirmed defect stops: the other call sites the pattern
+// reaches, and the ones it demonstrably does not. It is separate from `basis`
+// because the two have different readers — `basis` answers "why this verdict"
+// and only reaches the report when the verdict was a disagreement, while
+// `bounds` answers "how wide is the fix" and belongs in the permanent record
+// of every finding that stayed open. A confirmed defect whose blast radius
+// nobody wrote down gets over-fixed.
 export function applyVerdicts(findings, verdicts) {
   const byId = new Map();
   for (const v of verdicts ?? []) {
@@ -29,14 +36,20 @@ export function applyVerdicts(findings, verdicts) {
   }
   return findings.map((f) => {
     const v = byId.get(f.id);
-    if (!v) return { ...f, verdict: UNREVIEWED, basis: "" };
+    if (!v) return { ...f, verdict: UNREVIEWED, basis: "", bounds: "" };
     const severity =
       v.verdict === "downgrade"
         ? shift(f.severity, 1)
         : v.verdict === "escalate"
           ? shift(f.severity, -1)
           : f.severity;
-    return { ...f, verdict: v.verdict, basis: v.basis ?? "", severity };
+    return {
+      ...f,
+      verdict: v.verdict,
+      basis: v.basis ?? "",
+      bounds: v.bounds ?? "",
+      severity,
+    };
   });
 }
 

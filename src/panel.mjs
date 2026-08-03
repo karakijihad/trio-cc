@@ -1,4 +1,12 @@
 const pad = (s, n) => String(s).padEnd(n);
+
+// How a lens's model reads wherever one is displayed. An unpinned lens is not
+// a broken lens, and printing `null` would say it was. It lives here, with the
+// other rendering, rather than in capabilities.mjs: this module formats
+// strings and imports nothing, and pulling in a module that reads the
+// filesystem to probe Codex — for one expression — points the dependency the
+// wrong way round.
+export const modelLabel = (model) => model || "codex default";
 const RULE = "─".repeat(74);
 
 const ago = (iso) => {
@@ -64,7 +72,7 @@ export function renderPanel({
   lines.push("");
   config.codex.lenses.forEach((l, i) => {
     lines.push(
-      `${pad(i === 0 ? "Lenses" : "", 11)}${pad(l.name, 12)}${pad(l.model, 16)}${pad(l.effort, 9)}${l.on ? "● on" : "○ off"}`,
+      `${pad(i === 0 ? "Lenses" : "", 11)}${pad(l.name, 12)}${pad(modelLabel(l.model), 16)}${pad(l.effort, 9)}${l.on ? "● on" : "○ off"}`,
     );
   });
   lines.push("");
@@ -81,7 +89,7 @@ export function renderPanel({
       : "/trio:on   to enable",
   );
   lines.push(
-    "/trio:lens security model gpt-5.6-terra effort ultra     /trio:config set view.mode pane",
+    "/trio:lens security model <slug> effort high     /trio:config set view.mode pane",
   );
   lines.push("/trio:help   full command and concept reference");
   return lines.join("\n");
@@ -104,6 +112,19 @@ export function renderModelsTable({ models, lenses }) {
         .join(", ") || "—";
     lines.push(
       `${pad(m.slug, 18)}${pad(m.displayName, 20)}${pad(m.defaultEffort, 10)}${gutter(m.efforts.join(","), 34)}${usedBy}`,
+    );
+  }
+  // Rows come from the catalogue, so a lens matching no slug appears in none
+  // of them. This table's whole job is saying which lens runs on which model,
+  // and an unpinned lens silently missing from it is the one answer it must
+  // not give.
+  const unpinned = lenses
+    .filter((l) => !l.model)
+    .map((l) => l.name)
+    .join(", ");
+  if (unpinned) {
+    lines.push(
+      `${pad(modelLabel(null), 18)}${pad("—", 20)}${pad("—", 10)}${gutter("—", 34)}${unpinned}`,
     );
   }
   return lines.join("\n");

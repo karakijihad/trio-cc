@@ -22,8 +22,12 @@ export function buildArgs({ target, model, effort }) {
     target,
     // Long forms deliberately: these are the flags the drift guard probes for
     // in `codex exec --help`, and guard and invocation must not diverge.
-    "--model",
-    model,
+    //
+    // No model means no `--model`, so Codex picks its own current default.
+    // Passing the flag with an empty value is not the same thing — it is an
+    // argument error, and it would turn "the operator never chose a model"
+    // into a failed lens.
+    ...(model ? ["--model", model] : []),
     "--config",
     `model_reasoning_effort=${effort}`,
   ];

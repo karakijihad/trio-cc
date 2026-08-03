@@ -63,6 +63,22 @@ export function checkDrift(caps) {
 }
 
 export function validateLens(caps, lens) {
+  // An unpinned lens defers to the CLI, so there is no slug to look up. The
+  // effort still gets checked — against every effort the catalogue knows,
+  // since which model will answer is exactly what is unknown here. That
+  // accepts a value the chosen model happens not to support, but it refuses
+  // the typo, and refusing a typo synchronously is worth a wave of Codex
+  // processes discovering it.
+  if (!lens.model) {
+    const known = [...new Set((caps.models ?? []).flatMap((m) => m.efforts))];
+    if (known.length && !known.includes(lens.effort)) {
+      return {
+        ok: false,
+        error: `no model supports effort "${lens.effort}". valid: ${known.join(", ")}`,
+      };
+    }
+    return { ok: true };
+  }
   const model = (caps.models ?? []).find((m) => m.slug === lens.model);
   if (!model) {
     const known = (caps.models ?? []).map((m) => m.slug).join(", ");

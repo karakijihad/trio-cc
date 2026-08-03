@@ -72,6 +72,37 @@ test("refute records the basis and keeps the finding for the record", () => {
   assert.equal(out[0].basis, "lines 394-834 are cfg(test)");
 });
 
+// Blast radius is the half of a confirmation that bounds the fix, and it
+// travels in its own field because `basis` never reaches the report for a
+// verdict that agreed.
+test("confirm carries the bounds through to the finding", () => {
+  const out = applyVerdicts(
+    [f("a1")],
+    [
+      {
+        id: "a1",
+        verdict: "confirm",
+        basis: "reproduced",
+        bounds: "also at c.rs:9; not at d.rs:4 — that one latches",
+      },
+    ],
+  );
+  assert.equal(out[0].bounds, "also at c.rs:9; not at d.rs:4 — that one latches");
+});
+
+test("a verdict with no bounds leaves an empty string, never undefined", () => {
+  const out = applyVerdicts(
+    [f("a1")],
+    [{ id: "a1", verdict: "confirm", basis: "reproduced" }],
+  );
+  assert.equal(out[0].bounds, "");
+});
+
+test("an unreviewed finding has empty bounds", () => {
+  const out = applyVerdicts([f("a1")], []);
+  assert.equal(out[0].bounds, "");
+});
+
 // Silence is not agreement: an unadjudicated pass used to report every
 // finding "confirm" and an empty disagreement table.
 test("a finding with no verdict is unreviewed, not confirmed", () => {

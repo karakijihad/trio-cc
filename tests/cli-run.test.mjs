@@ -407,6 +407,20 @@ test("run: an invalid --max is rejected without invoking Codex at all", () => {
   );
 });
 
+// Both audit lanes found the same gap: a slug that had moved was only
+// rejected by Codex itself, after the lock was claimed and the wave spawned.
+// It warns rather than refuses — models_cache.json is Codex's own cache and
+// can lag, so a mismatch must never be able to block a run outright.
+test("run: warns before spending when a lens names a model the catalogue lacks", () => {
+  const { cli } = project();
+  const res = cli(["run", "--lenses", "auditor"]);
+  // DEFAULT_CONFIG pins a real slug; the fake catalogue knows only fake-model.
+  assert.match(res.stderr, /lens auditor: unknown model/);
+  // Warned, not refused — and on stderr, so stdout is still the run's JSON.
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(JSON.parse(res.stdout).verdict, "clean");
+});
+
 // Trio ships on, so /trio:off is the whole opt-out. It has to hold before the
 // forced probe, not after it — the fake records any invocation, for any
 // subcommand, so absence of the log is proof rather than inference.

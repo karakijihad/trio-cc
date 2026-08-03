@@ -23,7 +23,7 @@ import {
   probeState,
   modelsReport,
 } from "../src/capabilities.mjs";
-import { renderPanel, renderModelsTable } from "../src/panel.mjs";
+import { renderPanel, renderModelsTable, modelLabel } from "../src/panel.mjs";
 import {
   startRun,
   continueRun,
@@ -343,7 +343,7 @@ switch (cmd) {
     // No arguments is a query, not a change: report the lens and touch nothing.
     if (!Object.keys(parsed.changes).length) {
       out(
-        `${lens.name}  ${lens.model}  ${lens.effort}  ${lens.on ? "on" : "off"}`,
+        `${lens.name}  ${modelLabel(lens.model)}  ${lens.effort}  ${lens.on ? "on" : "off"}`,
       );
       break;
     }
@@ -361,7 +361,7 @@ switch (cmd) {
     }
     saveConfig(root, config);
     out(
-      `${lens.name}  ${lens.model}  ${lens.effort}  ${lens.on ? "on" : "off"}`,
+      `${lens.name}  ${modelLabel(lens.model)}  ${lens.effort}  ${lens.on ? "on" : "off"}`,
     );
     break;
   }
@@ -606,7 +606,7 @@ switch (cmd) {
       break;
     }
 
-    const { drift, pre } = gatherState({ force: true });
+    const { drift, pre, caps } = gatherState({ force: true });
     if (pre.state === "not_installed" || pre.state === "not_logged_in") {
       out(`${pre.message}\n  ${pre.fix}`);
       process.exitCode = 1;
@@ -634,6 +634,36 @@ switch (cmd) {
       lensNames?.length === 1 && lensNames[0] === "all"
         ? "all"
         : (lensNames ?? undefined);
+
+    // A model slug only ever reached Codex as `--model` and was only rejected
+    // there — after the lock was claimed and a wave of processes had been
+    // spawned — so a slug that moved cost a whole degraded pass to discover.
+    // The catalogue is already in hand from the probe above. Only the lenses
+    // this run will actually spawn are checked: validating a lens the
+    // selection turned off would refuse a run over a model nothing was going
+    // to ask for. An empty catalogue checks nothing, because a first run
+    // before Codex has ever been probed must still be possible.
+    // Warned, not refused, and the distinction is the whole design. The
+    // catalogue is Codex's own models_cache.json: it can lag a release, or
+    // omit a slug that works perfectly well. Refusing on a mismatch would let
+    // a stale cache block every run in the project — turning the pinned
+    // default into a hard expiry date rather than a soft one. Saying it out
+    // loud before the wave spawns closes the real gap, which was that a slug
+    // that had moved cost a degraded pass to discover. Only the lenses this
+    // run will actually spawn are checked; an empty catalogue checks nothing,
+    // so a first run before Codex has ever been probed still works.
+    const selected = !lenses || lenses === "all" ? null : new Set(lenses);
+    if ((caps?.models ?? []).length) {
+      for (const lens of config.codex.lenses) {
+        if (!lens.on || (selected && !selected.has(lens.name))) continue;
+        // stderr, like the viewer URL: this command's stdout is the run's JSON
+        // result and every caller parses it, so a warning there would be a
+        // breaking change dressed as a courtesy.
+        const check = validateLens(caps, lens);
+        if (!check.ok)
+          process.stderr.write(`⚠ lens ${lens.name}: ${check.error}\n`);
+      }
+    }
 
     // Trio is on by default, so a first run can be the first thing that ever
     // writes to .trio/ — /trio:on is no longer the guaranteed first touch.

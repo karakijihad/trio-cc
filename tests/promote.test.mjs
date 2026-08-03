@@ -157,6 +157,68 @@ test("the reconciliation carries the disagreement table", () => {
   assert.match(md, /cfg\(test\) from 394/);
 });
 
+// The whole point of promoting bounds: a confirmed finding's blast radius is
+// what stops the next reader over-fixing it, and basis never gets there
+// because a confirm is not a disagreement.
+test("the reconciliation records a confirmed finding's bounds", () => {
+  const root = tmp();
+  mkdirSync(join(root, "Docs", "Audit"), { recursive: true });
+  const bounded = {
+    ...PASS,
+    findings: [
+      { ...PASS.findings[0], bounds: "same at src/c.rs:9; NOT at src/d.rs:4" },
+      PASS.findings[1],
+    ],
+  };
+  const r = promote({
+    root,
+    config: DEFAULT_CONFIG,
+    runId: "r1",
+    passes: [bounded],
+    verdict: "ceiling_reached",
+    now: NOW,
+  });
+  const md = readFileSync(r.claudePath, "utf8");
+  assert.match(md, /bounds: same at src\/c\.rs:9; NOT at src\/d\.rs:4/);
+});
+
+// The document's shape cannot depend on the agent honouring "one line".
+test("a multi-line bounds is flattened so it cannot break the list item", () => {
+  const root = tmp();
+  mkdirSync(join(root, "Docs", "Audit"), { recursive: true });
+  const messy = {
+    ...PASS,
+    findings: [
+      { ...PASS.findings[0], bounds: "also at c.rs:9\n\nNOT at d.rs:4" },
+      PASS.findings[1],
+    ],
+  };
+  const r = promote({
+    root,
+    config: DEFAULT_CONFIG,
+    runId: "r1",
+    passes: [messy],
+    verdict: "ceiling_reached",
+    now: NOW,
+  });
+  const md = readFileSync(r.claudePath, "utf8");
+  assert.match(md, /^ {2}bounds: also at c\.rs:9 NOT at d\.rs:4$/m);
+});
+
+test("a finding with no bounds gets no empty bounds line", () => {
+  const root = tmp();
+  mkdirSync(join(root, "Docs", "Audit"), { recursive: true });
+  const r = promote({
+    root,
+    config: DEFAULT_CONFIG,
+    runId: "r1",
+    passes: [PASS],
+    verdict: "ceiling_reached",
+    now: NOW,
+  });
+  assert.doesNotMatch(readFileSync(r.claudePath, "utf8"), /bounds:/);
+});
+
 test("a ceiling_reached verdict is stated plainly, never as clean", () => {
   const root = tmp();
   mkdirSync(join(root, "Docs", "Audit"), { recursive: true });

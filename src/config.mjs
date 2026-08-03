@@ -17,16 +17,24 @@ export const DEFAULT_CONFIG = Object.freeze({
     // that is still thinking, and nothing else bounds a Codex process. Ten
     // times the observed per-lens time, so it only fires on a real hang.
     timeoutMinutes: 15,
+    // This is the setting that decides what reviews your code, and it is meant
+    // to be edited — by hand in .trio/config.json, or with /trio:model and
+    // /trio:lens. The shipped slug is a starting point, not a constraint.
+    //
+    // It is pinned rather than left to the CLI on purpose: an audit record has
+    // to say what produced it, and Trio does not read back the model Codex
+    // would have chosen on its own. Setting `model` to null is supported and
+    // means "whatever the Codex CLI defaults to" — the flag is then omitted
+    // entirely — but the run record can only report `codex default`, so prefer
+    // naming one. `trio models` lists what your CLI actually offers.
+    // security reaches for the stronger model because a missed auth or input
+    // defect costs more than the tokens; simplifier drops to low because
+    // "this is longer than it needs to be" does not need deep reasoning.
     lenses: [
       { name: "auditor", model: "gpt-5.6-terra", effort: "medium", on: true },
-      { name: "security", model: "gpt-5.6-terra", effort: "medium", on: true },
+      { name: "security", model: "gpt-5.6-sol", effort: "medium", on: true },
       { name: "tester", model: "gpt-5.6-terra", effort: "medium", on: true },
-      {
-        name: "simplifier",
-        model: "gpt-5.6-terra",
-        effort: "medium",
-        on: true,
-      },
+      { name: "simplifier", model: "gpt-5.6-terra", effort: "low", on: true },
       {
         name: "consistency",
         model: "gpt-5.6-terra",

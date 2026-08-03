@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renderPanel, renderModelsTable } from "../src/panel.mjs";
+import { renderPanel, renderModelsTable, modelLabel } from "../src/panel.mjs";
 import { DEFAULT_CONFIG } from "../src/config.mjs";
 
 const CAPS = {
@@ -58,10 +58,47 @@ test("lists every lens with model, effort and on/off", () => {
     drift: OK_DRIFT,
     pre: READY,
   });
+  // Through modelLabel, not l.model: an unpinned lens is a supported config
+  // and `null.replace` would fail here as if the panel were broken.
   for (const l of DEFAULT_CONFIG.codex.lenses) {
     assert.match(out, new RegExp(l.name));
-    assert.match(out, new RegExp(l.model.replace(/\./g, "\\.")));
+    assert.match(out, new RegExp(modelLabel(l.model).replace(/\./g, "\\.")));
   }
+});
+
+test("the panel names an unpinned lens instead of printing null", () => {
+  const config = {
+    ...DEFAULT_CONFIG,
+    enabled: true,
+    codex: {
+      ...DEFAULT_CONFIG.codex,
+      lenses: [{ name: "auditor", model: null, effort: "medium", on: true }],
+    },
+  };
+  const out = renderPanel({
+    enabled: true,
+    installed: true,
+    config,
+    caps: CAPS,
+    drift: OK_DRIFT,
+    pre: READY,
+  });
+  assert.match(out, /codex default/);
+  assert.doesNotMatch(out, /null/);
+});
+
+// Rows are built from the catalogue, so an unpinned lens matches no slug and
+// would otherwise be absent from the one table that answers "what runs where".
+test("renderModelsTable still accounts for a lens with no model pinned", () => {
+  const out = renderModelsTable({
+    models: [{ slug: "gpt-5.6-luna", displayName: "Luna", defaultEffort: "medium", efforts: ["medium"] }],
+    lenses: [
+      { name: "auditor", model: "gpt-5.6-luna", effort: "medium", on: true },
+      { name: "security", model: null, effort: "medium", on: true },
+    ],
+  });
+  assert.match(out, /codex default.*security/s);
+  assert.match(out, /gpt-5\.6-luna.*auditor/);
 });
 
 test("surfaces drift warnings", () => {

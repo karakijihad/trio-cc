@@ -154,10 +154,16 @@ export function renderReconciliation({ runId, passes, date, verdict }) {
     last.findings.filter((f) => f.verdict !== "refute").length
       ? last.findings
           .filter((f) => f.verdict !== "refute")
-          .map(
-            (f) =>
-              `- **${f.severity}** \`${f.file}\` — ${f.title} (\`${f.id}\`)`,
-          )
+          .map((f) => {
+            const head = `- **${f.severity}** \`${f.file}\` — ${f.title} (\`${f.id}\`)`;
+            // An indented continuation line, not a table cell — bounds is
+            // prose, and this is the one place a reader learns how far the fix
+            // goes. Flattened first: the agent writing it is a language model
+            // and a stray newline would break out of the list item, so the
+            // shape of the document cannot rest on it following instructions.
+            const bounds = String(f.bounds ?? "").replace(/\s+/g, " ").trim();
+            return bounds ? `${head}\n  bounds: ${bounds}` : head;
+          })
           .join("\n")
       : "_None._",
     "",

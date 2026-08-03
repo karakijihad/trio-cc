@@ -125,6 +125,34 @@ test("validateLens accepts a supported model and effort", () => {
   );
 });
 
+// A lens with no model defers to the CLI, so there is no slug to look up and
+// no per-model effort list to check against. Refusing it would make a valid
+// config unrunnable.
+test("validateLens accepts a lens with no model pinned", () => {
+  const caps = { models: parseModelsCache(CACHE) };
+  assert.equal(validateLens(caps, { model: null, effort: "medium" }).ok, true);
+});
+
+// Unpinned means the model is unknown, not that anything goes: a typo is
+// still refusable against the union of efforts the catalogue knows.
+test("an unpinned lens still refuses an effort no model supports", () => {
+  const caps = { models: parseModelsCache(CACHE) };
+  const r = validateLens(caps, { model: null, effort: "nonsense" });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /no model supports effort/);
+});
+
+test("an unpinned lens accepts an effort some known model supports", () => {
+  const caps = { models: parseModelsCache(CACHE) };
+  assert.equal(validateLens(caps, { model: "", effort: "ultra" }).ok, true);
+});
+
+// With no catalogue there is nothing to check against, and refusing every
+// effort would make a first run impossible before the first probe.
+test("an unpinned lens is accepted when the catalogue is empty", () => {
+  assert.equal(validateLens({ models: [] }, { model: null, effort: "x" }).ok, true);
+});
+
 test("validateLens rejects an unsupported effort and lists the valid ones", () => {
   const caps = { models: parseModelsCache(CACHE) };
   const r = validateLens(caps, { model: "gpt-5.6-luna", effort: "ultra" });

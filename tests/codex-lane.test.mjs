@@ -78,6 +78,21 @@ test("buildArgs carries json, cwd, model and effort", () => {
   assert.ok(args.includes("model_reasoning_effort=xhigh"));
 });
 
+// `--model ""` is an argument error, not a default: a lens whose model was
+// cleared has to fall through to the CLI's own choice, not fail to launch.
+test("buildArgs omits --model entirely when no model is set", () => {
+  const args = buildArgs({ target: "/repo", model: null, effort: "medium" });
+  assert.equal(args.includes("--model"), false);
+  assert.equal(args.includes(""), false);
+  assert.ok(args.includes("model_reasoning_effort=medium"));
+});
+
+test("buildArgs still carries the effort when the model is unset", () => {
+  const args = buildArgs({ target: "/repo", model: "", effort: "xhigh" });
+  assert.equal(args.includes("--model"), false);
+  assert.equal(args[args.indexOf("--config") + 1], "model_reasoning_effort=xhigh");
+});
+
 test("mapEvent maps an agent_message", () => {
   const e = mapEvent({
     type: "item.completed",

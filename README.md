@@ -9,9 +9,10 @@ both agents working side by side in a live browser window.
 Three participants, and the third one is you. Trio automates the handoff, not
 the judgement.
 
-> **Status: v0.4.0.** Install: `/plugin marketplace add karakijihad/trio-cc` then
+> Install: `/plugin marketplace add karakijihad/trio-cc` then
 > `/plugin install trio@trio-cc`, `/reload-plugins`, `/trio`.
-> Verified against Codex CLI 0.146.0.
+> `/trio:doctor` probes the Codex CLI you actually have and reports version
+> drift — Trio tracks that CLI rather than pinning a version of it.
 
 ---
 
@@ -133,7 +134,20 @@ reported), `refute` (wrong — must cite what disproves it), `downgrade` (real
 but overstated; severity drops one step), `escalate` (worse than reported, or
 it composes with another finding into one bigger defect; severity rises one
 step). Codex sounding confident is not evidence — the reconciler has to show
-its work too.
+its work too: a `refute` cites what disproves the finding, and a `confirm`
+states the failure path — the input or state, then what breaks. If it can't
+write that path, the verdict is `downgrade`, not `confirm`. `downgrade` is
+also how a finding that is real but warrants no change gets filed; there is
+no fifth verdict.
+
+Confirmed findings also carry **bounds** — where the defect stops. Where else
+the pattern occurs and, as importantly, where it demonstrably does not. That
+travels into the promoted audit under **Open findings**, because a confirmed
+defect whose blast radius nobody wrote down is the one that gets over-fixed.
+
+Half the findings it rules on are Claude's own, from the Claude lane. They are
+adjudicated on the same standard as Codex's — not a softer one for being the
+caller's, and not a harder one to compensate.
 
 **The conversation** — what makes pass 2 different from asking twice: Codex
 sees its own prior findings for that lens, a diff of what Claude actually
@@ -245,7 +259,7 @@ Every key in `.trio/config.json`, with its default:
 | `maxIterations`                 | `2`                    | Pass ceiling. Hitting it without convergence ends the run `ceiling_reached`.                                                                                           |
 | `codex.parallel`                | `5`                    | How many lenses run at once — one wave for the five that ship. Affects wall-clock time only; every enabled lens still runs, so this does not change cost. To spend less, run fewer lenses (`--lenses`). |
 | `codex.timeoutMinutes`          | `15`                   | How long one lens may run before Trio stops it. A lens that has stopped producing output looks exactly like one still thinking, and nothing else bounds a Codex process. A stopped lens is recorded as degraded, blocks convergence, and is never retried into a second hang. Typical lens: 1–2 minutes. |
-| `codex.lenses[]`                | five entries, all `on` | Each entry: `name`, `model`, `effort`, `on`. All five default to gpt-5.6-terra/medium; change any with `/trio:model` or `/trio:lens`.                                  |
+| `codex.lenses[]`                | five entries, all `on` | Each entry: `name`, `model`, `effort`, `on`. All five ship `gpt-5.6-terra`/`medium` — a starting point, not a constraint. Change any of it with `/trio:model` or `/trio:lens`, or edit `.trio/config.json` directly; `trio models` lists what your CLI actually offers and your choice is validated against that catalogue. Models move, so if a slug is retired, set a current one here rather than waiting on a release. Setting `model` to `null` is also supported and defers to the Codex CLI's own default, at the cost of the run record only being able to say `codex default`. |
 | `view.mode`                     | `window`               | `window` (OS browser window, opens itself) · `pane` (starts the viewer and prints `Viewer: <url>` on stderr for you to open — paste it into VS Code's Simple Browser, or any browser) · `off`. A static file is available on demand via `trio render`. |
 | `view.port`                     | `4319`                 | Local port the viewer binds.                                                                                                                                           |
 | `view.autoOpen`                 | `true`                 | Whether `window` mode opens the browser automatically.                                                                                                                 |
