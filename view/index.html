@@ -101,6 +101,17 @@
   .spacer {
     flex: 1;
   }
+  #ver {
+    color: var(--faint);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    font-variant-numeric: tabular-nums;
+  }
+  /* Empty until /version answers — and it never answers when the file is
+     opened straight from disk, so an empty span must cost no space. */
+  #ver:empty {
+    display: none;
+  }
   #theme {
     appearance: none;
     border: 1px solid var(--line);
@@ -190,8 +201,8 @@
     border-bottom: 1px solid var(--rule);
     color: var(--dim);
     display: flex;
-    align-items: center;
-    gap: 8px;
+    flex-direction: column;
+    gap: 2px;
     position: sticky;
     top: 0;
     background: var(--panel);
@@ -237,13 +248,28 @@
   .lane-pass:empty {
     display: none;
   }
+  /* The name, actor, and pass badge stay on one row that ellipsizes rather
+     than wraps when a lane gets narrow — same behavior the single-row header
+     had. */
+  .h-top {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  /* Its own row under the name, not squeezed in beside it — six lanes across,
+     a seven-digit token count truncated to "1354849 in / 63…" said nothing.
+     Indented to sit under the name, past the dot. Empty until the first usage
+     event, and an empty row must cost no height. */
   .tokens {
-    margin-left: auto;
-    padding-left: 8px;
+    padding-left: 14px;
     color: var(--faint);
     font-size: 11px;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
+  }
+  .tokens:empty {
+    display: none;
   }
 
   .events {
@@ -427,6 +453,7 @@
   <span id="meta">connecting…</span>
   <span id="pass"></span>
   <span class="spacer"></span>
+  <span id="ver"></span>
   <button id="theme" type="button" aria-live="polite">◐ theme</button>
 </header>
 <div id="hood"></div>
@@ -454,6 +481,17 @@
     localStorage.setItem("trio-theme", next);
     setTheme(next);
   });
+
+  // The version comes from the server rather than being baked into this file,
+  // so the page stays a static asset and simply shows no version when opened
+  // without one (file://, or an older server without the endpoint).
+  fetch("/version")
+    .then((r) => (r.ok ? r.json() : null))
+    .then((v) => {
+      if (v?.version)
+        document.getElementById("ver").textContent = "v" + v.version;
+    })
+    .catch(() => {});
 
   const lanes = new Map();
   const el = document.getElementById("lanes");
@@ -535,7 +573,10 @@
     pb.className = "lane-pass";
     const tk = document.createElement("span");
     tk.className = "tokens";
-    h.append(dot, nm, rl, pb, tk);
+    const top = document.createElement("span");
+    top.className = "h-top";
+    top.append(dot, nm, rl, pb);
+    h.append(top, tk);
 
     const body = document.createElement("div");
     body.className = "events";

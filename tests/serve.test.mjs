@@ -84,6 +84,22 @@ test("/events replays the existing backlog as SSE data lines", async () => {
   );
 });
 
+test("/version reports the plugin manifest's version", async () => {
+  const { server, url } = await start({ runDirPath: tmp(), port: 0 });
+  const res = await fetch(`${url}/version`);
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get("content-type"), /application\/json/);
+  const body = await res.json();
+  // Pinning the exact number here would make every release touch this test;
+  // what matters is that it is the manifest's value, not a hardcoded one.
+  const { readFileSync } = await import("node:fs");
+  const manifest = JSON.parse(
+    readFileSync(new URL("../.claude-plugin/plugin.json", import.meta.url)),
+  );
+  assert.equal(body.version, manifest.version);
+  server.close();
+});
+
 test("unknown paths return 404", async () => {
   const { server, url } = await start({ runDirPath: tmp(), port: 0 });
   assert.equal((await fetch(`${url}/nope`)).status, 404);

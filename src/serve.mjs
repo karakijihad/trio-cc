@@ -6,12 +6,29 @@ import { readEvents, eventsFile } from "./bus.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PAGE = join(HERE, "..", "view", "index.html");
+const MANIFEST = join(HERE, "..", ".claude-plugin", "plugin.json");
+
+// The manifest is the one place the version already lives — package.json is
+// kept in sync with it, but the plugin manifest is what an installed copy is
+// actually running as.
+function pluginVersion() {
+  try {
+    return JSON.parse(readFileSync(MANIFEST, "utf8")).version ?? null;
+  } catch {
+    return null;
+  }
+}
 
 export function createServer({ runDirPath }) {
   return httpServer((req, res) => {
     if (req.url === "/" || req.url === "/index.html") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(readFileSync(PAGE, "utf8"));
+      return;
+    }
+    if (req.url === "/version") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ version: pluginVersion() }));
       return;
     }
     if (req.url === "/events") {
