@@ -540,25 +540,56 @@
     const body = document.createElement("div");
     body.className = "events";
 
+    // Following the tail is state the reader owns, not something to re-derive
+    // from the scroll position on every append. Re-deriving it is what broke:
+    // anything that moves the tail without the reader touching the lane — a
+    // new lane arriving and narrowing every column, the hood wrapping to a
+    // second line, the window resizing — leaves the old scrollTop mid-stream,
+    // which reads as "the reader scrolled up" and the lane never follows
+    // again. Every lane starts out following; only the reader stops it.
+    const lane = {
+      body,
+      tokens: tk,
+      wrap,
+      badge: pb,
+      pass: null,
+      follow: true,
+      pin() {
+        body.scrollTop = body.scrollHeight;
+      },
+    };
+
     const jump = document.createElement("button");
     jump.type = "button";
     jump.className = "jump";
     jump.textContent = "↓ latest";
     jump.addEventListener("click", () => {
-      body.scrollTop = body.scrollHeight;
+      lane.follow = true;
+      wrap.classList.remove("detached");
+      lane.pin();
     });
 
-    // The reader's own scrolling is the only thing that detaches a lane, and
-    // scrolling back to the tail is what re-attaches it. Pinning below assigns
-    // scrollTop, which fires this too, so the two agree by construction.
+    // The reader's own scrolling is the only thing that stops a lane
+    // following, and scrolling back to the tail starts it again. Pinning
+    // assigns scrollTop and fires this too, but it lands at the tail, so it
+    // only ever confirms what is already true.
     body.addEventListener("scroll", () => {
-      wrap.classList.toggle("detached", !nearBottom(body));
+      const at = nearBottom(body);
+      if (at === lane.follow) return;
+      lane.follow = at;
+      wrap.classList.toggle("detached", !at);
     });
+
+    // A resize moves the tail out from under a lane without any scrolling: the
+    // viewport shrinks, the same scrollTop is suddenly short of the bottom.
+    // A following lane rides that back down instead of silently falling behind.
+    new ResizeObserver(() => {
+      if (lane.follow) lane.pin();
+    }).observe(body);
 
     wrap.append(h, body, jump);
     el.append(wrap);
 
-    const lane = { body, tokens: tk, wrap, badge: pb, pass: null };
     lanes.set(name, lane);
     return lane;
   }
@@ -589,10 +620,6 @@
     }
     const lane = laneFor(ev.lane || "unknown", ev.actor);
 
-    // Measured here, before anything is appended, because both the pass rule
-    // and the event itself are content: measuring after either would read
-    // every lane as behind and stop the tail-follow.
-    const follow = nearBottom(lane.body);
     // Before the usage return below, not after it. A lens whose first event in
     // a new pass is its token count would otherwise never get that pass's rule
     // or badge — the lane would sit showing the pass before it.
@@ -601,7 +628,7 @@
     // Token usage belongs in the lane header, not the event stream.
     if (ev.kind === "usage") {
       lane.tokens.textContent = `${p.input_tokens || 0} in / ${p.output_tokens || 0} out`;
-      if (follow) lane.body.scrollTop = lane.body.scrollHeight;
+      if (lane.follow) lane.pin();
       meta.textContent = `${++count} events · ${lanes.size} lanes`;
       return;
     }
@@ -667,12 +694,10 @@
       node.append(k);
     }
 
-    // Measured before the append, not after: once the node is in the document
-    // the lane is already taller than the viewport and every lane would read
-    // as behind.
     lane.body.append(node);
-    if (follow) lane.body.scrollTop = lane.body.scrollHeight;
-    else lane.wrap.classList.add("detached");
+    // The append is what makes the lane taller, so the pin comes after it. A
+    // lane the reader has scrolled up in keeps its place and keeps its button.
+    if (lane.follow) lane.pin();
     meta.textContent = `${++count} events · ${lanes.size} lanes`;
   }
 
