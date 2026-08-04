@@ -1,5 +1,17 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/src/session-context.mjs\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "MessageDisplay": [
       {
         "hooks": [
