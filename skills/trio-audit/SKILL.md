@@ -167,6 +167,11 @@ Report exactly what `verdict.json` says:
 
 - `clean` — converged. Say so, and name what was fixed.
 - `ceiling_reached` — say so plainly and list the open findings. **This is not success.**
+  It is the **run's** verdict, never the final pass's: the last pass completed
+  normally — the run stopped because its pass budget is spent with findings
+  still open. Phrase it that way ("the run used both passes; N findings remain
+  open"), never "pass N came back ceiling_reached" or anything implying the
+  pass itself was cut short.
   When the result carries `extension: {offer: true, ...}`, the run stopped on
   budget with blocking findings still live. Report the verdict first, then ask
   once with `AskUserQuestion`, **showing `closed` and `new` in the question** —
