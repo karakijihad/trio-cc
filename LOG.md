@@ -13,6 +13,7 @@ What went wrong, and what was done about it. One line each, newest first.
 - **The report never said why a carried finding didn't block** — it now prints the carry and asks `isLive` rather than restating the rule, so the two can't drift apart.
 - **Decline reasons reached Codex unscrubbed** — scrubbed now at the one boundary every ledger entry passes through, and in the reply section too.
 - **A malformed handover file failed the whole run** instead of costing its own section — both readers skip entries that aren't objects.
+- **An unreadable reply then reported itself as an empty one**, because dropping every malformed entry left nothing to show — it now says how many entries couldn't be read, and says it even when some survived.
 
 ## 2026-08-01 — spending and safety
 

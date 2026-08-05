@@ -285,40 +285,49 @@ test("the pass-2 instruction asks for omission, not a resolved field", () => {
 // response.json is a handover file written outside Trio. readPassResponse only
 // guards a parse failure, not a wrong shape, and either throw here escapes
 // through briefFor and pool() to fail the whole run.
+const replyFor = (response) =>
+  buildLensPrompt({
+    brief: "BRIEF",
+    lens: "auditor",
+    pass: 2,
+    prior: { findings: [], changes: [], response },
+  });
+
 for (const [label, bad] of [
   ["a string", { findings: "x" }],
   ["a number", { findings: 3 }],
   ["an object", { findings: { a: 1 } }],
-  ["a list of nulls", { findings: [null, null] }],
 ]) {
   test(`a response whose findings is ${label} costs its section, not the run`, () => {
     let out;
     assert.doesNotThrow(() => {
-      out = buildLensPrompt({
-        brief: "BRIEF",
-        lens: "auditor",
-        pass: 2,
-        prior: { findings: [], changes: [], response: bad },
-      });
+      out = replyFor(bad);
     });
     assert.match(out, /## Claude's reply/);
-    assert.match(out, /listed no findings/);
+    assert.match(out, /is not a list/);
     assert.match(out, /## Instructions/);
+    // "replied about nothing" and "could not be read" are different claims
+    assert.doesNotMatch(out, /listed no findings/);
   });
 }
 
-test("a malformed entry is dropped without taking the sound ones with it", () => {
-  const out = buildLensPrompt({
-    brief: "BRIEF",
-    lens: "auditor",
-    pass: 2,
-    prior: {
-      findings: [],
-      changes: [],
-      response: {
-        findings: [null, { id: "aa11", action: "declined", reason: "by design" }],
-      },
-    },
+test("entries that could not be read are counted, not silently dropped", () => {
+  const out = replyFor({ findings: [null, null] });
+  assert.match(out, /2 entries in Claude's reply could not be read/);
+  assert.doesNotMatch(out, /listed no findings/);
+});
+
+test("a partly unreadable reply does not look complete", () => {
+  const out = replyFor({
+    findings: [null, { id: "aa11", action: "declined", reason: "by design" }],
   });
   assert.match(out, /aa11: declined — by design/);
+  assert.match(out, /1 entry in Claude's reply could not be read/);
 });
+
+test("a genuinely empty reply still says it listed no findings", () => {
+  const out = replyFor({ findings: [] });
+  assert.match(out, /listed no findings/);
+  assert.doesNotMatch(out, /could not be read/);
+});
+

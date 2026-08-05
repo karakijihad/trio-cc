@@ -65,7 +65,8 @@ function renderReplySection(response, findings) {
   // no .reason, and either throw escapes buildLensPrompt through briefFor and
   // pool() to reject runPass, which continueRun catches and finalizes as a
   // failed run. A malformed reply must cost its own section, not the run.
-  const listed = Array.isArray(response.findings) ? response.findings : [];
+  const raw = response.findings;
+  const listed = Array.isArray(raw) ? raw : [];
   const entries = listed
     .filter((f) => f && typeof f === "object")
     .map((f) => {
@@ -79,9 +80,24 @@ function renderReplySection(response, findings) {
         : " (id not among your previous findings)";
       return `- ${f.id}: ${f.action} — ${reason}${suffix}`;
     });
+  // "Claude replied about nothing" and "Claude's reply could not be read" are
+  // different claims, and the guard above made them render identically —
+  // dropping every malformed entry and then reporting no findings. That is the
+  // same conflation `unreviewed` exists to stop: silence is not an answer. Say
+  // which it was, and say it even when some entries did survive, or a partly
+  // unreadable handover looks complete.
+  const dropped = listed.length - entries.length;
+  const note =
+    raw != null && !Array.isArray(raw)
+      ? "Claude's reply had a findings field that is not a list — none of it could be read."
+      : dropped
+        ? `${dropped} entr${dropped === 1 ? "y" : "ies"} in Claude's reply could not be read.`
+        : "";
   const body = entries.length
-    ? entries.join("\n")
-    : "Claude's reply listed no findings.";
+    ? note
+      ? `${entries.join("\n")}\n\n${note}`
+      : entries.join("\n")
+    : note || "Claude's reply listed no findings.";
   const summary = response.summary ? `\n\n${response.summary}` : "";
   return `${header}\n\n${body}${summary}`;
 }
