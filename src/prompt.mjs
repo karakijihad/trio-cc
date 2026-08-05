@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { passDir } from "./paths.mjs";
+import { renderSettledSection } from "./settled.mjs";
+import { scrub } from "./scrub.mjs";
 
 // Claude's reply to a pass's reconciled findings (D17), written by the
 // trio-audit skill before the next pass starts. Absence is never an error —
@@ -57,13 +59,26 @@ function renderReplySection(response, findings) {
     return `${header}\n\nClaude left no structured reply. Re-examine the code alone.`;
   }
   const knownIds = new Set(findings.map((f) => f.id));
-  const entries = (response.findings ?? []).map((f) => {
-    const reason = f.reason ?? f.note ?? "";
-    const suffix = knownIds.has(f.id)
-      ? ""
-      : " (id not among your previous findings)";
-    return `- ${f.id}: ${f.action} — ${reason}${suffix}`;
-  });
+  // response.json is a handover file written outside Trio, and readPassResponse
+  // only guards against it failing to parse — not against it parsing to the
+  // wrong shape. `{"findings":"x"}` has no .map and `{"findings":[null]}` has
+  // no .reason, and either throw escapes buildLensPrompt through briefFor and
+  // pool() to reject runPass, which continueRun catches and finalizes as a
+  // failed run. A malformed reply must cost its own section, not the run.
+  const listed = Array.isArray(response.findings) ? response.findings : [];
+  const entries = listed
+    .filter((f) => f && typeof f === "object")
+    .map((f) => {
+      // Scrubbed for the same reason settled.mjs scrubs its entries: this text
+      // comes from response.json, which nothing else scrubs, and it goes into
+      // a brief written straight to Codex's stdin. Scrubbing only the ledger
+      // closed the wider path and left the original one open.
+      const reason = scrub(f.reason ?? f.note ?? "");
+      const suffix = knownIds.has(f.id)
+        ? ""
+        : " (id not among your previous findings)";
+      return `- ${f.id}: ${f.action} — ${reason}${suffix}`;
+    });
   const body = entries.length
     ? entries.join("\n")
     : "Claude's reply listed no findings.";
@@ -105,16 +120,29 @@ function renderScopeSection(scope) {
 // file changes since, and Claude's response.json into a conversation turn
 // (D14). Scope rides every pass — a lens that narrowed on pass 1 and widened
 // on pass 2 would report the whole repository as newly found.
-export function buildLensPrompt({ brief, lens: _lens, pass, prior, scope }) {
+// `settled` is the run-level decline ledger (src/settled.mjs) — every pass's
+// refutations and declines, not just the previous one's. It goes last before
+// the instructions, closest to the ask, because it is the section that has to
+// survive a lens rewording an old claim into a new title.
+export function buildLensPrompt({
+  brief,
+  lens: _lens,
+  pass,
+  prior,
+  scope,
+  settled,
+}) {
   const scoped = scope ? `${brief}\n\n${renderScopeSection(scope)}` : brief;
   if (pass <= 1 || prior == null) return scoped;
 
   const { findings = [], changes = [], response = null } = prior;
+  const settledSection = renderSettledSection(settled);
   const sections = [
     scoped,
     renderFindingsSection(findings, pass - 1),
     renderChangesSection(changes),
     renderReplySection(response, findings),
+    ...(settledSection ? [settledSection] : []),
     renderInstructionSection(),
   ];
   return sections.join("\n\n");

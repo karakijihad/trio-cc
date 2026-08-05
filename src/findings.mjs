@@ -2,6 +2,13 @@ import { createHash } from "node:crypto";
 
 export const SEVERITIES = ["critical", "major", "minor", "info"];
 
+// The absence of a verdict is not agreement. Defined here rather than in
+// reconcile.mjs — which is where it is applied and where it used to live —
+// because isLive below has to test for it, and reconcile.mjs already imports
+// SEVERITIES from this file, so the import back would be circular. One module
+// owns the sentinel; reconcile.mjs re-exports it for its existing callers.
+export const UNREVIEWED = "unreviewed";
+
 const normalize = (s) =>
   String(s ?? "")
     .trim()
@@ -174,14 +181,25 @@ export function diffPasses(prev, curr) {
   };
 }
 
+// A finding is live until someone settles it, and only two things settle one.
+// `refute` is this pass's reconciler saying it is not a defect. `carried` is an
+// earlier pass having said so (src/settled.mjs), and it counts only while this
+// pass's reconciler has not spoken — a fresh verdict always overrides the
+// carry, in both directions, so the reconciler keeps the last word.
+//
+// Only a carried `refute` exempts. A finding that was confirmed and then
+// declined is a real defect somebody chose to carry, not a mistake: four of
+// nine recorded declines were exactly that. Exempting those would let a run
+// report `clean` over known defects, which is the one claim this codebase
+// spends the most effort refusing to make.
+export const isLive = (f) =>
+  f.verdict !== "refute" &&
+  !(f.verdict === UNREVIEWED && f.carried?.priorVerdict === "refute");
+
 export function isConverged(curr, diff, converge) {
-  const live = curr.filter((x) => x.verdict !== "refute");
+  const live = curr.filter(isLive);
   const blocking = live.some((x) => (converge.blockOn ?? []).includes(x.severity));
   if (blocking) return false;
-  if (
-    converge.requireNoNewFindings &&
-    diff.new.some((x) => x.verdict !== "refute")
-  )
-    return false;
+  if (converge.requireNoNewFindings && diff.new.some(isLive)) return false;
   return true;
 }

@@ -229,6 +229,132 @@ test("continueRun: pass 2's brief carries forward findings, response, and claude
   assert.match(seenBrief, /new/);
 });
 
+// The decline ledger end to end through the real driver path: buildSettled
+// reads pass 1's adjudicated record, briefFor renders it into the pass-2
+// brief, and carrySettled annotates the re-raise. The layer tests each inject
+// `settled` directly, so this is the only place driver.mjs's own construction
+// of it is exercised.
+const located = (title, line = 10, file = "a.rs") => ({
+  severity: "major",
+  file,
+  line,
+  title,
+  evidence: "",
+  impact: "",
+  correction: "",
+  id: findingId(file, title),
+});
+
+test("continueRun: a refuted finding re-raised in pass 2 is told to the lens and carried", async () => {
+  const root = tmp();
+  // Two findings: one refuted, to seed the ledger, and one confirmed, so pass
+  // 1 does not converge on the spot and there is a pass 2 at all.
+  const started = await startRun({
+    root,
+    config: cfg({ maxIterations: 2 }),
+    target: "/repo",
+    runLensFn: okLens([located("leak"), located("other", 20, "b.rs")]),
+  });
+
+  writeFileSync(
+    join(passDir(root, started.runId, 1), "verdicts.json"),
+    JSON.stringify({
+      verdicts: [
+        {
+          id: findingId("a.rs", "leak"),
+          verdict: "refute",
+          basis: "pinned by a.test.mjs:8 — intended",
+        },
+        { id: findingId("b.rs", "other"), verdict: "confirm", basis: "real" },
+      ],
+    }),
+  );
+
+  // the same defect, reworded — the drift every recorded boomerang showed.
+  // b.rs is gone: Claude fixed the one the reconciler confirmed.
+  let seenBrief = null;
+  const r = await continueRun({
+    root,
+    runLensFn: async ({ lens, brief }) => {
+      seenBrief = brief;
+      return {
+        lens: lens.name,
+        status: "ok",
+        findings: [located("a resource is not released")],
+        threadId: "t",
+        raw: "",
+      };
+    },
+  });
+
+  assert.match(seenBrief, /## Already settled this run/);
+  assert.match(seenBrief, /leak/, "the original wording reaches the lens");
+  assert.match(seenBrief, /pinned by a\.test\.mjs:8/, "and so does the basis");
+
+  const rec = JSON.parse(
+    readFileSync(join(passDir(root, started.runId, 2), "reconcile.json"), "utf8"),
+  );
+  const [f] = rec.findings;
+  assert.equal(f.carried.priorVerdict, "refute");
+  assert.equal(f.carried.matchedBy, "location", "the title drifted, the line did not");
+  assert.equal(f.verdict, "unreviewed", "the carry must not invent a verdict");
+
+  // and the payoff: a major finding that would otherwise block does not,
+  // because this run already refuted it.
+  assert.equal(r.status, "finished");
+  assert.equal(r.verdict, "clean");
+});
+
+test("continueRun: a declined-but-confirmed finding re-raised in pass 2 still blocks", async () => {
+  const root = tmp();
+  const started = await startRun({
+    root,
+    config: cfg({ maxIterations: 2 }),
+    target: "/repo",
+    runLensFn: okLens([located("leak")]),
+  });
+
+  writeFileSync(
+    join(passDir(root, started.runId, 1), "verdicts.json"),
+    JSON.stringify({
+      verdicts: [
+        { id: findingId("a.rs", "leak"), verdict: "confirm", basis: "real" },
+      ],
+    }),
+  );
+  writeFileSync(
+    join(passDir(root, started.runId, 1), "response.json"),
+    JSON.stringify({
+      findings: [
+        {
+          id: findingId("a.rs", "leak"),
+          action: "declined",
+          reason: "carrying it deliberately",
+        },
+      ],
+    }),
+  );
+
+  const r = await continueRun({
+    root,
+    runLensFn: async ({ lens }) => ({
+      lens: lens.name,
+      status: "ok",
+      findings: [located("a resource is not released")],
+      threadId: "t",
+      raw: "",
+    }),
+  });
+
+  const rec = JSON.parse(
+    readFileSync(join(passDir(root, started.runId, 2), "reconcile.json"), "utf8"),
+  );
+  assert.equal(rec.findings[0].carried.priorVerdict, "confirm");
+  // a real defect somebody chose to carry is not a refutation, so the run
+  // must not round up to clean
+  assert.equal(r.verdict, "ceiling_reached");
+});
+
 test("continueRun: pass 2 still finding the issue hits the ceiling", async () => {
   const root = tmp();
   const config = cfg({ maxIterations: 2 });

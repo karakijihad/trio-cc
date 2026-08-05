@@ -68,6 +68,88 @@ test("the configured timeout reaches every lens", async () => {
   assert.equal(seen, 7 * 60_000);
 });
 
+// The decline ledger's merge half. carrySettled runs after applyVerdicts, or
+// `unreviewed` would overwrite it, and it must annotate without adjudicating.
+test("a re-raise of a settled finding is carried, not given a verdict", async () => {
+  const root = tmp();
+  const raised = finding("reworded claim");
+  const { record } = await runPass({
+    config: cfg({ codex: { ...oneLens(), timeoutMinutes: 5 } }),
+    target: "/repo",
+    root,
+    runId: "r1",
+    pass: 2,
+    prevRecord: { pass: 1, findings: [], diff: {}, degraded: [] },
+    runLensFn: async ({ lens }) => ({
+      lens: lens.name,
+      status: "ok",
+      findings: [raised],
+      threadId: "t",
+      raw: "",
+    }),
+    briefFor: () => "b",
+    settled: [
+      {
+        id: "not-the-same-id",
+        key: "a.rs#" + raised.id,
+        file: "a.rs",
+        line: null,
+        title: "the original wording",
+        lens: "auditor",
+        kind: "refuted",
+        priorVerdict: "refute",
+        pass: 1,
+        basis: "pinned by a.test.mjs:8",
+      },
+    ],
+  });
+
+  const [f] = record.findings;
+  assert.equal(f.verdict, "unreviewed", "must not synthesise a verdict");
+  assert.equal(f.carried.priorVerdict, "refute");
+  assert.equal(f.carried.fromPass, 1);
+  assert.equal(f.carried.matchedBy, "location");
+  // and it must survive to disk, or the report and the next pass lose it
+  const onDisk = JSON.parse(
+    readFileSync(join(passDir(root, "r1", 2), "reconcile.json"), "utf8"),
+  );
+  assert.equal(onDisk.findings[0].carried.priorVerdict, "refute");
+});
+
+test("a finding this run never settled is left untouched", async () => {
+  const { record } = await runPass({
+    config: cfg({ codex: { ...oneLens(), timeoutMinutes: 5 } }),
+    target: "/repo",
+    root: tmp(),
+    runId: "r1",
+    pass: 2,
+    prevRecord: { pass: 1, findings: [], diff: {}, degraded: [] },
+    runLensFn: async ({ lens }) => ({
+      lens: lens.name,
+      status: "ok",
+      findings: [finding("a brand new claim")],
+      threadId: "t",
+      raw: "",
+    }),
+    briefFor: () => "b",
+    settled: [
+      {
+        id: "zzzz9999",
+        key: "other.rs:1",
+        file: "other.rs",
+        line: 1,
+        title: "unrelated",
+        lens: "auditor",
+        kind: "refuted",
+        priorVerdict: "refute",
+        pass: 1,
+        basis: "b",
+      },
+    ],
+  });
+  assert.equal(record.findings[0].carried, undefined);
+});
+
 test("only enabled lenses run", async () => {
   const seen = [];
   await runPass({

@@ -1,6 +1,7 @@
 import { readdirSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { renderDisagreementTable } from "./reconcile.mjs";
+import { isLive } from "./findings.mjs";
 
 const SEV_ORDER = ["critical", "major", "minor", "info"];
 const dateOf = (now) => now.toISOString().slice(0, 10);
@@ -162,7 +163,28 @@ export function renderReconciliation({ runId, passes, date, verdict }) {
             // and a stray newline would break out of the list item, so the
             // shape of the document cannot rest on it following instructions.
             const bounds = String(f.bounds ?? "").replace(/\s+/g, " ").trim();
-            return bounds ? `${head}\n  bounds: ${bounds}` : head;
+            // A carried finding is listed here like any other, but without
+            // this line nothing says why it did not block the run. isLive
+            // exempts a re-raise of something an earlier pass refuted, and an
+            // exemption nobody can see in the report is the same unaudited
+            // claim the `unreviewed` default exists to prevent.
+            //
+            // Asked of isLive rather than restated, because a copy of the
+            // rule here would drift from the one convergence actually uses,
+            // and this is the document where a drift becomes a false claim
+            // about the run. Everything with a `refute` verdict is already
+            // filtered out above, so within this map `!isLive` means exactly
+            // "excused by an earlier pass's refutation".
+            const c = f.carried;
+            const flat = (v) => String(v ?? "").replace(/\s+/g, " ").trim();
+            const excused = Boolean(c) && !isLive(f);
+            const carried = c
+              ? `\n  carried: ${flat(c.kind)} in pass ${flat(c.fromPass)} ` +
+                `(${flat(c.priorVerdict)}), matched by ${flat(c.matchedBy)}` +
+                `${excused ? " — did not block convergence" : ""}` +
+                `${c.basis ? `; ${flat(c.basis)}` : ""}`
+              : "";
+            return `${head}${bounds ? `\n  bounds: ${bounds}` : ""}${carried}`;
           })
           .join("\n")
       : "_None._",

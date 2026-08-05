@@ -9,7 +9,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { nextAuditNumber, promote } from "../src/promote.mjs";
+import {
+  nextAuditNumber,
+  promote,
+  renderReconciliation,
+} from "../src/promote.mjs";
 import { runPass } from "../src/orchestrator.mjs";
 import { DEFAULT_CONFIG } from "../src/config.mjs";
 
@@ -343,4 +347,127 @@ test("renderLaneSplit keeps findings two Codex lenses agreed on", async () => {
   assert.match(out, /two codex lenses/);
   assert.match(out, /\*\*Both lanes\*\* \(1\)/);
   assert.match(out, /all three/);
+});
+
+// A carried finding is exempted from blocking convergence by isLive. It is
+// listed in Open findings like any other, but without the carried line nothing
+// in the report says why it did not block — an unaudited exemption, which is
+// the same failure the `unreviewed` default exists to prevent.
+const carriedPass = (carried) => ({
+  pass: 1,
+  lenses: [{ lens: "auditor", status: "ok" }],
+  degraded: [],
+  diff: { new: [], open: [], closed: [] },
+  findings: [
+    {
+      id: "c1",
+      severity: "major",
+      file: "src/a.rs",
+      line: 10,
+      title: "a resource is not released",
+      lens: "auditor",
+      verdict: "unreviewed",
+      basis: "",
+      bounds: "",
+      carried,
+    },
+  ],
+});
+
+test("the report says why a carried finding did not block", () => {
+  const out = renderReconciliation({
+    runId: "r1",
+    date: "2026-08-05",
+    verdict: "clean",
+    passes: [
+      carriedPass({
+        fromPass: 1,
+        kind: "refuted",
+        priorVerdict: "refute",
+        matchedBy: "location",
+        basis: "pinned by a.test.mjs:8",
+      }),
+    ],
+  });
+  assert.match(out, /a resource is not released/);
+  assert.match(out, /carried: refuted in pass 1 \(refute\)/);
+  assert.match(out, /matched by location/);
+  assert.match(out, /did not block convergence/);
+  assert.match(out, /pinned by a\.test\.mjs:8/);
+});
+
+test("a carried decline is not described as having been excused", () => {
+  const out = renderReconciliation({
+    runId: "r1",
+    date: "2026-08-05",
+    verdict: "ceiling_reached",
+    passes: [
+      carriedPass({
+        fromPass: 1,
+        kind: "declined",
+        priorVerdict: "confirm",
+        matchedBy: "id",
+        basis: "carrying it deliberately",
+      }),
+    ],
+  });
+  assert.match(out, /carried: declined in pass 1 \(confirm\)/);
+  assert.doesNotMatch(
+    out,
+    /did not block convergence/,
+    "a confirmed defect somebody carried still blocked, and must not read otherwise",
+  );
+});
+
+test("a finding with no carry renders exactly as before", () => {
+  const out = renderReconciliation({
+    runId: "r1",
+    date: "2026-08-05",
+    verdict: "ceiling_reached",
+    passes: [carriedPass(undefined)],
+  });
+  assert.match(out, /a resource is not released/);
+  assert.doesNotMatch(out, /carried:/);
+});
+
+// The clause has to mirror isLive, not just priorVerdict. A carried refutation
+// the reconciler has since confirmed does block, and saying otherwise would be
+// a false claim about the run in the document the operator keeps.
+test("a carried refutation the reconciler reopened is not called excused", () => {
+  const pass = carriedPass({
+    fromPass: 1,
+    kind: "refuted",
+    priorVerdict: "refute",
+    matchedBy: "location",
+    basis: "was thought pinned by a.test.mjs:8",
+  });
+  pass.findings[0].verdict = "confirm";
+  const out = renderReconciliation({
+    runId: "r1",
+    date: "2026-08-05",
+    verdict: "ceiling_reached",
+    passes: [pass],
+  });
+  assert.match(out, /carried: refuted in pass 1 \(refute\)/);
+  assert.doesNotMatch(out, /did not block convergence/);
+});
+
+test("a newline in a carried field cannot break out of the list item", () => {
+  const out = renderReconciliation({
+    runId: "r1",
+    date: "2026-08-05",
+    verdict: "clean",
+    passes: [
+      carriedPass({
+        fromPass: 1,
+        kind: "refuted\n\n## Injected heading",
+        priorVerdict: "refute",
+        matchedBy: "location",
+        basis: "one\ntwo",
+      }),
+    ],
+  });
+  assert.doesNotMatch(out, /^## Injected heading/m);
+  assert.match(out, /carried: refuted ## Injected heading in pass 1/);
+  assert.match(out, /one two/);
 });

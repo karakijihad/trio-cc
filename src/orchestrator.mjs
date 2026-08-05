@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { diffPasses, isConverged, mergeFindings } from "./findings.mjs";
 import { applyVerdicts } from "./reconcile.mjs";
+import { carrySettled } from "./settled.mjs";
 import { makeEvent, appendEvent } from "./bus.mjs";
 import { runDir, passDir } from "./paths.mjs";
 import { writeMarker } from "./marker.mjs";
@@ -69,6 +70,7 @@ export async function runPass({
   runLensFn,
   briefFor,
   claudeFindings = null,
+  settled = [],
 }) {
   const dir = runDir(root, runId);
   const enabled = config.codex.lenses.filter((l) => l.on);
@@ -133,9 +135,14 @@ export async function runPass({
   // Unadjudicated until Claude says otherwise — applyVerdicts with no
   // verdicts marks every finding `unreviewed`, which is what a pass that
   // nobody has looked at should say.
-  const reconciled = applyVerdicts(
-    mergeFindings(claude ? [...results, claude] : results),
-    [],
+  //
+  // carrySettled then annotates the ones this run has already decided on,
+  // after applyVerdicts rather than before, or `unreviewed` would overwrite
+  // it. It attaches history only; the verdict stays `unreviewed` because that
+  // is the truth about this pass.
+  const reconciled = carrySettled(
+    applyVerdicts(mergeFindings(claude ? [...results, claude] : results), []),
+    settled,
   );
   const diff = diffPasses(previous, reconciled);
   const degraded = results.filter((r) => r.status !== "ok");

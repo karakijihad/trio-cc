@@ -327,6 +327,74 @@ test("isConverged ignores findings already refuted by the reconciler", () => {
   );
 });
 
+// The decline ledger's convergence half. The carry is history, so it excuses a
+// finding only while this pass's reconciler has said nothing about it, and only
+// when what it carries is a refutation.
+const carried = (over) => ({
+  ...f({ severity: "critical" }),
+  id: "aaaa1111",
+  verdict: "unreviewed",
+  carried: { fromPass: 1, kind: "refuted", priorVerdict: "refute", basis: "b" },
+  ...over,
+});
+
+test("isConverged excuses a re-raise this run already refuted", () => {
+  const curr = [carried()];
+  assert.equal(
+    isConverged(curr, { new: [], open: curr, closed: [] }, CONVERGE),
+    true,
+  );
+});
+
+test("a carried refutation excuses a finding in the new column too", () => {
+  const curr = [carried()];
+  assert.equal(
+    isConverged(curr, { new: curr, open: [], closed: [] }, CONVERGE),
+    true,
+  );
+});
+
+// The split the operator ruled on: a decline is not a refutation. Four of nine
+// recorded declines were findings the reconciler had confirmed, and a run that
+// converged over one would report `clean` while carrying a known defect.
+test("a carried decline of a confirmed defect still blocks", () => {
+  const curr = [
+    carried({
+      carried: {
+        fromPass: 1,
+        kind: "declined",
+        priorVerdict: "confirm",
+        basis: "carrying it deliberately",
+      },
+    }),
+  ];
+  assert.equal(
+    isConverged(curr, { new: [], open: curr, closed: [] }, CONVERGE),
+    false,
+  );
+});
+
+test("a fresh verdict overrides the carry — confirm blocks again", () => {
+  const curr = [carried({ verdict: "confirm" })];
+  assert.equal(
+    isConverged(curr, { new: [], open: curr, closed: [] }, CONVERGE),
+    false,
+  );
+});
+
+test("a fresh refute settles a carried decline the reconciler reopened", () => {
+  const curr = [
+    carried({
+      verdict: "refute",
+      carried: { fromPass: 1, kind: "declined", priorVerdict: "confirm", basis: "b" },
+    }),
+  ];
+  assert.equal(
+    isConverged(curr, { new: [], open: curr, closed: [] }, CONVERGE),
+    true,
+  );
+});
+
 test("extractFindings rejects a null finding instead of throwing", () => {
   const r = extractFindings('```json\n{"findings":[null]}\n```');
   assert.equal(r.ok, false);

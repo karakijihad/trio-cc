@@ -1,4 +1,4 @@
-import { SEVERITIES } from "./findings.mjs";
+import { SEVERITIES, UNREVIEWED } from "./findings.mjs";
 
 export const VERDICTS = ["confirm", "refute", "downgrade", "escalate"];
 
@@ -6,7 +6,11 @@ export const VERDICTS = ["confirm", "refute", "downgrade", "escalate"];
 // "confirm", so a pass nobody had adjudicated reported sixteen confirmed
 // findings and an empty disagreement table — which reads as "the two agree"
 // when it means "nobody has looked yet".
-export const UNREVIEWED = "unreviewed";
+//
+// It lives in findings.mjs now, because isLive there has to test for it and
+// this module already imports SEVERITIES from that one. Re-exported so the
+// callers that know it by this name keep working.
+export { UNREVIEWED };
 
 // Only these are disagreements. "confirm" is agreement and "unreviewed" is
 // silence; neither belongs in a table of where the two models differ.

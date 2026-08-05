@@ -96,6 +96,75 @@ test("buildLensPrompt returns the brief verbatim when prior is null", () => {
   assert.equal(out, "BRIEF TEXT");
 });
 
+// The decline ledger's prompt half (src/settled.mjs). It is the primary
+// mechanism: across every recorded boomerang the lens reworded its title
+// completely, so no mechanical key matched — only prose reaches a lens that is
+// about to write a new title for an old claim.
+const SETTLED = [
+  {
+    id: "aaaa1111",
+    key: "src/a.mjs:10",
+    file: "src/a.mjs",
+    line: 10,
+    title: "the old claim",
+    lens: "security",
+    kind: "refuted",
+    priorVerdict: "refute",
+    pass: 1,
+    basis: "pinned by a.test.mjs:8",
+  },
+];
+
+test("the settled ledger reaches a pass-2 prompt, before the instructions", () => {
+  const out = buildLensPrompt({
+    brief: "BRIEF",
+    lens: "auditor",
+    pass: 2,
+    prior: { findings: [], changes: [], response: null },
+    settled: SETTLED,
+  });
+  assert.match(out, /## Already settled this run/);
+  assert.match(out, /src\/a\.mjs:10/);
+  assert.match(out, /pinned by a\.test\.mjs:8/);
+  assert.ok(
+    out.indexOf("## Already settled this run") < out.indexOf("## Instructions"),
+    "the ledger must sit closest to the ask",
+  );
+});
+
+test("no settled section when the run has settled nothing", () => {
+  const out = buildLensPrompt({
+    brief: "BRIEF",
+    lens: "auditor",
+    pass: 2,
+    prior: { findings: [], changes: [], response: null },
+    settled: [],
+  });
+  assert.doesNotMatch(out, /Already settled/);
+});
+
+test("an absent settled argument is not an error", () => {
+  const out = buildLensPrompt({
+    brief: "BRIEF",
+    lens: "auditor",
+    pass: 2,
+    prior: { findings: [], changes: [], response: null },
+  });
+  assert.doesNotMatch(out, /Already settled/);
+  assert.match(out, /## Instructions/);
+});
+
+test("pass 1 never carries the ledger, even if one is passed", () => {
+  const out = buildLensPrompt({
+    brief: "BRIEF",
+    lens: "auditor",
+    pass: 1,
+    prior: null,
+    settled: SETTLED,
+  });
+  assert.equal(out, "BRIEF");
+});
+
 test("pass-2 prompt carries the brief, a prior finding, a diff hunk, and a declined reason", () => {
   const prior = {
     findings: [
@@ -211,4 +280,45 @@ test("the pass-2 instruction asks for omission, not a resolved field", () => {
   });
   assert.match(out, /Omit a finding the changes resolved/);
   assert.doesNotMatch(out, /which are resolved/);
+});
+
+// response.json is a handover file written outside Trio. readPassResponse only
+// guards a parse failure, not a wrong shape, and either throw here escapes
+// through briefFor and pool() to fail the whole run.
+for (const [label, bad] of [
+  ["a string", { findings: "x" }],
+  ["a number", { findings: 3 }],
+  ["an object", { findings: { a: 1 } }],
+  ["a list of nulls", { findings: [null, null] }],
+]) {
+  test(`a response whose findings is ${label} costs its section, not the run`, () => {
+    let out;
+    assert.doesNotThrow(() => {
+      out = buildLensPrompt({
+        brief: "BRIEF",
+        lens: "auditor",
+        pass: 2,
+        prior: { findings: [], changes: [], response: bad },
+      });
+    });
+    assert.match(out, /## Claude's reply/);
+    assert.match(out, /listed no findings/);
+    assert.match(out, /## Instructions/);
+  });
+}
+
+test("a malformed entry is dropped without taking the sound ones with it", () => {
+  const out = buildLensPrompt({
+    brief: "BRIEF",
+    lens: "auditor",
+    pass: 2,
+    prior: {
+      findings: [],
+      changes: [],
+      response: {
+        findings: [null, { id: "aa11", action: "declined", reason: "by design" }],
+      },
+    },
+  });
+  assert.match(out, /aa11: declined — by design/);
 });

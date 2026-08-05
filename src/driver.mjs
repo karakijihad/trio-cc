@@ -15,6 +15,7 @@ import {
   applyAdjudication,
 } from "./adjudicate.mjs";
 import { validateFindings } from "./findings.mjs";
+import { buildSettled } from "./settled.mjs";
 import { promote, promoteTarget } from "./promote.mjs";
 import { readEvents, makeEvent, appendEvent } from "./bus.mjs";
 import { runDir, passDir, activeMarker, trioDir, isRunId } from "./paths.mjs";
@@ -517,7 +518,7 @@ function baseBrief(root, lens) {
 // The pass-aware brief builder (D14): pass 1 (or no prior pass) is the
 // lens's base brief unchanged; pass 2+ folds in that lens's own prior
 // findings, Claude's file changes since, and Claude's response.json.
-function briefFor(root, runId, scope) {
+function briefFor(root, runId, scope, settled = []) {
   return (lens, pass, prevRecord) => {
     const brief = baseBrief(root, lens);
     if (pass <= 1 || !prevRecord) return buildLensPrompt({ brief, scope });
@@ -526,6 +527,7 @@ function briefFor(root, runId, scope) {
       lens,
       pass,
       scope,
+      settled,
       prior: {
         findings:
           prevRecord.lenses.find((l) => l.lens === lens.name)?.findings ?? [],
@@ -782,6 +784,14 @@ export async function continueRun({
     if (done1) return done1;
 
     writeMarker(root, runId, N + 1);
+
+    // Built once, after applyAdjudication has folded pass N's verdicts into
+    // its record, and handed to both consumers: the prompt (so a lens is told
+    // what this run already settled) and the merge (so a re-raise carries that
+    // history). Building it inside briefFor would re-read every prior pass
+    // once per lens.
+    const settled = buildSettled(root, runId, N);
+
     const { record: record2, converged: converged2 } = await runPass({
       config,
       target,
@@ -790,8 +800,9 @@ export async function continueRun({
       pass: N + 1,
       prevRecord: record,
       runLensFn,
-      briefFor: briefFor(root, runId, scope),
+      briefFor: briefFor(root, runId, scope, settled),
       claudeFindings: claude.findings,
+      settled,
     });
 
     if (isCancelled(root, runId))
