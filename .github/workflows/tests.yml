@@ -1,0 +1,52 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A second push to main while the first is still running makes the first
+# irrelevant — it is testing code nobody will look at again.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # Both, deliberately. This codebase branches on win32 in places that decide
+    # whether a Codex process can be killed at all (taskkill /t vs a signal),
+    # how the CLI is even spawned (node + the JS entry point beside codex.cmd),
+    # and how a pid is identified (CIM vs ps). A green Linux run says nothing
+    # about any of it, and Windows is where the author works.
+    name: ${{ matrix.os }} · node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing is a result, not a reason to cancel the other —
+      # knowing whether a break is platform-specific is most of the diagnosis.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [22, 24]
+
+    # The suite spawns a fake Codex per lens per pass, hundreds of times. It
+    # runs in about two and a half minutes on Linux and considerably longer on
+    # a Windows runner, so this is set to catch a hang, not to pace the tests.
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # No install step and no cache: Trio has no dependencies, dev or
+      # otherwise, and no lockfile to restore. Adding `npm ci` here would fail
+      # for the lack of one, and adding a cache would key on a file that does
+      # not exist.
+      - name: Node and platform
+        run: node --version && node -p "process.platform + ' ' + process.arch"
+
+      - name: Tests
+        run: npm test
