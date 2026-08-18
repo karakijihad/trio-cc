@@ -15,13 +15,13 @@ import { SANDBOX } from "./codex-lane.mjs";
 //
 // So the account is asked the cheapest question there is. When usage is spent
 // this comes back in about a second and nothing else has happened yet.
-export const CANARY_PROMPT =
+export const PING_PROMPT =
   "Reply with the single word: ok. Do not read any files.";
 
 // Short on purpose. This is not doing work, it is finding out whether work is
-// possible, and a canary that can hang for the lens timeout is worse than no
-// canary — it delays the very failure it exists to surface.
-export const CANARY_TIMEOUT_MS = 60_000;
+// possible, and a ping that can hang for the lens timeout is worse than no
+// ping — it delays the very failure it exists to surface.
+export const PING_TIMEOUT_MS = 60_000;
 
 // Three outcomes, and the third is the one that matters most:
 //
@@ -31,13 +31,13 @@ export const CANARY_TIMEOUT_MS = 60_000;
 //   {ok: "unknown", failure}     — something went wrong that this cannot
 //                                  interpret. PROCEED ANYWAY.
 //
-// The third exists because a canary is a convenience, not a gate. If it fails
+// The third exists because a ping is a convenience, not a gate. If it fails
 // for a reason nobody recognises — a slow network, an odd exit code, a
 // sandbox quirk on one machine — blocking the run would mean this probe can
 // veto every audit in a project on evidence it could not read. The real lens
 // wave is the authority; this only ever short-circuits the cases it is sure
 // about.
-export function canary({ target, runSync = spawnSync, timeoutMs = CANARY_TIMEOUT_MS }) {
+export function ping({ target, runSync = spawnSync, timeoutMs = PING_TIMEOUT_MS }) {
   let cmd;
   try {
     cmd = codexCommand([
@@ -59,7 +59,7 @@ export function canary({ target, runSync = spawnSync, timeoutMs = CANARY_TIMEOUT
   let r;
   try {
     r = runSync(cmd.file, cmd.args, {
-      input: CANARY_PROMPT,
+      input: PING_PROMPT,
       encoding: "utf8",
       timeout: timeoutMs,
       ...cmd.opts,

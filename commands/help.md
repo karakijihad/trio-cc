@@ -22,6 +22,9 @@ Give, in a few lines:
 - The four everyday commands: `/trio` (control panel), `/trio:loop` (run the
   audit), `/trio:consult <question>` (ask both, compare), `/trio:on`/`off`
   (enable or disable).
+- If Codex cannot be reached at all, `/trio:solo` runs the same lens briefs as
+  blind Claude subagents — the procedure without the second model, and it says
+  so rather than reporting like a two-model run. Claude offers it on its own.
 - Where next: `/trio` for state, `/trio:doctor` if something behaves oddly.
 
 ## With a `$ARGUMENTS` topic
@@ -29,7 +32,8 @@ Give, in a few lines:
 Explain that one thing in depth, in Trio's own terms, using the reference
 below. Topics include a command name, a concept (`lens`, `finding`, `pass`,
 `reconciler`, `convergence`, `verdict`, `promotion`, `model`, `view`), a lens
-name (`auditor`, `security`, `tester`, `simplifier`, `consistency`), or a
+name (`auditor`, `security`, `tester`, `simplifier`, `consistency`), the
+fallback (`solo`, `ping`, `codex_unavailable`), or a
 config key (`enabled`, `maxIterations`, `codex.parallel`, `artifacts.offerToCreate`,
 `codex.lenses`, `view.mode`, `view.port`, `view.autoOpen`,
 `converge.blockOn`, `converge.requireNoNewFindings`,

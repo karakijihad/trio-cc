@@ -32,11 +32,14 @@ with a table of where they disagree.
 ```
 you: "add feature X"
   Claude implements
+    ├─ ping — is the account usable at all? out of usage → nothing spent,
+    │         and Claude offers /trio:solo instead
     ├─ pass 1 — Codex audits through parallel lenses
     │   └─ Claude reconciles: confirm · refute · downgrade · escalate → fixes
-    └─ pass 2 — Codex re-audits
-        ├─ clean → audits promoted to Docs/Audit/ → done
-        └─ ceiling reached → open findings reported plainly, never as success
+    └─ pass 2 — Codex re-audits, then parks for adjudication like any pass
+        └─ Claude reconciles, then one `continue` settles the run
+            ├─ clean → audits promoted to Docs/Audit/ → done
+            └─ ceiling reached → open findings reported plainly, never as success
 ```
 
 Two passes by default. Convergence means no open Critical or Major **and** no
@@ -213,7 +216,7 @@ installed, that you're logged in, and that the CLI flags Trio depends on
 still exist. If any of that is off, Trio refuses to start and names the one
 command to fix it, instead of failing partway through a run.
 
-**The canary** — none of those checks can see a spent quota: an account with
+**The ping** — none of those checks can see a spent quota: an account with
 no credit left is installed, logged in, and looks perfectly healthy right up
 until a lens tries to use it. So the last thing before a run commits to
 anything is one trivial read-only call. If it comes back out-of-usage or

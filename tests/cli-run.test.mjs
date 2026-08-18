@@ -20,7 +20,7 @@ import {
   fakeEnv,
   CLI,
 } from "./helpers/fake-codex.mjs";
-import { CANARY_PROMPT } from "../src/canary.mjs";
+import { PING_PROMPT } from "../src/ping.mjs";
 
 const FINDING = JSON.stringify([
   {
@@ -314,9 +314,9 @@ test("run --scope: reaches pass 1 and survives into continue", () => {
   const sent = readFileSync(briefs, "utf8")
     .split("===BRIEF===")
     .filter((s) => s.trim())
-    // The canary probes the account before the wave and sends its own
+    // The ping probes the account before the wave and sends its own
     // one-line prompt. It is not a pass and carries no scope.
-    .filter((s) => !s.includes(CANARY_PROMPT));
+    .filter((s) => !s.includes(PING_PROMPT));
   assert.equal(sent.length, 2, "one brief per pass");
   for (const brief of sent)
     assert.match(brief, /Concentrate on: src\/app\.js only/);

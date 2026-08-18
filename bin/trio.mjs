@@ -37,6 +37,7 @@ import {
 } from "../src/driver.mjs";
 import { finalizeRun, newRunId } from "../src/orchestrator.mjs";
 import { runLens, killTree, stopAllLenses } from "../src/codex-lane.mjs";
+import { ping } from "../src/ping.mjs";
 import { start } from "../src/serve.mjs";
 import {
   activeMarker,
@@ -754,6 +755,42 @@ switch (cmd) {
         if (!check.ok)
           process.stderr.write(`⚠ lens ${lens.name}: ${check.error}\n`);
       }
+    }
+
+    // The last check before anything is committed to, and it has to sit here
+    // rather than beside the preflight above because it needs `target`.
+    //
+    // preflight asks whether Codex is installed and logged in. Neither
+    // question can see a spent quota — the account is installed, logged in,
+    // and looks perfectly healthy right up until a lens tries to use it.
+    // Without this, an out-of-usage run still claimed the project lock, minted
+    // a run directory, opened a browser window, and spawned every lens, to
+    // discover in parallel what one trivial call answers in about a second.
+    //
+    // Only permanent refusals stop the run. Anything this cannot read plainly
+    // proceeds — the lens wave is the authority, and a probe that could veto
+    // every audit in a project on evidence it did not understand would be a
+    // worse failure than the one it prevents.
+    const probe = ping({ target });
+    if (probe.ok === false) {
+      out(
+        JSON.stringify(
+          {
+            status: "refused",
+            reason: "codex_unavailable",
+            codexUnavailable: {
+              available: false,
+              kind: probe.failure.kind,
+              message: probe.failure.message,
+              fix: probe.failure.fix,
+            },
+          },
+          null,
+          2,
+        ),
+      );
+      process.exitCode = 1;
+      break;
     }
 
     // Trio is on by default, so a first run can be the first thing that ever

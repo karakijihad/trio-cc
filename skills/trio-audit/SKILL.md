@@ -132,14 +132,14 @@ Skip this only if the operator explicitly asks for a Codex-only run.
    instead. It arrives two ways, and both carry the same
    `codexUnavailable: {kind, message, fix}`:
 
-   - `status: "refused"` (exit 1) — the canary caught it *before* the run
+   - `status: "refused"` (exit 1) — the ping caught it *before* the run
      started. No lock was taken, no run directory was made, no viewer opened,
      and nothing was spent. This is the usual one.
    - `status: "finished"`, `verdict: "failed"` — the account went out
-     mid-wave, after the canary passed. The run is finalized, the lock is
+     mid-wave, after the ping passed. The run is finalized, the lock is
      released, and nothing was promoted (`promotion.reason` says why).
 
-   Transient faults never reach you: the canary lets them through and the lens
+   Transient faults never reach you: the ping lets them through and the lens
    retries them itself.
 
    `status: "finished"` → go to Reporting.
