@@ -1,6 +1,6 @@
 ---
 description: Pick a lens's model and reasoning effort
-argument-hint: [lens]
+argument-hint: "[lens]"
 ---
 
 Run `node "${CLAUDE_PLUGIN_ROOT}/bin/trio.mjs" models --json` to read the

@@ -1,6 +1,6 @@
 ---
 description: Pick which audit lenses run
-argument-hint: [preset]
+argument-hint: "[preset]"
 ---
 
 Run `node "${CLAUDE_PLUGIN_ROOT}/bin/trio.mjs" models --json` to read which

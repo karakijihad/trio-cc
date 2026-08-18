@@ -1,6 +1,6 @@
 ---
 description: What every Trio command and concept means
-argument-hint: [topic]
+argument-hint: "[topic]"
 ---
 
 Explain Trio to the operator using the reference below. Answer from this

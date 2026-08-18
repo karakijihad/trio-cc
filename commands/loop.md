@@ -1,6 +1,6 @@
 ---
 description: Run the Codex audit loop
-argument-hint: [--max N] [--scope TEXT]
+argument-hint: "[--max N] [--scope TEXT]"
 ---
 
 Use the `trio-audit` skill to run the loop. Pass through any `--max`,

@@ -1,6 +1,6 @@
 ---
 description: Read or change a Trio setting
-argument-hint: get | set
+argument-hint: "get | set"
 ---
 
 Run `node "${CLAUDE_PLUGIN_ROOT}/bin/trio.mjs" config $ARGUMENTS` and report the

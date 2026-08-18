@@ -1,6 +1,6 @@
 ---
-description: Change a lens: model, effort, or on/off
-argument-hint: <lens>
+description: "Change a lens: model, effort, or on/off"
+argument-hint: "<lens>"
 ---
 
 Run `node "${CLAUDE_PLUGIN_ROOT}/bin/trio.mjs" lens $ARGUMENTS` and report the
