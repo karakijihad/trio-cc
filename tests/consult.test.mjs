@@ -7,6 +7,11 @@ import { Readable } from "node:stream";
 import { EventEmitter } from "node:events";
 import { askCodex } from "../src/consult.mjs";
 import { readEvents } from "../src/bus.mjs";
+import { fakeCodexOnPath } from "./helpers/fake-codex.mjs";
+
+// codexCommand resolves against PATH; without this these tests only pass on
+// a machine that happens to have the real Codex installed.
+fakeCodexOnPath();
 
 const tmp = () => mkdtempSync(join(tmpdir(), "trio-consult-"));
 

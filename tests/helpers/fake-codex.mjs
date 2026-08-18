@@ -3,8 +3,9 @@
 // be exercised in the default test suite with no network and no OpenAI
 // account. It answers the three probes Trio makes (--version, login status,
 // exec --help) and emits a JSONL audit stream for `exec`.
-import { mkdirSync, writeFileSync, chmodSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, chmodSync } from "node:fs";
 import { join, delimiter } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const VERSION = "0.146.0";
@@ -135,3 +136,22 @@ export function fakeEnv({ pathDir, codexHome, project, extra = {} }) {
 
 export const CLI = fileURLToPath(new URL("../../bin/trio.mjs", import.meta.url));
 export const FAKE_VERSION = VERSION;
+
+// Unit tests that inject a spawnFn still go through codexCommand to build the
+// command, and on win32 that refuses unless it can find codex.cmd on PATH with
+// its sibling JS entry point beside it. On a developer machine the real Codex
+// install satisfies that by accident, so the tests passed locally and failed
+// the first time CI ran them on a Windows runner with no Codex on it.
+//
+// Prepending a fake to this process's PATH makes them hermetic: they stop
+// depending on whether the person running them happens to have Codex
+// installed. node:test runs each file in its own process, so this cannot
+// leak into another file's environment.
+export function fakeCodexOnPath() {
+  const dir = mkdtempSync(join(tmpdir(), "trio-path-"));
+  installFakeCodex(dir);
+  const next = `${dir}${delimiter}${process.env.PATH ?? ""}`;
+  process.env.PATH = next;
+  process.env.Path = next;
+  return dir;
+}

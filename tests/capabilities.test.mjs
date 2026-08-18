@@ -317,7 +317,10 @@ test("probeState re-probes a fresh-by-timestamp cache with no preflight key, rat
 
 test("probeState with force:true calls run and refreshes probedAt", () => {
   const root = mkdtempSync(join(tmpdir(), "trio-probestate-"));
-  const staleAt = new Date().toISOString();
+  // A genuinely old timestamp, not `now`. Taking it from the clock made the
+  // assertion below a race the test lost on any machine fast enough to probe
+  // inside one millisecond — which is every CI runner.
+  const staleAt = "2020-01-01T00:00:00.000Z";
   saveCapabilities(root, {
     cliVersion: "0.144.0",
     models: [],

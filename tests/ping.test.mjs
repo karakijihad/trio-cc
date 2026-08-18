@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ping, PING_PROMPT, PING_TIMEOUT_MS } from "../src/ping.mjs";
+import { fakeCodexOnPath } from "./helpers/fake-codex.mjs";
+
+// codexCommand resolves against PATH; without this these tests only pass on
+// a machine that happens to have the real Codex installed.
+fakeCodexOnPath();
 
 const fake = (result) => {
   const calls = [];
