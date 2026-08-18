@@ -4,6 +4,16 @@ What went wrong, and what was done about it. One line each, newest first.
 
 ---
 
+## 2026-08-18 — the last pass, and what happens when Codex is out
+
+- **A run could reach `ceiling_reached` over findings nobody had reviewed.** The final pass was judged on raw lens output, where every finding is `unreviewed` and therefore live, so one unreviewed `major` closed the run. Every earlier pass was judged *after* adjudication — the last one was held to a different standard purely because the loop had run out of passes. It now parks like any other pass (`final: true`), and `continue` settles it once the verdicts are in.
+- **The extension offer's counts were counts of unreviewed claims** — the `closed`/`new` numbers that are the whole basis for spending another pass. They are adjudicated now, because the offer is made after the settling call.
+- **Every Codex failure read the same: `codex exited 1`.** A spent quota and a dropped connection were indistinguishable, so the only way to tell them apart was to spend five more lenses. `src/failure.mjs` classifies them: transient faults retry themselves once, and a spent quota or refused credentials end the run and say so.
+- **stderr was piped and never read** — the one place a cause is reliably written, discarded. Worse, an unread pipe can fill: a lens failing verbosely could block on a full buffer and then be killed by the deadline as though it had hung.
+- **A run that audited nothing kept holding the project's lock.** When every lens fails for a reason waiting will not fix, there is nothing to adjudicate — it finalizes instead of parking, so the fallback is not blocked by the run that failed.
+- **`continue` refused the settling call for not carrying a Claude lane**, a fresh audit for a pass that was never going to run. The guard moved to after the finalize decision, where a pass N+1 actually exists.
+- **Codex being unavailable meant no audit at all** — `trio-solo` runs the same lens briefs as blind Claude subagents. It is honest about being one model wearing two hats, and never reports in a two-model run's vocabulary.
+
 ## 2026-08-05 — the decline ledger
 
 - **Refuted and declined findings came back pass after pass**, because run memory was one pass deep — a run-level ledger (`src/settled.mjs`) now folds every pass's settlements and shows them to every lens.

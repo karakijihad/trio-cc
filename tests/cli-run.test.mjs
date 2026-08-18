@@ -20,6 +20,7 @@ import {
   fakeEnv,
   CLI,
 } from "./helpers/fake-codex.mjs";
+import { CANARY_PROMPT } from "../src/canary.mjs";
 
 const FINDING = JSON.stringify([
   {
@@ -54,6 +55,23 @@ function project({ findings } = {}) {
   assert.equal(cli(["on"]).status, 0);
   assert.equal(cli(["config", "set", "view.mode", "off"]).status, 0);
   return { root, cli };
+}
+
+// The last pass a run's budget allows parks for adjudication like every other
+// pass, so `--max 1` no longer finalizes inside the first invocation: it comes
+// back `awaiting_response` with `final: true`, and `continue` settles it.
+//
+// These tests care about the verdict, not about adjudicating anything, so they
+// settle with no verdicts.json — which leaves every finding `unreviewed`, and
+// an unreviewed finding is still live, so it still blocks. That is the point:
+// the verdict is the same one as before, it just no longer arrives before
+// anyone could have looked.
+function settle(cli, first) {
+  if (first.status === "finished") return first;
+  assert.equal(first.final, true, "a parked last pass must say so");
+  const res = cli(["continue"]);
+  assert.equal(res.status, 0, res.stderr);
+  return JSON.parse(res.stdout);
 }
 
 test("run: a clean audit produces a verdict and clears the marker", () => {
@@ -295,7 +313,10 @@ test("run --scope: reaches pass 1 and survives into continue", () => {
 
   const sent = readFileSync(briefs, "utf8")
     .split("===BRIEF===")
-    .filter((s) => s.trim());
+    .filter((s) => s.trim())
+    // The canary probes the account before the wave and sends its own
+    // one-line prompt. It is not a pass and carries no scope.
+    .filter((s) => !s.includes(CANARY_PROMPT));
   assert.equal(sent.length, 2, "one brief per pass");
   for (const brief of sent)
     assert.match(brief, /Concentrate on: src\/app\.js only/);
@@ -309,9 +330,9 @@ test("continue: an unanswered finding still open at the ceiling reports ceiling_
   const first = JSON.parse(cli(["run", "--lenses", "auditor", "--max", "2"]).stdout);
   assert.equal(first.status, "awaiting_response");
 
-  const res = cli(["continue"]);
-  assert.equal(res.status, 0, res.stderr);
-  const r = JSON.parse(res.stdout);
+  const second = cli(["continue"]);
+  assert.equal(second.status, 0, second.stderr);
+  const r = settle(cli, JSON.parse(second.stdout));
   assert.equal(r.status, "finished");
   assert.equal(r.verdict, "ceiling_reached");
   assert.equal(r.passes, 2);
@@ -364,7 +385,13 @@ test("run: a lens that exits non-zero finishes the run rather than crashing", ()
 
   const res = cli(["run", "--lenses", "auditor", "--max", "1"]);
   assert.equal(res.status, 0, res.stderr);
-  const r = JSON.parse(res.stdout);
+  const parked = JSON.parse(res.stdout);
+  // A degraded pass does not converge, so this is the ceiling: it parks, and
+  // the settling call is what produces the verdict.
+  assert.equal(parked.final, true);
+  const settled = cli(["continue"]);
+  assert.equal(settled.status, 0, settled.stderr);
+  const r = JSON.parse(settled.stdout);
   assert.equal(r.status, "finished");
   assert.notEqual(r.verdict, "clean");
   assert.equal(existsSync(join(root, ".trio", "active")), false);
@@ -470,7 +497,7 @@ test("run: a hand-edited view.port is refused instead of reaching the browser la
 
 test("run: a missing promote directory is reported as an offer, not a silence", () => {
   const { root, cli } = project({ findings: FINDING });
-  const r = JSON.parse(cli(["run", "--lenses", "auditor", "--max", "1"]).stdout);
+  const r = settle(cli, JSON.parse(cli(["run", "--lenses", "auditor", "--max", "1"]).stdout));
   assert.equal(r.promoted, null);
   assert.deepEqual(r.promotion, {
     skipped: true,
@@ -482,7 +509,7 @@ test("run: a missing promote directory is reported as an offer, not a silence", 
 
 test("promote --create makes the directory and promotes the finished run", () => {
   const { root, cli } = project({ findings: FINDING });
-  const r = JSON.parse(cli(["run", "--lenses", "auditor", "--max", "1"]).stdout);
+  const r = settle(cli, JSON.parse(cli(["run", "--lenses", "auditor", "--max", "1"]).stdout));
 
   const p = cli(["promote", r.runId, "--create"]);
   assert.equal(p.status, 0, p.stderr);
@@ -505,7 +532,7 @@ test("promote --create makes the directory and promotes the finished run", () =>
 
 test("promote without --create refuses rather than creating the directory", () => {
   const { root, cli } = project({ findings: FINDING });
-  const r = JSON.parse(cli(["run", "--lenses", "auditor", "--max", "1"]).stdout);
+  const r = settle(cli, JSON.parse(cli(["run", "--lenses", "auditor", "--max", "1"]).stdout));
   const p = cli(["promote", r.runId]);
   assert.equal(p.status, 1);
   assert.match(p.stdout, /does not exist/);
@@ -527,7 +554,7 @@ test("declining the offer silences it for good", () => {
     cli(["config", "set", "artifacts.offerToCreate", "false"]).status,
     0,
   );
-  const r = JSON.parse(cli(["run", "--lenses", "auditor", "--max", "1"]).stdout);
+  const r = settle(cli, JSON.parse(cli(["run", "--lenses", "auditor", "--max", "1"]).stdout));
   assert.equal(r.promotion.offer, false);
   assert.equal(r.promotion.skipped, true);
 });
@@ -535,7 +562,7 @@ test("declining the offer silences it for good", () => {
 test("run: promotes both audits when the promote directory exists", () => {
   const { root, cli } = project({ findings: FINDING });
   mkdirSync(join(root, "Docs", "Audit"), { recursive: true });
-  const r = JSON.parse(cli(["run", "--lenses", "auditor", "--max", "1"]).stdout);
+  const r = settle(cli, JSON.parse(cli(["run", "--lenses", "auditor", "--max", "1"]).stdout));
   assert.equal(r.status, "finished");
   assert.ok(r.promoted, "promotion result");
   assert.ok(existsSync(r.promoted.codexPath));
@@ -549,7 +576,7 @@ test("ceiling_reached carries an extension offer with the progress counts", () =
   const { cli } = project({ findings: FINDING });
   // --max 1 hits the ceiling inside the first invocation: pass 1 both runs
   // and exhausts the budget, so this finalizes without ever parking.
-  const done = JSON.parse(cli(["run", "--max", "1", "--lenses", "auditor"]).stdout);
+  const done = settle(cli, JSON.parse(cli(["run", "--max", "1", "--lenses", "auditor"]).stdout));
   assert.equal(done.verdict, "ceiling_reached");
   assert.equal(done.extension.offer, true);
   assert.equal(done.extension.blocking, 1);
@@ -570,7 +597,7 @@ test("a clean run carries no extension offer", () => {
 // of starting over with nothing to diff against.
 test("extend: reopens a ceiling-reached run for one more pass", () => {
   const { root, cli } = project({ findings: FINDING });
-  const first = JSON.parse(cli(["run", "--max", "1", "--lenses", "auditor"]).stdout);
+  const first = settle(cli, JSON.parse(cli(["run", "--max", "1", "--lenses", "auditor"]).stdout));
   assert.equal(first.verdict, "ceiling_reached");
 
   const r = cli(["extend", first.runId]);

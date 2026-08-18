@@ -12,7 +12,9 @@ Run `node "${CLAUDE_PLUGIN_ROOT}/bin/trio.mjs" status`.
 - **Panel says disabled** → do not run the loop. Tell the operator Trio is off,
   that `/trio:on` enables it, and then do the review yourself. Never silently skip.
 - **Panel reports a drift warning or a preflight failure** → state the problem
-  and the one command that fixes it. Do not attempt a run.
+  and the one command that fixes it. Do not attempt a run. When the failure is
+  `not_logged_in` or the operator says they are out of Codex usage, offer the
+  `trio-solo` skill — the same lenses, run as Claude subagents.
 - **Panel says enabled and healthy** → continue.
 
 ## Second: is the project already busy?
@@ -122,7 +124,25 @@ Skip this only if the operator explicitly asks for a Codex-only run.
    operator gave. The viewer opens itself when
    configured (`window` mode is the default; `pane` users open the printed
    URL with VS Code's Simple Browser: the server is already running).
-2. Read the JSON the command prints. `status: "finished"` → go to Reporting.
+2. Read the JSON the command prints.
+
+   **`codexUnavailable` on the result** → Codex cannot be used, for a reason
+   waiting will not fix. Do not retry it. Hand off to the **`trio-solo`**
+   skill, which asks the operator whether to audit with Claude subagents
+   instead. It arrives two ways, and both carry the same
+   `codexUnavailable: {kind, message, fix}`:
+
+   - `status: "refused"` (exit 1) — the canary caught it *before* the run
+     started. No lock was taken, no run directory was made, no viewer opened,
+     and nothing was spent. This is the usual one.
+   - `status: "finished"`, `verdict: "failed"` — the account went out
+     mid-wave, after the canary passed. The run is finalized, the lock is
+     released, and nothing was promoted (`promotion.reason` says why).
+
+   Transient faults never reach you: the canary lets them through and the lens
+   retries them itself.
+
+   `status: "finished"` → go to Reporting.
    `status: "awaiting_response"` → for pass N:
    a. Read `.trio/runs/<runId>/pass-N/reconcile.json` — **now**, not earlier.
    Findings carry a `lens` naming every lane that raised them; one reading
@@ -153,6 +173,19 @@ Skip this only if the operator explicitly asks for a Codex-only run.
    only your lane raised would be diffed as **closed** — reported fixed
    because nobody re-checked it, which is the one mistake this loop must
    never make.
+
+   **Unless the result carried `final: true`.** That is the last pass the
+   budget allows, so there is no next pass and no fresh audit to write. Do
+   a, b and c exactly as above, then run
+   `node "${CLAUDE_PLUGIN_ROOT}/bin/trio.mjs" continue` with **no**
+   `--claude-findings` — it applies your verdicts and settles the run. Only
+   then does a verdict exist: `clean` if nothing blocking survived
+   adjudication, `ceiling_reached` if it did. Go to Reporting with what that
+   call returns.
+
+   A run never reaches its verdict on findings nobody has looked at. The
+   final pass is adjudicated on the same terms as every pass before it —
+   that call is how.
 3. View-mode table:
 
    | Mode     | What to do                                                            |
@@ -186,6 +219,9 @@ Report exactly what `verdict.json` says:
   **No** → report `ceiling_reached` as final. Never extend without asking, and
   never extend more than once without asking again.
 - Any lens marked `failed` or `unparseable` — say coverage was partial and name the lens.
+- **Every** lens failed — that is not partial coverage, it is none. Nothing is
+  promoted (`promotion.reason` says so) and the verdict is `failed`. Never
+  describe it as an audit that found nothing.
 
 Never round a partial or ceiling-limited run up to "clean".
 

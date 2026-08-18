@@ -16,6 +16,7 @@ import {
 } from "./adjudicate.mjs";
 import { validateFindings } from "./findings.mjs";
 import { buildSettled } from "./settled.mjs";
+import { codexUnavailable } from "./failure.mjs";
 import { promote, promoteTarget } from "./promote.mjs";
 import { readEvents, makeEvent, appendEvent } from "./bus.mjs";
 import { runDir, passDir, activeMarker, trioDir, isRunId } from "./paths.mjs";
@@ -409,9 +410,24 @@ function finalize({ root, runId, config, verdict }) {
   const passes = collectPasses(root, runId);
   try {
     finalizeRun({ root, runId, verdict, passCount: passes.length });
+
+    // Did any lens actually audit anything? promote does not ask — it checks
+    // that the promote directory exists and writes the report — so a run
+    // where every lens died still produced `Docs/Audit/codex/<date>/audit-N.md`
+    // headed "Codex Audit", listing a findings count, for an audit that never
+    // happened. Read six weeks later there is nothing in it that says so.
+    //
+    // That is the conflation this codebase refuses everywhere else: a lane
+    // that reported nothing is absent, not empty. An outage promoted as a
+    // report is the same claim in document form, and it is worse, because the
+    // document outlives the terminal that explained it.
+    const audited = passes.some((p) =>
+      (p.lenses ?? []).some((l) => l.status === "ok"),
+    );
+
     let promoted = null;
     try {
-      promoted = promote({ root, config, runId, passes, verdict });
+      if (audited) promoted = promote({ root, config, runId, passes, verdict });
     } catch (err) {
       appendEvent(
         runDir(root, runId),
@@ -431,17 +447,26 @@ function finalize({ root, runId, config, verdict }) {
       runId,
       passes: passes.length,
       promoted,
-      // Only present when there was nothing to promote into. `offer` is what
-      // tells Claude to ask once whether to create it; the operator declining
-      // sets artifacts.offerToCreate false and this goes quiet for good.
+      // Two different silences, and they must not read alike. `offer` is what
+      // tells Claude to ask once whether to create the directory; the operator
+      // declining sets artifacts.offerToCreate false and this goes quiet for
+      // good. But a run with no audit in it has nothing to promote *into* any
+      // directory, so offering to create one would be asking the operator to
+      // make a home for a document that should not be written.
       ...(promoted
         ? {}
         : {
-            promotion: {
-              skipped: true,
-              path: config.artifacts.promoteTo,
-              offer: config.artifacts.offerToCreate !== false,
-            },
+            promotion: audited
+              ? {
+                  skipped: true,
+                  path: config.artifacts.promoteTo,
+                  offer: config.artifacts.offerToCreate !== false,
+                }
+              : {
+                  skipped: true,
+                  reason: "no lens produced an audit — nothing to promote",
+                  offer: false,
+                },
           }),
       ...extensionOffer({ root, runId, config, verdict, passes }),
     };
@@ -488,11 +513,75 @@ function finalizeFailed({ root, runId, config, err }) {
 // Shared decision (D18): converged -> clean, ceiling hit -> ceiling_reached,
 // otherwise null (caller proceeds — either to the next pass, or by
 // returning awaiting_response if there is no next pass this invocation).
+//
+// Called from ONE position: after a pass's verdicts have been applied. That
+// is what makes `ceiling_reached` here mean "Claude looked at these findings
+// and they stand", and it is the difference this function used to elide —
+// see justRanPass below.
 function finalizeIfDone({ root, runId, config, pass, converged }) {
   if (converged) return finalize({ root, runId, config, verdict: "clean" });
   if (pass >= config.maxIterations)
     return finalize({ root, runId, config, verdict: "ceiling_reached" });
   return null;
+}
+
+// Every lens failed, and for a reason that waiting will not fix — the account
+// is out of usage, or its credentials were refused. The run is over; the only
+// question left is what the operator wants to do instead.
+//
+// Finalized rather than parked. A run that audited nothing has nothing to
+// adjudicate, and leaving it open would hold the project's lock while the
+// operator decides — so `trio-solo`, the thing they are most likely to reach
+// for next, would be blocked by the very run that failed.
+//
+// `codexUnavailable` on the result is what the skill reads to make the offer.
+function codexIsOut({ root, runId, config, record }) {
+  const out = codexUnavailable(record.lenses);
+  if (!out) return null;
+  appendEvent(
+    runDir(root, runId),
+    makeEvent({
+      run: runId,
+      pass: record.pass,
+      lane: "trio",
+      actor: "trio",
+      kind: "error",
+      payload: { error: `every lens failed: ${out.message}`, kind: out.kind },
+    }),
+  );
+  return {
+    ...finalize({ root, runId, config, verdict: "failed" }),
+    codexUnavailable: out,
+  };
+}
+
+// The other position: a pass has just finished and nobody has adjudicated it.
+// `converged` here is computed from raw lens output, where every finding is
+// `unreviewed` and therefore live — so one unreviewed `major` is enough to
+// say "not converged", and at the ceiling that used to write
+// `ceiling_reached` on the spot.
+//
+// That was the last pass being held to a different standard than every pass
+// before it. Pass 1 is judged after Claude adjudicates it; the final pass was
+// judged before, purely because the loop had run out of passes to spend. A
+// run could close over findings that the reconciler would have refuted, and
+// the extension offer's `closed`/`new` counts — the whole basis for deciding
+// whether another pass is worth it — were counts of unreviewed claims.
+//
+// So a converged pass still finishes immediately (nothing is open, there is
+// nothing to adjudicate), and everything else parks. `final` tells the caller
+// this is the last pass the budget allows: adjudicate it, write the verdicts,
+// and call `continue` once more to settle the run.
+function justRanPass({ root, runId, config, pass, converged, record }) {
+  if (converged) return finalize({ root, runId, config, verdict: "clean" });
+  return {
+    status: "awaiting_response",
+    runId,
+    pass,
+    findings: record.findings,
+    degraded: record.degraded,
+    ...(pass >= config.maxIterations ? { final: true } : {}),
+  };
 }
 
 // A lens name reaches two path joins here, and .trio/config.json is an
@@ -667,15 +756,10 @@ export async function startRun({
     if (isCancelled(root, runId))
       return finalize({ root, runId, config, verdict: "cancelled" });
 
-    const done = finalizeIfDone({ root, runId, config, pass: 1, converged });
-    if (done) return done;
-    return {
-      status: "awaiting_response",
-      runId,
-      pass: 1,
-      findings: record.findings,
-      degraded: record.degraded,
-    };
+    const out = codexIsOut({ root, runId, config, record });
+    if (out) return out;
+
+    return justRanPass({ root, runId, config, pass: 1, converged, record });
   } catch (err) {
     return finalizeFailed({ root, runId, config, err });
   }
@@ -757,6 +841,22 @@ export async function continueRun({
   try {
     const stored = readReconcile(root, runId, N);
 
+    const { record, converged } = applyAdjudication({
+      root,
+      config,
+      runId,
+      pass: N,
+      record: stored,
+    });
+
+    const done1 = finalizeIfDone({ root, runId, config, pass: N, converged });
+    if (done1) return done1;
+
+    // Only past this line is there going to be a pass N+1, and only a pass
+    // N+1 needs a Claude lane. The guard used to run before adjudication, so
+    // the settling call that closes a ceiling-reached run — which runs no
+    // pass and needs no fresh audit — was refused for not carrying one.
+    //
     // A lane that audited the previous pass and not this one is worse than a
     // lane that never ran. diffPasses compares this pass against the last, so
     // every Claude-only finding from pass N would appear in pass N+1's
@@ -771,17 +871,6 @@ export async function continueRun({
           `would be diffed as closed without anyone re-checking them. Audit the ` +
           `scope again and pass --claude-findings.`,
       };
-
-    const { record, converged } = applyAdjudication({
-      root,
-      config,
-      runId,
-      pass: N,
-      record: stored,
-    });
-
-    const done1 = finalizeIfDone({ root, runId, config, pass: N, converged });
-    if (done1) return done1;
 
     writeMarker(root, runId, N + 1);
 
@@ -808,22 +897,17 @@ export async function continueRun({
     if (isCancelled(root, runId))
       return finalize({ root, runId, config, verdict: "cancelled" });
 
-    const done2 = finalizeIfDone({
+    const out = codexIsOut({ root, runId, config, record: record2 });
+    if (out) return out;
+
+    return justRanPass({
       root,
       runId,
       config,
       pass: N + 1,
       converged: converged2,
+      record: record2,
     });
-    if (done2) return done2;
-
-    return {
-      status: "awaiting_response",
-      runId,
-      pass: N + 1,
-      findings: record2.findings,
-      degraded: record2.degraded,
-    };
   } catch (err) {
     return finalizeFailed({ root, runId, config, err });
   }

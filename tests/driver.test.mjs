@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { startRun, continueRun } from "../src/driver.mjs";
 import { DEFAULT_CONFIG } from "../src/config.mjs";
 import { findingId } from "../src/findings.mjs";
+import { classifyFailure } from "../src/failure.mjs";
 import { appendEvent, makeEvent, readEvents } from "../src/bus.mjs";
 import {
   runDir,
@@ -335,21 +336,27 @@ test("continueRun: a declined-but-confirmed finding re-raised in pass 2 still bl
     }),
   );
 
-  const r = await continueRun({
-    root,
-    runLensFn: async ({ lens }) => ({
-      lens: lens.name,
-      status: "ok",
-      findings: [located("a resource is not released")],
-      threadId: "t",
-      raw: "",
-    }),
+  const reRaise = async ({ lens }) => ({
+    lens: lens.name,
+    status: "ok",
+    findings: [located("a resource is not released")],
+    threadId: "t",
+    raw: "",
   });
+  // Pass 2 is the last the budget allows, so it parks for adjudication
+  // rather than reaching a verdict on findings nobody has reviewed.
+  const parked = await continueRun({ root, runLensFn: reRaise });
+  assert.equal(parked.status, "awaiting_response");
+  assert.equal(parked.final, true);
 
   const rec = JSON.parse(
     readFileSync(join(passDir(root, started.runId, 2), "reconcile.json"), "utf8"),
   );
   assert.equal(rec.findings[0].carried.priorVerdict, "confirm");
+
+  // Settling it: no verdicts.json this time, so pass 2's findings stay
+  // unreviewed — and unreviewed findings still block.
+  const r = await continueRun({ root, runLensFn: reRaise });
   // a real defect somebody chose to carry is not a refutation, so the run
   // must not round up to clean
   assert.equal(r.verdict, "ceiling_reached");
@@ -360,6 +367,10 @@ test("continueRun: pass 2 still finding the issue hits the ceiling", async () =>
   const config = cfg({ maxIterations: 2 });
   const runLensFn = okLens([finding("leak")]);
   const started = await startRun({ root, config, target: "/repo", runLensFn });
+  // The last pass parks first — a verdict is never reached on findings that
+  // have not been adjudicated. The second call settles it.
+  const parked = await continueRun({ root, runLensFn });
+  assert.equal(parked.final, true);
   const r = await continueRun({ root, runLensFn });
   assert.equal(r.status, "finished");
   assert.equal(r.verdict, "ceiling_reached");
@@ -430,6 +441,8 @@ test("continueRun: a malformed verdict value does not crash the run", async () =
     }),
   );
 
+  const parked = await continueRun({ root, runLensFn });
+  assert.equal(parked.final, true);
   const r = await continueRun({ root, runLensFn });
   assert.equal(r.status, "finished");
   assert.equal(r.verdict, "ceiling_reached");
@@ -445,6 +458,8 @@ test("continueRun: a live config edit mid-run is ignored", async () => {
   mkdirSync(trioDir(root), { recursive: true });
   writeFileSync(configPath(root), JSON.stringify({ ...config, maxIterations: 99 }));
 
+  const parked = await continueRun({ root, runLensFn });
+  assert.equal(parked.final, true, "the snapshotted max, not the edited one");
   const r = await continueRun({ root, runLensFn });
   assert.equal(r.status, "finished");
   assert.equal(r.verdict, "ceiling_reached");
@@ -980,4 +995,118 @@ test("baseBrief refuses a lens name that is not a lens name", async () => {
   // The run fails rather than reading and forwarding an arbitrary file.
   assert.equal(r.verdict, "failed");
   assert.match(String(r.error ?? ""), /not a lens name/);
+});
+
+// Every lens down for a reason waiting will not fix. The run is over — there
+// is nothing to adjudicate and nothing to park for — and it must not keep the
+// project's lock, because trio-solo is the next thing the operator reaches for
+// and it would be blocked by the very run that failed.
+test("startRun: a run where every lens ran out of usage finalizes and says so", async () => {
+  const root = tmp();
+  const outOfUsage = async ({ lens }) => ({
+    lens: lens.name,
+    status: "failed",
+    findings: [],
+    threadId: null,
+    raw: "",
+    failure: classifyFailure("You have hit your usage limit"),
+  });
+  const r = await startRun({
+    root,
+    config: cfg({ maxIterations: 2 }),
+    target: "/repo",
+    runLensFn: outOfUsage,
+  });
+  assert.equal(r.status, "finished");
+  assert.equal(r.verdict, "failed");
+  assert.equal(r.codexUnavailable.kind, "usage");
+  assert.equal(r.codexUnavailable.available, false);
+  assert.equal(existsSync(activeMarker(root)), false, "the lock must be released");
+});
+
+// One lens dying is a degraded pass, which the run already reports. Telling
+// the operator Codex is unavailable on that evidence — and offering to replace
+// it — would be wrong: four lenses did audit the code.
+test("startRun: one failed lens among several is degraded, not an outage", async () => {
+  const root = tmp();
+  const mixed = async ({ lens }) =>
+    lens.name === "auditor"
+      ? {
+          lens: lens.name,
+          status: "failed",
+          findings: [],
+          threadId: null,
+          raw: "",
+          failure: classifyFailure("usage limit"),
+        }
+      : { lens: lens.name, status: "ok", findings: [finding("leak")], threadId: "t", raw: "" };
+  const config = cfg({ maxIterations: 2 });
+  config.codex.lenses = [
+    { name: "auditor", model: "m", effort: "low", on: true },
+    { name: "security", model: "m", effort: "low", on: true },
+  ];
+  const r = await startRun({ root, config, target: "/repo", runLensFn: mixed });
+  assert.equal(r.status, "awaiting_response");
+  assert.equal(r.codexUnavailable, undefined);
+  assert.deepEqual(r.degraded, ["auditor"]);
+});
+
+// The outage this guards against demonstrated itself: run 2026-08-18T14-44-53
+// promoted Docs/Audit/codex/2026-08-18/audit-1.md, headed "Codex Audit" with a
+// findings count, for four lenses that never ran. A lane that reported nothing
+// is absent, not empty — and a document outlives the terminal that explained
+// it.
+test("finalize: a run where no lens succeeded promotes nothing", async () => {
+  const root = tmp();
+  mkdirSync(join(root, "Docs", "Audit"), { recursive: true });
+  const r = await startRun({
+    root,
+    config: cfg({ maxIterations: 2 }),
+    target: "/repo",
+    runLensFn: async ({ lens }) => ({
+      lens: lens.name,
+      status: "failed",
+      findings: [],
+      threadId: null,
+      raw: "",
+      failure: classifyFailure("usage limit reached"),
+    }),
+  });
+  assert.equal(r.promoted, null);
+  assert.equal(r.promotion.offer, false, "there is no directory to offer to create");
+  assert.match(r.promotion.reason, /nothing to promote/);
+  assert.equal(existsSync(join(root, "Docs", "Audit", "codex")), false);
+});
+
+// The mirror: one lens surviving is a degraded audit, and a degraded audit is
+// still an audit. It must still be written out.
+test("finalize: a partially degraded run still promotes", async () => {
+  const root = tmp();
+  mkdirSync(join(root, "Docs", "Audit"), { recursive: true });
+  const config = cfg({ maxIterations: 1 });
+  config.codex.lenses = [
+    { name: "auditor", model: "m", effort: "low", on: true },
+    { name: "security", model: "m", effort: "low", on: true },
+  ];
+  const r = await startRun({
+    root,
+    config,
+    target: "/repo",
+    runLensFn: async ({ lens }) =>
+      lens.name === "auditor"
+        ? {
+            lens: lens.name,
+            status: "failed",
+            findings: [],
+            threadId: null,
+            raw: "",
+            failure: classifyFailure("Segmentation fault"),
+          }
+        : { lens: lens.name, status: "ok", findings: [], threadId: "t", raw: "" },
+  });
+  // Degraded, so it did not converge; the ceiling parks it. Settle to finish.
+  const done = await continueRun({ root, runLensFn: okLens([]) });
+  assert.equal(done.status, "finished");
+  assert.ok(done.promoted, "a degraded audit is still an audit");
+  void r;
 });

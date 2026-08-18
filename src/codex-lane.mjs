@@ -2,6 +2,7 @@ import { spawn as nodeSpawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { makeEvent, appendEvent } from "./bus.mjs";
 import { extractFindings } from "./findings.mjs";
+import { classifyFailure } from "./failure.mjs";
 import { codexCommand, killTreeCommand } from "./paths.mjs";
 
 export const SANDBOX = "read-only";
@@ -109,6 +110,7 @@ export async function runLens({
   spawnFn = nodeSpawn,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   retried = false,
+  retriedFailure = false,
 }) {
   const lane = `codex:${lens.name}`;
   const cmd = codexCommand(
@@ -151,6 +153,26 @@ export async function runLens({
   let threadId = null;
   const messages = [];
 
+  // Why a failure happened is never in `messages`: a lens that dies has no
+  // final message. It is in the JSON error events, or on stderr, and which
+  // one carries it depends on how far Codex got — so both are kept, and
+  // capped, because this is diagnostic text of unbounded length that only
+  // ever gets pattern-matched.
+  const DIAGNOSTIC_CAP = 16_384;
+  let diagnostics = "";
+  const note = (text) => {
+    if (diagnostics.length >= DIAGNOSTIC_CAP) return;
+    diagnostics += String(text ?? "").slice(0, DIAGNOSTIC_CAP - diagnostics.length);
+  };
+  // stderr was piped and never read. Beyond losing the one place the cause is
+  // reliably written, an unread pipe is a pipe that can fill: a lens failing
+  // verbosely could block on a full buffer and then be killed by the deadline
+  // as though it had hung.
+  proc.stderr?.on?.("data", (chunk) => note(`\n${chunk}`));
+  proc.stderr?.on?.("error", () => {
+    /* the close handler reports it */
+  });
+
   const rl = createInterface({ input: proc.stdout, crlfDelay: Infinity });
   rl.on("line", (line) => {
     if (!line.trim()) return;
@@ -165,6 +187,7 @@ export async function runLens({
     const mapped = mapEvent(ev);
     if (!mapped) return;
     if (mapped.kind === "agent_message") messages.push(mapped.payload.text);
+    if (mapped.kind === "error") note(`\n${mapped.payload.error}`);
     appendEvent(
       runDirPath,
       makeEvent({ run, pass, lane, actor: "codex", ...mapped }),
@@ -220,10 +243,51 @@ export async function runLens({
         payload: { error: `codex failed to start: ${launchError.message}` },
       }),
     );
-    return { lens: lens.name, status: "failed", findings: [], threadId, raw };
+    return {
+      lens: lens.name,
+      status: "failed",
+      findings: [],
+      threadId,
+      raw,
+      failure: classifyFailure(`${launchError.message}\n${diagnostics}`),
+    };
   }
 
   if (code !== 0) {
+    const failure = classifyFailure(diagnostics);
+
+    // A transient fault is worth one more attempt and nothing more. The
+    // second attempt is not "stricter" — that retry is for a lens that
+    // answered badly, and this one never answered at all, so the brief goes
+    // out unchanged.
+    if (failure.retryable && !retriedFailure) {
+      appendEvent(
+        runDirPath,
+        makeEvent({
+          run,
+          pass,
+          lane,
+          actor: "codex",
+          kind: "lens_retry",
+          payload: {
+            error: `${failure.message} (${failure.kind}) — running this lens once more`,
+          },
+        }),
+      );
+      return runLens({
+        lens,
+        target,
+        brief,
+        runDirPath,
+        run,
+        pass,
+        spawnFn,
+        timeoutMs,
+        retried,
+        retriedFailure: true,
+      });
+    }
+
     appendEvent(
       runDirPath,
       makeEvent({
@@ -232,10 +296,22 @@ export async function runLens({
         lane,
         actor: "codex",
         kind: "error",
-        payload: { error: `codex exited ${code}` },
+        // The exit code alone was the whole message for every failure there
+        // is. It stays — it is the fact — but it no longer stands alone.
+        payload: {
+          error: `codex exited ${code}: ${failure.message}`,
+          kind: failure.kind,
+        },
       }),
     );
-    return { lens: lens.name, status: "failed", findings: [], threadId, raw };
+    return {
+      lens: lens.name,
+      status: "failed",
+      findings: [],
+      threadId,
+      raw,
+      failure,
+    };
   }
 
   const parsed = extractFindings(raw);
@@ -275,6 +351,9 @@ export async function runLens({
       spawnFn,
       timeoutMs,
       retried: true,
+      // Carried, not reset: the two retries answer different faults and a
+      // lens must not earn a fresh transient retry by failing a second way.
+      retriedFailure,
     });
   }
   appendEvent(

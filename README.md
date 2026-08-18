@@ -181,6 +181,13 @@ pass limit with findings still open — reported plainly, never as success),
 (you ran `/trio:cancel`). A pass where any lens crashed or returned
 unparseable output can never resolve `clean`.
 
+A verdict is never reached on findings nobody has reviewed. **Every** pass
+parks for adjudication, the last one included: it comes back with `final: true`
+instead of a verdict, and one more `continue` settles the run once the verdicts
+are in. Without that the final pass was judged on raw lens output — where every
+finding is `unreviewed` and therefore still counts as live — so a single
+unreviewed `major` could close a run that the reconciler would have refuted.
+
 **Promotion** — once a run finishes, its audits are written to
 `Docs/Audit/codex/YYYY-MM-DD/audit-N.md` (Codex's findings, as reported) and
 `Docs/Audit/claude/YYYY-MM-DD/audit-N.md` (the reconciliation, the
@@ -206,6 +213,23 @@ installed, that you're logged in, and that the CLI flags Trio depends on
 still exist. If any of that is off, Trio refuses to start and names the one
 command to fix it, instead of failing partway through a run.
 
+**The canary** — none of those checks can see a spent quota: an account with
+no credit left is installed, logged in, and looks perfectly healthy right up
+until a lens tries to use it. So the last thing before a run commits to
+anything is one trivial read-only call. If it comes back out-of-usage or
+credentials-refused, the run is refused there — no lock taken, no run
+directory, no browser window, nothing spent — and Claude offers `/trio:solo`
+instead. A rate limit or anything the probe cannot read plainly is let
+through: the lens wave is the authority, and a probe that could veto every
+audit in a project on evidence it did not understand would be the worse
+failure.
+
+**Why a lens failed** — a spent quota and a dropped connection used to read
+identically (`codex exited 1`). They are classified now, because they call for
+opposite responses: transient faults retry themselves once and say so in the
+event log, while a spent quota or refused credentials end the run, promote
+nothing, release the lock, and hand you the fallback.
+
 ---
 
 ## Commands
@@ -226,6 +250,15 @@ command to fix it, instead of failing partway through a run.
   independently and compare the answers, disagreements named. Claude answers
   first, so it doesn't anchor on Codex.
 - `/trio:cancel` — stop the active run and record it as `cancelled`.
+- `/trio:solo [--lenses a,b|all] [--scope TEXT]` — the fallback lane, for
+  when Codex cannot be reached at all: no usage left, credentials refused, a
+  rate limit that outlived its retry. The same five lens briefs run, but as
+  blind Claude subagents rather than Codex processes. It keeps the procedure —
+  independent lenses formed apart, Claude's own audit written first,
+  adjudication against the code — and gives up the second model, which it says
+  out loud rather than reporting in a two-model run's vocabulary. One pass, in
+  session, ending in a table. Claude offers it on its own when a run comes back
+  `codex_unavailable`; you never have to remember it exists.
 
 **Choosing what runs**
 
@@ -259,10 +292,11 @@ command to fix it, instead of failing partway through a run.
   topic gives a compact orientation; a topic (a command, `lens`, `verdict`, a
   lens name, a config key…) explains that one thing in depth.
 
-Claude can also reach for two skills on its own, without a slash command —
-`trio-audit` when you say things like "have Codex audit this," and
-`trio-consult` for "ask Codex what it thinks." The commands above are the
-explicit, same-behavior path.
+Claude can also reach for three skills on its own, without a slash command —
+`trio-audit` when you say things like "have Codex audit this,"
+`trio-consult` for "ask Codex what it thinks," and `trio-solo` when Codex
+turns out to be unreachable mid-request. The commands above are the explicit,
+same-behavior path.
 
 ---
 
