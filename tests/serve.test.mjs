@@ -84,6 +84,38 @@ test("/events replays the existing backlog as SSE data lines", async () => {
   );
 });
 
+test("/events streams events appended after connecting, without resending the backlog", async () => {
+  const dir = tmp();
+  seed(dir, "agent_message");
+  const { server, url } = await start({ runDirPath: dir, port: 0 });
+
+  const res = await fetch(`${url}/events`);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let seen = "";
+  const readUntil = async (pred, ms) => {
+    const deadline = Date.now() + ms;
+    while (!pred(seen) && Date.now() < deadline) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      seen += decoder.decode(value, { stream: true });
+    }
+  };
+
+  await readUntil((s) => s.includes("agent_message"), 5000);
+  assert.equal((seen.match(/agent_message/g) ?? []).length, 1);
+
+  seed(dir, "reasoning");
+  await readUntil((s) => s.includes("reasoning"), 5000);
+
+  await reader.cancel();
+  server.close();
+
+  // The new event arrived, and the backlog line was not sent a second time.
+  assert.equal((seen.match(/agent_message/g) ?? []).length, 1);
+  assert.equal((seen.match(/reasoning/g) ?? []).length, 1);
+});
+
 test("/version reports the plugin manifest's version", async () => {
   const { server, url } = await start({ runDirPath: tmp(), port: 0 });
   const res = await fetch(`${url}/version`);

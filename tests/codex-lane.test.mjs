@@ -123,6 +123,40 @@ test("mapEvent maps a completed command_execution with its exit code", () => {
   assert.equal(e.payload.command, "ls");
 });
 
+test("mapEvent caps a large aggregated_output and records its original length", () => {
+  const big = "x".repeat(10_000);
+  const e = mapEvent({
+    type: "item.completed",
+    item: {
+      type: "command_execution",
+      command: "cat huge.log",
+      aggregated_output: big,
+      exit_code: 0,
+      status: "completed",
+    },
+  });
+  assert.equal(e.kind, "command_execution");
+  assert.ok(e.payload.output.length <= 8 * 1024);
+  assert.equal(e.payload.output_truncated, true);
+  assert.equal(e.payload.output_length, 10_000);
+});
+
+test("mapEvent leaves output under the cap untouched and unmarked", () => {
+  const e = mapEvent({
+    type: "item.completed",
+    item: {
+      type: "command_execution",
+      command: "echo hi",
+      aggregated_output: "hi",
+      exit_code: 0,
+      status: "completed",
+    },
+  });
+  assert.equal(e.payload.output, "hi");
+  assert.equal("output_truncated" in e.payload, false);
+  assert.equal("output_length" in e.payload, false);
+});
+
 test("mapEvent maps turn.completed to usage", () => {
   const e = mapEvent({
     type: "turn.completed",

@@ -34,6 +34,14 @@ export function buildArgs({ target, model, effort }) {
   ];
 }
 
+// The viewer is the only reader of this field (failure classification uses
+// the separate stderr/error diagnostics captured in runLens, not this), and
+// a command's aggregated_output stored whole is what makes the event log
+// huge: 2.9 MB of a 3.2 MB, 469-event log was this field alone. Capped, with
+// the original length recorded so a truncated one still says how much there
+// was.
+const OUTPUT_CAP = 8 * 1024;
+
 export function mapEvent(ev) {
   if (ev.type === "turn.completed")
     return { kind: "usage", payload: ev.usage ?? {} };
@@ -47,11 +55,16 @@ export function mapEvent(ev) {
   if (item.type === "reasoning")
     return { kind: "reasoning", payload: { text: item.text ?? "" } };
   if (item.type === "command_execution") {
+    const output = item.aggregated_output ?? "";
+    const truncated = output.length > OUTPUT_CAP;
     return {
       kind: "command_execution",
       payload: {
         command: item.command ?? "",
-        output: item.aggregated_output ?? "",
+        output: truncated ? output.slice(0, OUTPUT_CAP) : output,
+        ...(truncated
+          ? { output_truncated: true, output_length: output.length }
+          : {}),
         exit_code: item.exit_code ?? null,
         status: item.status ?? "",
       },

@@ -2,7 +2,7 @@ import { createServer as httpServer } from "node:http";
 import { readFileSync, watch, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { readEvents, eventsFile } from "./bus.mjs";
+import { readEventsFrom, eventsFile } from "./bus.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PAGE = join(HERE, "..", "view", "index.html");
@@ -38,12 +38,11 @@ export function createServer({ runDirPath }) {
         connection: "keep-alive",
       });
       res.flushHeaders();
-      let sent = 0;
+      let offset = 0;
       const flush = () => {
-        const all = readEvents(runDirPath);
-        for (const ev of all.slice(sent))
-          res.write(`data: ${JSON.stringify(ev)}\n\n`);
-        sent = all.length;
+        const { events, offset: next } = readEventsFrom(runDirPath, offset);
+        offset = next;
+        for (const ev of events) res.write(`data: ${JSON.stringify(ev)}\n\n`);
       };
       flush();
       let watcher;

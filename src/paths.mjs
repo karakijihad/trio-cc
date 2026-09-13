@@ -22,14 +22,36 @@ export const configPath = (root) => join(trioDir(root), "config.json");
 export const capabilitiesPath = (root) =>
   join(trioDir(root), "capabilities.json");
 
+// The PATH directory holding codex.cmd, if any — split out from
+// resolveCodexScript so codexCommand can tell "no npm install here at all"
+// (fall back to a bare .exe) apart from "an npm install here is broken" (fail
+// closed, below).
+function findCodexCmdDir(pathEnv) {
+  for (const dir of pathEnv.split(delimiter)) {
+    if (dir && existsSync(join(dir, "codex.cmd"))) return dir;
+  }
+  return null;
+}
+
 // npm installs the CLI as `codex.cmd`, a batch file Node will not spawn without
 // a shell. Its sibling JS entry point can be spawned directly.
 export function resolveCodexScript(pathEnv = process.env.PATH ?? "") {
+  const dir = findCodexCmdDir(pathEnv);
+  if (!dir) return null;
+  const js = join(dir, "node_modules", "@openai", "codex", "bin", "codex.js");
+  return existsSync(js) ? js : null;
+}
+
+// A non-npm Codex install on win32 (the installer, or a manually placed
+// binary) puts a real PE executable on PATH instead of the npm shim. Unlike
+// codex.cmd — a batch file Node will only run through cmd.exe — an .exe is
+// spawned directly, so it carries none of the shell-argument-injection risk
+// codexCommand below is guarding against.
+export function resolveCodexExe(pathEnv = process.env.PATH ?? "") {
   for (const dir of pathEnv.split(delimiter)) {
     if (!dir) continue;
-    if (!existsSync(join(dir, "codex.cmd"))) continue;
-    const js = join(dir, "node_modules", "@openai", "codex", "bin", "codex.js");
-    if (existsSync(js)) return js;
+    const exe = join(dir, "codex.exe");
+    if (existsSync(exe)) return exe;
   }
   return null;
 }
@@ -39,11 +61,28 @@ export function resolveCodexScript(pathEnv = process.env.PATH ?? "") {
 //
 // Fails closed on win32 rather than falling back to `shell: true`: that
 // fallback ran the arguments through cmd.exe, where an audit target carrying
-// `&` or `|` would have been read as a command separator.
-export function codexCommand(args) {
-  if (process.platform !== "win32") return { file: "codex", args, opts: {} };
-  const js = resolveCodexScript();
+// `&` or `|` would have been read as a command separator. A codex.cmd found
+// with no sibling JS entry point stays a hard failure for the same reason —
+// spawning the .cmd itself would mean going through cmd.exe after all — and
+// deliberately does *not* fall through to a coexisting codex.exe: that shape
+// is a broken npm install, not a non-npm one, and the honest answer is to
+// reinstall it, not silently spawn a possibly-unrelated binary that happens
+// to share a PATH entry.
+//
+// `platform` and `pathEnv` are overridable only so tests can exercise every
+// branch (npm shim, bare .exe, a broken shim, neither) from any host OS;
+// every real caller leaves them at the current platform and PATH.
+export function codexCommand(
+  args,
+  { platform = process.platform, pathEnv = process.env.PATH ?? "" } = {},
+) {
+  if (platform !== "win32") return { file: "codex", args, opts: {} };
+  const js = resolveCodexScript(pathEnv);
   if (js) return { file: process.execPath, args: [js, ...args], opts: {} };
+  if (!findCodexCmdDir(pathEnv)) {
+    const exe = resolveCodexExe(pathEnv);
+    if (exe) return { file: exe, args, opts: {} };
+  }
   throw new Error(
     "cannot locate the Codex JavaScript entry point beside codex.cmd on PATH — " +
       "reinstall with `npm i -g @openai/codex`",

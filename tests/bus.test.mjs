@@ -1,9 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, appendFileSync } from "node:fs";
+import { mkdtempSync, appendFileSync, writeFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { makeEvent, appendEvent, readEvents, eventsFile } from "../src/bus.mjs";
+import {
+  makeEvent,
+  appendEvent,
+  readEvents,
+  readEventsFrom,
+  eventsFile,
+} from "../src/bus.mjs";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "trio-bus-"));
 
@@ -127,6 +133,113 @@ test("every appended event is exactly one line", () => {
     }),
   );
   assert.equal(readEvents(dir).length, 1);
+});
+
+test("readEventsFrom returns nothing and offset 0 for a directory with no log", () => {
+  const r = readEventsFrom(tmp());
+  assert.deepEqual(r.events, []);
+  assert.equal(r.offset, 0);
+});
+
+test("readEventsFrom parses only the lines appended after the given offset", () => {
+  const dir = tmp();
+  const ev = (kind) =>
+    makeEvent({ run: "r", pass: 1, lane: "l", actor: "codex", kind, payload: {} });
+  appendEvent(dir, ev("agent_message"));
+  const first = readEventsFrom(dir, 0);
+  assert.equal(first.events.length, 1);
+  assert.equal(first.events[0].kind, "agent_message");
+
+  appendEvent(dir, ev("reasoning"));
+  appendEvent(dir, ev("error"));
+  const second = readEventsFrom(dir, first.offset);
+  assert.deepEqual(
+    second.events.map((e) => e.kind),
+    ["reasoning", "error"],
+  );
+
+  // Nothing new since the last read: no lines, offset unchanged.
+  const third = readEventsFrom(dir, second.offset);
+  assert.deepEqual(third.events, []);
+  assert.equal(third.offset, second.offset);
+});
+
+test("readEventsFrom holds back a trailing partial line", () => {
+  const dir = tmp();
+  appendEvent(
+    dir,
+    makeEvent({
+      run: "r",
+      pass: 1,
+      lane: "l",
+      actor: "codex",
+      kind: "agent_message",
+      payload: {},
+    }),
+  );
+  const { offset } = readEventsFrom(dir, 0);
+  // A write in progress: valid JSON so far, but no trailing newline yet.
+  appendFileSync(eventsFile(dir), '{"kind":"reasoning"');
+  const mid = readEventsFrom(dir, offset);
+  assert.deepEqual(mid.events, []);
+  assert.equal(mid.offset, offset, "must not consume the incomplete line");
+
+  // The rest of the line arrives, plus the terminating newline.
+  appendFileSync(eventsFile(dir), ',"finished":true}\n');
+  const after = readEventsFrom(dir, mid.offset);
+  assert.equal(after.events.length, 1);
+  assert.equal(after.events[0].finished, true);
+});
+
+test("readEventsFrom resets to the start when the log is truncated or replaced", () => {
+  const dir = tmp();
+  const ev = (kind) =>
+    makeEvent({ run: "r", pass: 1, lane: "l", actor: "codex", kind, payload: {} });
+  appendEvent(dir, ev("agent_message"));
+  appendEvent(dir, ev("reasoning"));
+  const { offset } = readEventsFrom(dir, 0);
+
+  // A new run reusing the path, or a rotation: the file is now shorter than
+  // the offset a stale reader is holding.
+  writeFileSync(eventsFile(dir), JSON.stringify(ev("error")) + "\n");
+  const after = readEventsFrom(dir, offset);
+  assert.equal(after.events.length, 1);
+  assert.equal(after.events[0].kind, "error");
+});
+
+test("readEventsFrom does not re-read bytes before the offset", () => {
+  const dir = tmp();
+  const big = "x".repeat(16 * 1024);
+  appendEvent(
+    dir,
+    makeEvent({
+      run: "r",
+      pass: 1,
+      lane: "l",
+      actor: "codex",
+      kind: "agent_message",
+      payload: { text: big },
+    }),
+  );
+  const first = readEventsFrom(dir, 0);
+  appendEvent(
+    dir,
+    makeEvent({
+      run: "r",
+      pass: 1,
+      lane: "l",
+      actor: "codex",
+      kind: "reasoning",
+      payload: {},
+    }),
+  );
+  const size = statSync(eventsFile(dir)).size;
+  // A read positioned at the prior offset only pulls the bytes appended
+  // since — proof it is not re-scanning the (now large) start of the file.
+  assert.ok(size - first.offset < big.length);
+  const second = readEventsFrom(dir, first.offset);
+  assert.equal(second.events.length, 1);
+  assert.equal(second.events[0].kind, "reasoning");
 });
 
 test("makeEvent scrubs secrets nested in objects and arrays", () => {
