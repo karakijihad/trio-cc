@@ -6,6 +6,12 @@ What went wrong, and what was done about it. One line each, newest first.
 
 ## 2026-09-13 — what an independent review of Trio found
 
+- **A new claim on a line an earlier finding was refuted at stopped blocking, unreviewed.** A settled refutation was matched by id or location, so it excused a different defect that happened to sit on the same line. Only the same finding (same id) is excused now.
+- **`downgrade` was the reconciler's word for "real, but out of scope".** A true major became a minor and stopped blocking, turning "we won't fix this" into a lower risk rating. `downgrade` now means only overstated; an out-of-scope finding keeps its severity and is reported under "Outside this change".
+- **Fixes made after the last pass were never re-audited**, and nothing said so. They are reported as `fixedUnverified`.
+- **`converge.requireNoNewFindings` had stopped doing anything**, and `config set converge.blockOn critical,major` stored a string where convergence expected a list. The key is gone; blockOn is parsed and validated.
+- **The viewer could not auto-exit with a browser attached**, and every reconnect replayed the whole log. Codex lenses were never told to keep out of `.trio/` and promoted audits. The real-Codex smoke test still expected the pre-parking flow, and CI never ran the Node 18 that package.json promises.
+
 - **An extended run applied every severity shift twice.** Verdicts were applied from the stored severity, and extending a run re-applied them, so a `downgrade` moved `major` to `info`. A downgraded `critical` could have stopped blocking. Verdicts now shift from the severity the lens reported, recorded once.
 - **`clean` was unreachable in practice: 0 of 9 runs.** Any new finding blocked convergence, down to `info`. Now only a live finding at a `blockOn` severity does.
 - **One defect from two lenses counted as two blocking majors**, a line apart. The reconciler has a `duplicate` verdict now.
