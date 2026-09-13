@@ -4,6 +4,16 @@ What went wrong, and what was done about it. One line each, newest first.
 
 ---
 
+## 2026-09-13 — what an independent review of Trio found
+
+- **An extended run applied every severity shift twice.** Verdicts were applied from the stored severity, and extending a run re-applied them, so a `downgrade` moved `major` to `info`. A downgraded `critical` could have stopped blocking. Verdicts now shift from the severity the lens reported, recorded once.
+- **`clean` was unreachable in practice: 0 of 9 runs.** Any new finding blocked convergence, down to `info`. Now only a live finding at a `blockOn` severity does.
+- **One defect from two lenses counted as two blocking majors**, a line apart. The reconciler has a `duplicate` verdict now.
+- **Codex read Claude's findings before writing its own.** Every Edit/Write was recorded, so the scratchpad findings file and `response.json` went into the next pass's brief as "what Claude changed". Only changes inside the target and outside `.trio/` are recorded, and that section is capped.
+- **Every tool call was recorded twice**, from PreToolUse and PostToolUse — two Node starts per call in every session.
+- **The viewer re-read the whole event log every second**, most of it uncapped command output. It reads only what was appended, and output is capped at 8 KB.
+- **A broken `codex.lenses` crashed `trio`, `on`, `doctor` and `models`**, and `run` re-probed Codex every time despite a 24-hour cache. The CLI tests probed the developer's real Codex; they use the fake now and run in a quarter of the time.
+
 ## 2026-09-13 — who picks the model
 
 - **Trio shipped a model slug that would expire.** All five lenses pinned `gpt-5.6-terra`, so every project that never edited its config would one day start every run on a model OpenAI had retired. Lenses now ship `model: null` (the Codex CLI decides); a slug someone pins and later loses is flagged at run start with an offer to re-pick.

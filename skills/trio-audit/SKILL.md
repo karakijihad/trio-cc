@@ -49,9 +49,11 @@ then read the JSON from its output when it completes. Do not wrap it in a
 foreground call with a raised timeout — the ceiling is still below what one
 pass can legitimately take.
 
-If you do see exit 124, the run was killed mid-pass. It releases its own lock
-on the way out, so the repo is not stuck; re-read `status --json` before
-starting again.
+If you do see exit 124, the run was killed mid-pass. On macOS and Linux it
+releases its own lock on the way out. On Windows no handler runs: the lock is
+reclaimed when the next run finds its worker dead, and lenses already spawned
+may keep running until they finish. Either way, re-read `status --json`
+before starting again.
 
 ## Choosing lenses
 

@@ -36,7 +36,7 @@ name (`auditor`, `security`, `tester`, `simplifier`, `consistency`), the
 fallback (`solo`, `ping`, `codex_unavailable`), or a
 config key (`enabled`, `maxIterations`, `codex.parallel`, `artifacts.offerToCreate`,
 `codex.lenses`, `view.mode`, `view.port`, `view.autoOpen`,
-`converge.blockOn`, `converge.requireNoNewFindings`,
+`converge.blockOn`, `converge.requireNoNewFindings`, `converge.offerExtension`,
 `artifacts.promoteTo`). If the topic doesn't match anything below, say so and
 name the closest match.
 
@@ -114,12 +114,13 @@ name the closest match.
 | `/trio:auditor` / `security` / `tester` / `simplifier` / `consistency` | Run the loop through that one lens only.                                                                              |
 | `/trio:config get` / `set <key> <value>`                               | Read or change any setting; `set` rejects invalid values with the valid list.                                         |
 | `/trio:lens <name> [on\|off] [model <slug>] [effort <level>]`          | Direct, non-interactive lens change.                                                                                  |
+| `/trio:solo [--lenses a,b\|all] [--scope TEXT]`                        | Audit with blind Claude subagents when Codex cannot be reached; says it is one model, not two.                        |
 | `/trio:doctor`                                                         | Re-probe Codex now (bypasses the 24h cache); reports version, auth, drift. Run this first when something's off.       |
 | `/trio:help [topic]`                                                   | This reference.                                                                                                       |
 
-Two skills fire without a slash command: `trio-audit` when the operator says
-things like "have Codex audit this," and `trio-consult` for "ask Codex what
-it thinks."
+Three skills fire without a slash command: `trio-audit` when the operator says
+things like "have Codex audit this," `trio-consult` for "ask Codex what
+it thinks," and `trio-solo` when Codex cannot be reached.
 
 ### Settings (`.trio/config.json`)
 
@@ -137,6 +138,7 @@ it thinks."
 | `view.port`                     | `4319`                 | Viewer's local port.                           |
 | `view.autoOpen`                 | `true`                 | Auto-open the browser in `window` mode.        |
 | `converge.blockOn`              | `["critical","major"]` | Severities that must be all-clear to converge. |
-| `converge.requireNoNewFindings` | `true`                 | A new finding blocks convergence too.          |
+| `converge.requireNoNewFindings` | `true`                 | A new finding blocks only when live and at a `blockOn` severity. |
+| `converge.offerExtension`       | `true`                 | Offer one more pass when a run stops at the ceiling with blocking findings open. |
 | `artifacts.offerToCreate`       | `true`                 | Offer to create the promote directory once.    |
 | `artifacts.promoteTo`           | `Docs/Audit`           | Where finished audits are promoted.            |

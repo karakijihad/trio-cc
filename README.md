@@ -35,7 +35,7 @@ you: "add feature X"
     ├─ ping — is the account usable at all? out of usage → nothing spent,
     │         and Claude offers /trio:solo instead
     ├─ pass 1 — Codex audits through parallel lenses
-    │   └─ Claude reconciles: confirm · refute · downgrade · escalate → fixes
+    │   └─ Claude reconciles: confirm · refute · downgrade · escalate · duplicate → fixes
     └─ pass 2 — Codex re-audits, then parks for adjudication like any pass
         └─ Claude reconciles, then one `continue` settles the run
             ├─ clean → audits promoted to Docs/Audit/ → done
@@ -77,7 +77,7 @@ Trio ships **no credentials and bills nothing**. It drives your own Codex CLI on
 your own OpenAI account.
 
 - [Claude Code](https://claude.com/claude-code)
-- [OpenAI Codex CLI](https://github.com/openai/codex) — `npm i -g @openai/codex`
+- [OpenAI Codex CLI](https://github.com/openai/codex) — `npm i -g @openai/codex` (on Windows a standalone `codex.exe` on `PATH` works too)
 - A Codex login: `codex login` (ChatGPT plan) or an API key
 - Node 18.18+
 
@@ -131,7 +131,7 @@ default.
 come back, Claude reconciles and fixes. `maxIterations` (default 2) caps how
 many passes a run takes before Trio stops it and reports what's still open.
 
-**Reconciler** — the one Claude agent Trio adds, `trio-reconciler`. It reads
+**Reconciler** — one of the two Claude agents Trio adds (the other is `trio-lens`, for `/trio:solo`), `trio-reconciler`. Its fifth verdict, `duplicate`, folds one defect reported by two lenses into a single finding. It reads
 the real code and rules on each Codex finding: `confirm` (reproduced as
 reported), `refute` (wrong — must cite what disproves it), `downgrade` (real
 but overstated; severity drops one step), `escalate` (worse than reported, or
@@ -325,7 +325,7 @@ Every key in `.trio/config.json`, with its default:
 | `view.port`                     | `4319`                 | Local port the viewer binds.                                                                                                                                           |
 | `view.autoOpen`                 | `true`                 | Whether `window` mode opens the browser automatically.                                                                                                                 |
 | `converge.blockOn`              | `["critical","major"]` | Severities that must have zero open findings before a run can converge.                                                                                                |
-| `converge.requireNoNewFindings` | `true`                 | A pass with a brand-new finding can't converge either, even with nothing blocking open.                                                                                |
+| `converge.requireNoNewFindings` | `true`                 | A brand-new finding blocks convergence only when it is still live after adjudication and at a `blockOn` severity. A new `info` or `minor` no longer keeps a run from ending `clean`. |
 | `artifacts.promoteTo`           | `Docs/Audit`           | Where finished audits are promoted on completion, if the directory exists.                                                                                             |
 | `artifacts.offerToCreate`       | `true`                 | Whether a finished run offers to create `artifacts.promoteTo` when it is missing. Declining the offer sets this false; nothing asks again.                             |
 
@@ -448,7 +448,7 @@ Against the alternatives:
 | Multi-agent setups where every agent can write | Competing edits, worktrees, merge conflicts, diff-approval fatigue                            | Exactly one writer. Codex is `--sandbox read-only`, hardcoded — no coordination problem to solve                        |
 | Linters, type checkers, SAST in CI             | Deterministic and cheap, but bounded by their rule set                                        | Findings a rule set cannot express — "the README promises this flag and the code ignores it"                            |
 | Running Codex yourself in a second terminal    | The same second opinion, if you carry the context by hand each time                           | The handoff is automated: scoped briefs, parallel lenses, a pass-2 conversation that shows Codex its own prior findings |
-| One-shot "LLM as judge" review                 | A verdict, with no standard for accepting it                                                  | Every finding is adjudicated — confirm · refute · downgrade · escalate — a refutation must cite code, and anything not yet adjudicated reads `unreviewed`, never `confirm` |
+| One-shot "LLM as judge" review                 | A verdict, with no standard for accepting it                                                  | Every finding is adjudicated — confirm · refute · downgrade · escalate · duplicate — a refutation must cite code, and anything not yet adjudicated reads `unreviewed`, never `confirm` |
 
 Two things make the difference in practice.
 
