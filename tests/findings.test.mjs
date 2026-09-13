@@ -171,6 +171,9 @@ test("a defect that really went away is reported closed", () => {
   assert.equal(diff.open.length, 0);
 });
 
+// blockOn carries "major" here (withId's default severity) because the new
+// rule judges a new finding by the same bar as every other live finding, not
+// by "new" alone — see isConverged in src/findings.mjs.
 test("a finding at a genuinely new place is new and blocks convergence", () => {
   const diff = diffPasses(
     [withId({ title: "t", line: 47 })],
@@ -179,7 +182,10 @@ test("a finding at a genuinely new place is new and blocks convergence", () => {
   assert.equal(diff.new.length, 1);
   assert.equal(diff.closed.length, 1, "and the old one really is gone");
   assert.equal(
-    isConverged(diff.new, diff, { blockOn: [], requireNoNewFindings: true }),
+    isConverged(diff.new, diff, {
+      blockOn: ["major"],
+      requireNoNewFindings: true,
+    }),
     false,
   );
 });
@@ -294,11 +300,44 @@ test("isConverged is false while a major stays open", () => {
   );
 });
 
-test("isConverged is false when a new finding appeared, even at minor", () => {
+// Was: any new finding blocked convergence, even at minor. Across nine real
+// runs, none converged — the final pass always turned up something new below
+// the blocking bar. A new finding now blocks only when it is also severe
+// enough to block on its own: the same bar every other live finding answers
+// to, not "anything new at all".
+test("isConverged is true when a new finding appears at minor", () => {
   const curr = [{ ...f({ severity: "minor" }), id: "aaaa1111" }];
   assert.equal(
     isConverged(curr, { new: curr, open: [], closed: [] }, CONVERGE),
+    true,
+  );
+});
+
+test("isConverged is true when a new finding appears at info", () => {
+  const curr = [{ ...f({ severity: "info" }), id: "aaaa1111" }];
+  assert.equal(
+    isConverged(curr, { new: curr, open: [], closed: [] }, CONVERGE),
+    true,
+  );
+});
+
+test("isConverged is false when a new finding appears at major", () => {
+  const curr = [{ ...f({ severity: "major" }), id: "aaaa1111" }];
+  assert.equal(
+    isConverged(curr, { new: curr, open: [], closed: [] }, CONVERGE),
     false,
+  );
+});
+
+// A new major the reconciler already downgraded to minor is judged on its
+// post-adjudication severity, not on having been new in the first place.
+test("a new major downgraded to minor does not block convergence", () => {
+  const curr = [
+    { ...f({ severity: "minor" }), id: "aaaa1111", verdict: "downgrade" },
+  ];
+  assert.equal(
+    isConverged(curr, { new: curr, open: [], closed: [] }, CONVERGE),
+    true,
   );
 });
 
@@ -313,6 +352,29 @@ test("isConverged is true with only pre-existing minors", () => {
 test("isConverged is true on an empty pass", () => {
   assert.equal(
     isConverged([], { new: [], open: [], closed: [] }, CONVERGE),
+    true,
+  );
+});
+
+// One defect reported by two lenses is corroboration, not two blocking
+// findings — `duplicate` is how the reconciler says so, and it must never
+// block on its own account.
+test("isConverged ignores a finding marked duplicate", () => {
+  const curr = [
+    { ...f({ severity: "critical" }), id: "aaaa1111", verdict: "duplicate", of: "bbbb2222" },
+  ];
+  assert.equal(
+    isConverged(curr, { new: [], open: curr, closed: [] }, CONVERGE),
+    true,
+  );
+});
+
+test("a new duplicate does not block either", () => {
+  const curr = [
+    { ...f({ severity: "critical" }), id: "aaaa1111", verdict: "duplicate", of: "bbbb2222" },
+  ];
+  assert.equal(
+    isConverged(curr, { new: curr, open: [], closed: [] }, CONVERGE),
     true,
   );
 });

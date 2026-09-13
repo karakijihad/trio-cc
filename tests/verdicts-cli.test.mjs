@@ -224,3 +224,84 @@ test("validateVerdicts with no knownIds checks shape but not coverage", () => {
   assert.equal(r.ok, true);
   assert.equal(r.verdicts[0].verdict, "confirm");
 });
+
+// One defect reported by two lenses used to have nothing to write but
+// `escalate`. `duplicate` names its survivor in `of`.
+test("a duplicate verdict is accepted with a valid of", () => {
+  const r = validateVerdicts(
+    {
+      verdicts: [
+        { id: "a1", verdict: "confirm", basis: "reproduced" },
+        { id: "a2", verdict: "duplicate", of: "a1", basis: "same defect as a1" },
+      ],
+    },
+    { knownIds: ["a1", "a2"] },
+  );
+  assert.equal(r.ok, true, r.problems.join("; "));
+  assert.equal(r.verdicts[1].of, "a1");
+});
+
+test("uppercase past tense DUPLICATED is normalized", () => {
+  const r = validateVerdicts(
+    {
+      verdicts: [
+        { id: "a1", verdict: "confirm", basis: "reproduced" },
+        { id: "a2", verdict: "DUPLICATED", of: "a1", basis: "same defect" },
+      ],
+    },
+    { knownIds: ["a1", "a2"] },
+  );
+  assert.equal(r.ok, true, r.problems.join("; "));
+  assert.equal(r.verdicts[1].verdict, "duplicate");
+});
+
+test("a duplicate with no of is refused", () => {
+  const r = validateVerdicts(
+    { verdicts: [{ id: "a1", verdict: "duplicate", basis: "same as something" }] },
+    { knownIds: ["a1"] },
+  );
+  assert.equal(r.ok, false);
+  assert.ok(r.problems.some((p) => /needs "of"/.test(p)));
+});
+
+test("a duplicate naming itself is refused", () => {
+  const r = validateVerdicts(
+    { verdicts: [{ id: "a1", verdict: "duplicate", of: "a1", basis: "x" }] },
+    { knownIds: ["a1"] },
+  );
+  assert.equal(r.ok, false);
+  assert.ok(r.problems.some((p) => /cannot name itself/.test(p)));
+});
+
+test("a duplicate naming an unknown finding is refused", () => {
+  const r = validateVerdicts(
+    { verdicts: [{ id: "a1", verdict: "duplicate", of: "zz", basis: "x" }] },
+    { knownIds: ["a1"] },
+  );
+  assert.equal(r.ok, false);
+  assert.ok(r.problems.some((p) => /duplicate of unknown finding zz/.test(p)));
+});
+
+test("a duplicate cannot name another duplicate as its survivor", () => {
+  const r = validateVerdicts(
+    {
+      verdicts: [
+        { id: "a1", verdict: "duplicate", of: "a2", basis: "same as a2" },
+        { id: "a2", verdict: "duplicate", of: "a3", basis: "same as a3" },
+        { id: "a3", verdict: "confirm", basis: "reproduced" },
+      ],
+    },
+    { knownIds: ["a1", "a2", "a3"] },
+  );
+  assert.equal(r.ok, false);
+  assert.ok(r.problems.some((p) => /duplicates cannot chain/.test(p)));
+});
+
+test("`of` on a non-duplicate verdict is refused", () => {
+  const r = validateVerdicts(
+    { verdicts: [{ id: "a1", verdict: "confirm", basis: "x", of: "a2" }] },
+    { knownIds: ["a1", "a2"] },
+  );
+  assert.equal(r.ok, false);
+  assert.ok(r.problems.some((p) => /only valid on a duplicate/.test(p)));
+});

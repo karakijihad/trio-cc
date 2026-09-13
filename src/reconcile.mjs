@@ -1,6 +1,11 @@
 import { SEVERITIES, UNREVIEWED } from "./findings.mjs";
 
-export const VERDICTS = ["confirm", "refute", "downgrade", "escalate"];
+// `duplicate` was added after two lenses reported one defect under different
+// titles and there was nothing to write but `escalate` — which reads as "this
+// is worse than reported" when it means "this is the same finding, counted
+// twice". A duplicate carries `of`, the id of the finding it duplicates; see
+// validateVerdicts and applyVerdicts below for what that requires and does.
+export const VERDICTS = ["confirm", "refute", "downgrade", "escalate", "duplicate"];
 
 // The absence of a verdict is not agreement. Every finding used to default to
 // "confirm", so a pass nobody had adjudicated reported sixteen confirmed
@@ -27,6 +32,7 @@ const ALIASES = {
   refuted: "refute",
   downgraded: "downgrade",
   escalated: "escalate",
+  duplicated: "duplicate",
 };
 
 const canonicalVerdict = (raw) => {
@@ -135,6 +141,26 @@ export function validateVerdicts(parsed, { knownIds } = {}) {
     const basis = typeof v.basis === "string" ? v.basis.trim() : "";
     const bounds = typeof v.bounds === "string" ? v.bounds.trim() : "";
 
+    // `duplicate` carries `of`, the id of the finding it duplicates — the
+    // survivor. It must name a real finding in this pass, name something
+    // other than itself, and not be checked for chaining onto another
+    // duplicate here: that needs every verdict in the batch decided first,
+    // so it is a second pass below, after this loop has finished.
+    let of;
+    if (verdict === "duplicate") {
+      of = typeof v.of === "string" ? v.of.trim() : "";
+      if (!of)
+        problems.push(
+          `${at} (${id}): duplicate needs "of" naming the finding it duplicates`,
+        );
+      else if (of === id)
+        problems.push(`${at} (${id}): duplicate cannot name itself as "of"`);
+      else if (known && !known.has(of))
+        problems.push(`${at} (${id}): duplicate of unknown finding ${of}`);
+    } else if (v.of != null) {
+      problems.push(`${at} (${id}): "of" is only valid on a duplicate verdict`);
+    }
+
     // Every verdict, not only the disagreements. A refute without cited
     // evidence is refused by the reconciler's own rules, and a confirm is
     // required to state the failure path — "if you cannot write the path, the
@@ -153,7 +179,25 @@ export function validateVerdicts(parsed, { knownIds } = {}) {
     if (verdict === "confirm" && !bounds)
       warnings.push(`${id}: confirmed with no bounds — the fix has no edges`);
 
-    verdicts.push({ id, verdict, basis, ...(bounds ? { bounds } : {}) });
+    verdicts.push({
+      id,
+      verdict,
+      basis,
+      ...(bounds ? { bounds } : {}),
+      ...(verdict === "duplicate" ? { of } : {}),
+    });
+  }
+
+  // A duplicate cannot name another duplicate as its survivor — that would
+  // ask a later reader to chase a chain instead of reading one id off the
+  // finding. Only checkable now that every verdict in the batch is known.
+  const byId = new Map(verdicts.map((v) => [v.id, v]));
+  for (const v of verdicts) {
+    if (v.verdict !== "duplicate") continue;
+    if (byId.get(v.of)?.verdict === "duplicate")
+      problems.push(
+        `verdict for ${v.id}: "of" finding ${v.of} is itself marked duplicate — duplicates cannot chain`,
+      );
   }
 
   // Silence at the write boundary is the whole defect in miniature. Here the
@@ -190,6 +234,24 @@ const shift = (severity, by) => {
 // finding live, but only `converge.blockOn` decides whether live blocks, so a
 // rejected verdict that should have been an `escalate` can leave a finding
 // below the blocking bar. The report is what has to say so.
+// A `downgrade`/`escalate` shifts severity from `reported` — the severity a
+// lens actually reported, fixed the first time a finding is adjudicated and
+// then carried on the finding unchanged — never from `f.severity`, which is
+// this function's own output and would already hold last time's shift.
+//
+// That distinction is the whole fix for a run extended past its ceiling.
+// reopenRun (src/driver.mjs) points the marker back at the pass that already
+// converged or hit the ceiling, and continueRun runs applyAdjudication on it
+// again with the same pass-N/verdicts.json — so this runs a second time over
+// its own output. Shifting from `f.severity` there moved a `downgrade` two
+// steps (critical -> major -> minor) though nothing new was ever decided.
+// Shifting from `reported` instead makes a second application produce
+// exactly what the first one did: applying adjudication twice equals once.
+//
+// A record written before this field existed has no `reported` — the `??`
+// falls back to `f.severity`, which on an unadjudicated finding is the
+// reported severity anyway, so an old reconcile.json loads and adjudicates
+// exactly as it always did.
 export function applyVerdicts(findings, verdicts, { onInvalid } = {}) {
   const byId = new Map();
   const rejected = [];
@@ -202,23 +264,63 @@ export function applyVerdicts(findings, verdicts, { onInvalid } = {}) {
     byId.set(v.id, { ...v, verdict });
   }
   if (rejected.length) onInvalid?.(rejected);
-  return findings.map((f) => {
+
+  const updated = findings.map((f) => {
+    const reported = f.reported ?? f.severity;
     const v = byId.get(f.id);
-    if (!v) return { ...f, verdict: UNREVIEWED, basis: "", bounds: "" };
+    if (!v) return { ...f, verdict: UNREVIEWED, basis: "", bounds: "", reported };
+
+    // `duplicate` never shifts severity — the survivor already carries its
+    // own, and this finding is about to stop counting as live at all (see
+    // isLive in findings.mjs). `of` is folded onto the record so the report
+    // can say what this duplicated, and so the fold below can find its
+    // survivor.
+    if (v.verdict === "duplicate") {
+      const of = typeof v.of === "string" ? v.of.trim() : "";
+      return {
+        ...f,
+        verdict: v.verdict,
+        basis: v.basis ?? "",
+        bounds: v.bounds ?? "",
+        severity: reported,
+        reported,
+        ...(of ? { of } : {}),
+      };
+    }
+
     const severity =
       v.verdict === "downgrade"
-        ? shift(f.severity, 1)
+        ? shift(reported, 1)
         : v.verdict === "escalate"
-          ? shift(f.severity, -1)
-          : f.severity;
+          ? shift(reported, -1)
+          : reported;
     return {
       ...f,
       verdict: v.verdict,
       basis: v.basis ?? "",
       bounds: v.bounds ?? "",
       severity,
+      reported,
     };
   });
+
+  // Fold each duplicate's lens(es) into its survivor, the same join
+  // mergeFindings uses, so the report still credits every lens that raised
+  // the defect even though only the survivor stays open for it. Re-running
+  // this over its own output (the extend case above) folds nothing new in,
+  // because the survivor already carries every lens name it would add.
+  const byIdAfter = new Map(updated.map((x) => [x.id, x]));
+  for (const dup of updated) {
+    if (dup.verdict !== "duplicate" || !dup.of) continue;
+    const survivor = byIdAfter.get(dup.of);
+    if (!survivor) continue;
+    const lenses = String(survivor.lens ?? "").split(", ").filter(Boolean);
+    for (const l of String(dup.lens ?? "").split(", ").filter(Boolean))
+      if (!lenses.includes(l)) lenses.push(l);
+    survivor.lens = lenses.join(", ");
+  }
+
+  return updated;
 }
 
 const LABEL = {

@@ -411,6 +411,45 @@ test("a null reply entry does not crash the fold", () => {
   assert.equal(buildSettled(root, "r1", 1).length, 1);
 });
 
+// `duplicate` says a finding is the same defect as another finding in the
+// same pass — it is not a disposition of the defect itself, so it must
+// neither settle it as refuted nor overturn an existing settlement elsewhere.
+test("a duplicate verdict settles nothing", () => {
+  const root = tmp();
+  writePass(root, "r1", 1, {
+    findings: [
+      finding("src/a.mjs", 10, "claim one", {
+        verdict: "duplicate",
+        of: "somethingelse",
+        basis: "same as somethingelse",
+      }),
+    ],
+  });
+  assert.deepEqual(buildSettled(root, "r1", 1), []);
+});
+
+test("a duplicate verdict does not overturn an earlier refutation elsewhere", () => {
+  const root = tmp();
+  writePass(root, "r1", 1, {
+    findings: [
+      finding("src/a.mjs", 10, "claim one", { verdict: "refute", basis: "no" }),
+    ],
+  });
+  writePass(root, "r1", 2, {
+    findings: [
+      finding("src/a.mjs", 10, "claim one", { verdict: "refute", basis: "no" }),
+      finding("src/b.mjs", 4, "claim two", {
+        verdict: "duplicate",
+        of: "unrelated",
+        basis: "same as unrelated",
+      }),
+    ],
+  });
+  const entries = buildSettled(root, "r1", 2);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].key, "src/a.mjs:10");
+});
+
 test("a non-string decline reason is not a decision", () => {
   const root = tmp();
   const f = finding("src/c.mjs", 1, "claim three");

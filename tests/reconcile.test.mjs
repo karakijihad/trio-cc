@@ -18,8 +18,14 @@ const f = (id, over = {}) => ({
   ...over,
 });
 
-test("the four verdicts are exactly the spec set", () => {
-  assert.deepEqual(VERDICTS, ["confirm", "refute", "downgrade", "escalate"]);
+test("the five verdicts are exactly the spec set", () => {
+  assert.deepEqual(VERDICTS, [
+    "confirm",
+    "refute",
+    "downgrade",
+    "escalate",
+    "duplicate",
+  ]);
 });
 
 test("confirm leaves severity untouched", () => {
@@ -256,4 +262,103 @@ test("the table renders a placeholder when everything was confirmed", () => {
     applyVerdicts([f("a1")], [{ id: "a1", verdict: "confirm", basis: "" }]),
   );
   assert.match(md, /no disagreements/i);
+});
+
+// The defect this closes: a run extended past its ceiling re-runs
+// applyAdjudication on a pass already adjudicated, feeding applyVerdicts its
+// own previous output. Shifting from `f.severity` (this function's output)
+// instead of a fixed reported severity moved a downgrade two steps and an
+// escalate two steps the other way. Applying the same verdicts twice must
+// land in the same place applying them once did.
+test("applying a downgrade twice moves severity once, not twice", () => {
+  const verdicts = [{ id: "a1", verdict: "downgrade", basis: "dormant" }];
+  const once = applyVerdicts([f("a1", { severity: "critical" })], verdicts);
+  const twice = applyVerdicts(once, verdicts);
+  assert.equal(once[0].severity, "major");
+  assert.equal(twice[0].severity, "major");
+  assert.deepEqual(twice, once);
+});
+
+test("applying an escalate twice moves severity once, not twice", () => {
+  const verdicts = [{ id: "a1", verdict: "escalate", basis: "composes" }];
+  const once = applyVerdicts([f("a1", { severity: "info" })], verdicts);
+  const twice = applyVerdicts(once, verdicts);
+  assert.equal(once[0].severity, "minor");
+  assert.equal(twice[0].severity, "minor");
+  assert.deepEqual(twice, once);
+});
+
+test("applying confirm or refute twice is already stable", () => {
+  const confirmed = [{ id: "a1", verdict: "confirm", basis: "reproduced" }];
+  const once = applyVerdicts([f("a1")], confirmed);
+  assert.deepEqual(applyVerdicts(once, confirmed), once);
+
+  const refuted = [{ id: "a2", verdict: "refute", basis: "disproven" }];
+  const onceR = applyVerdicts([f("a2")], refuted);
+  assert.deepEqual(applyVerdicts(onceR, refuted), onceR);
+});
+
+// Records written before `reported` existed have no such field — the
+// fallback to `f.severity` must reproduce first-time adjudication exactly.
+test("a finding with no stored `reported` field still shifts correctly", () => {
+  const out = applyVerdicts(
+    [f("a1", { severity: "critical" })],
+    [{ id: "a1", verdict: "downgrade", basis: "dormant" }],
+  );
+  assert.equal(out[0].severity, "major");
+  assert.equal(out[0].reported, "critical");
+});
+
+// One defect reported by two lenses used to have nothing to write but
+// `escalate` — counting it as two blocking findings. `duplicate` names the
+// survivor in `of`.
+test("duplicate keeps the survivor's severity and does not shift", () => {
+  const out = applyVerdicts(
+    [f("a1", { severity: "critical" }), f("a2", { severity: "major" })],
+    [
+      { id: "a1", verdict: "confirm", basis: "reproduced" },
+      { id: "a2", verdict: "duplicate", of: "a1", basis: "same defect as a1" },
+    ],
+  );
+  const dup = out.find((x) => x.id === "a2");
+  assert.equal(dup.verdict, "duplicate");
+  assert.equal(dup.severity, "major", "its own reported severity, untouched");
+  assert.equal(dup.of, "a1");
+});
+
+test("duplicate folds its lens into the survivor", () => {
+  const out = applyVerdicts(
+    [
+      f("a1", { lens: "auditor" }),
+      f("a2", { lens: "tester" }),
+    ],
+    [
+      { id: "a1", verdict: "confirm", basis: "reproduced" },
+      { id: "a2", verdict: "duplicate", of: "a1", basis: "same defect" },
+    ],
+  );
+  const survivor = out.find((x) => x.id === "a1");
+  assert.equal(survivor.lens, "auditor, tester");
+});
+
+test("folding a duplicate's lens twice does not repeat it", () => {
+  const verdicts = [
+    { id: "a1", verdict: "confirm", basis: "reproduced" },
+    { id: "a2", verdict: "duplicate", of: "a1", basis: "same defect" },
+  ];
+  const once = applyVerdicts(
+    [f("a1", { lens: "auditor" }), f("a2", { lens: "tester" })],
+    verdicts,
+  );
+  const twice = applyVerdicts(once, verdicts);
+  assert.equal(twice.find((x) => x.id === "a1").lens, "auditor, tester");
+});
+
+test("a duplicate naming an unknown survivor still applies without crashing", () => {
+  const out = applyVerdicts(
+    [f("a1")],
+    [{ id: "a1", verdict: "duplicate", of: "zzzz", basis: "same as zzzz" }],
+  );
+  assert.equal(out[0].verdict, "duplicate");
+  assert.equal(out[0].of, "zzzz");
 });

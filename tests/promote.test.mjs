@@ -452,6 +452,70 @@ test("a carried refutation the reconciler reopened is not called excused", () =>
   assert.doesNotMatch(out, /did not block convergence/);
 });
 
+// One defect reported by two lenses used to have nothing to write but
+// `escalate`, counting as two blocking findings. `duplicate` folds it into
+// its survivor, and the report must say so without listing it as open.
+test("a duplicate is not listed as an open finding but is named in Duplicates", () => {
+  const out = renderReconciliation({
+    runId: "r1",
+    date: "2026-08-05",
+    verdict: "clean",
+    passes: [
+      {
+        pass: 1,
+        lenses: [{ lens: "auditor", status: "ok" }],
+        degraded: [],
+        diff: { new: [], open: [], closed: [] },
+        findings: [
+          {
+            id: "c61d24bc",
+            severity: "major",
+            file: "bin/trio.mjs",
+            line: 343,
+            title: "duplicate detection races",
+            lens: "auditor, tester",
+            verdict: "confirm",
+            basis: "reproduced",
+            bounds: "",
+          },
+          {
+            id: "745cb2bd",
+            severity: "major",
+            file: "bin/trio.mjs",
+            line: 344,
+            title: "same race, worded differently",
+            lens: "tester",
+            verdict: "duplicate",
+            of: "c61d24bc",
+            basis: "same defect as c61d24bc",
+            bounds: "",
+          },
+        ],
+      },
+    ],
+  });
+  const [openSection] = out.split("## Duplicates");
+  assert.doesNotMatch(
+    openSection,
+    /same race, worded differently/,
+    "a duplicate must not be listed as an open finding",
+  );
+  assert.match(out, /## Duplicates/);
+  assert.match(out, /`745cb2bd`.*duplicate of `c61d24bc`/);
+  assert.match(out, /same race, worded differently/, "says what it duplicated");
+  assert.match(openSection, /duplicate detection races/, "the survivor stays open");
+});
+
+test("no Duplicates section is rendered when nothing duplicated", () => {
+  const out = renderReconciliation({
+    runId: "r1",
+    date: "2026-08-05",
+    verdict: "clean",
+    passes: [PASS],
+  });
+  assert.doesNotMatch(out, /## Duplicates/);
+});
+
 test("a newline in a carried field cannot break out of the list item", () => {
   const out = renderReconciliation({
     runId: "r1",

@@ -31,6 +31,7 @@ verdict:
 | `refute`    | The claim is wrong. **You must cite what disproves it.**                                                           |
 | `downgrade` | Real but overstated — for example, a fail-open path that cannot currently be reached.                              |
 | `escalate`  | Worse than reported, or it composes with another finding into a single larger defect. Name the other finding's id. |
+| `duplicate` | Two findings in this pass describe the same defect. **You must name the survivor's id in `of`.**                   |
 
 Rules:
 
@@ -46,15 +47,28 @@ Rules:
   unbounded blast radius gets over-fixed, and "nowhere else" is the most
   useful thing you can write there. Leave it out only when you did not look.
 - `downgrade` is also how you file a finding that is real, correctly reported,
-  and warrants no change — it works as documented. There are only four
+  and warrants no change — it works as documented. There are only five
   verdicts; anything else is refused outright by the tool your caller submits
   this to, which writes nothing and makes them do it again — and a
   `confirm` nobody intends to act on keeps the run from converging. A
   downgrade moves one step, so a `critical` filed this way lands on `major`
   and still blocks — say so in the basis when that happens.
-- A finding about code the diff never touched is still one of the four. If the
+- `duplicate` is for two findings — usually from two different lenses, or the
+  same lens and Claude's own lane — that describe one defect the merge step
+  did not catch, typically because they cite adjacent but different lines. Do
+  not use it for two genuinely different defects that happen to sit near each
+  other. Pick whichever finding is better evidenced as the survivor, verdict
+  the other one `duplicate`, and put the survivor's id in `of` — not the other
+  way around. `of` must name a finding in this same pass that is not itself
+  marked `duplicate`: duplicates do not chain, so if three findings are all
+  the same defect, point all but one directly at the one survivor. A
+  duplicate is folded into its survivor and never counted as a second
+  blocking finding, so getting the direction right matters — verdicting the
+  more severe or better-evidenced finding as the duplicate of a weaker one
+  would understate what actually survives.
+- A finding about code the diff never touched is still one of the five. If the
   claim is wrong, `refute` it. If it is true of code that this change did not
-  introduce, `downgrade` it and say so in the basis. Do not invent a fifth
+  introduce, `downgrade` it and say so in the basis. Do not invent a sixth
   verdict for it — `out_of_scope`, `partial`, `needs_info` and the like are
   rejected on sight, and the finding is left unadjudicated as though you had
   never looked at it.
@@ -76,11 +90,12 @@ find and refuses everything else. Write the adjudication as a report and the
 best case is that the block is dug back out of it; a run has already been lost
 to the worst case, where it was retyped by hand.
 
-`verdict` is one of exactly four lowercase words: `confirm`, `refute`,
-`downgrade`, `escalate`. Trio's own reports render these as CONFIRMED and
-REFUTED — do not write them back that way, and do not write a heading like
-`**CONFIRMED**` in place of the field. Put your reasoning in `basis`, which is
-prose and where it belongs.
+`verdict` is one of exactly five lowercase words: `confirm`, `refute`,
+`downgrade`, `escalate`, `duplicate`. Trio's own reports render these as
+CONFIRMED and REFUTED — do not write them back that way, and do not write a
+heading like `**CONFIRMED**` in place of the field. Put your reasoning in
+`basis`, which is prose and where it belongs. A `duplicate` also needs `of`:
+the id of the finding in this same batch that it duplicates.
 
 Return only the block, nothing after it:
 
@@ -97,6 +112,12 @@ Return only the block, nothing after it:
       "verdict": "confirm",
       "basis": "spawn() at src/lane.mjs:88 returns before the marker is written; a second call in the same tick reads it absent and provisions twice",
       "bounds": "same shape at src/pool.mjs:41; NOT at src/lane.mjs:120 or :164 — both latch, so they retry rather than double-provision"
+    },
+    {
+      "id": "c9d0e1f2",
+      "verdict": "duplicate",
+      "of": "e5f6a7b8",
+      "basis": "same double-provision as e5f6a7b8, reported against src/lane.mjs:90 instead of :88"
     }
   ]
 }

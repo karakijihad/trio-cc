@@ -152,9 +152,16 @@ export function renderReconciliation({ runId, passes, date, verdict }) {
     "",
     "## Open findings",
     "",
-    last.findings.filter((f) => f.verdict !== "refute").length
+    // A duplicate is not a disposition of the defect the way refute is — it
+    // is one lens's finding folded into another's (reconcile.mjs's
+    // applyVerdicts already merged its lens name onto the survivor). Listing
+    // it here too would show the one defect the survivor's row already
+    // covers a second time, which is exactly the double-count `duplicate`
+    // exists to stop. It is named instead in "## Duplicates" below.
+    last.findings.filter((f) => f.verdict !== "refute" && f.verdict !== "duplicate")
+      .length
       ? last.findings
-          .filter((f) => f.verdict !== "refute")
+          .filter((f) => f.verdict !== "refute" && f.verdict !== "duplicate")
           .map((f) => {
             const head = `- **${f.severity}** \`${f.file}\` — ${f.title} (\`${f.id}\`)`;
             // An indented continuation line, not a table cell — bounds is
@@ -189,6 +196,24 @@ export function renderReconciliation({ runId, passes, date, verdict }) {
           .join("\n")
       : "_None._",
     "",
+    ...(last.findings.some((f) => f.verdict === "duplicate")
+      ? [
+          "## Duplicates",
+          "",
+          "Reported by more than one lens as the same defect. Folded into the",
+          "survivor named below, which carries every lens that raised it — these",
+          "never counted as open findings and never blocked convergence.",
+          "",
+          last.findings
+            .filter((f) => f.verdict === "duplicate")
+            .map(
+              (f) =>
+                `- \`${f.id}\` \`${f.file}\` — ${f.title} — duplicate of \`${f.of ?? "?"}\``,
+            )
+            .join("\n"),
+          "",
+        ]
+      : []),
   ].join("\n");
 }
 

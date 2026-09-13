@@ -129,6 +129,49 @@ test("a clean verdicts file logs no error at all", () => {
 
 // Rejection must never read as agreement, and an unreviewed major is still
 // live — so a pass that lost verdicts cannot quietly converge.
+// The defect this closes: reopenRun (src/driver.mjs) points a ceiling_reached
+// run's marker back at its already-settled last pass, and continueRun runs
+// applyAdjudication on it again with the same pass-N/verdicts.json still on
+// disk. Observed in real data: run 2026-09-13T14-28-20/pass-2/reconcile.json
+// has findings reported `major`, verdict `downgrade`, stored `info` — moved
+// two steps because the second run shifted from the first run's own output.
+test("applying adjudication twice on an extended run equals applying it once", () => {
+  const { root, runId } = setup([
+    { id: "a1", verdict: "downgrade", basis: "dormant" },
+    { id: "a2", verdict: "escalate", basis: "composes with a1" },
+  ]);
+  const first = applyAdjudication({
+    root,
+    config: config(),
+    runId,
+    pass: 1,
+    record: record([
+      finding("a1", { severity: "critical" }),
+      finding("a2", { severity: "info" }),
+    ]),
+  });
+  assert.equal(first.record.findings[0].severity, "major");
+  assert.equal(first.record.findings[1].severity, "minor");
+
+  // continueRun re-reads reconcile.json from disk — the file applyAdjudication
+  // just wrote — and hands that back in as `record`, exactly what reopenRun +
+  // continueRun do for a ceiling_reached run that gets extended.
+  const stored = JSON.parse(
+    readFileSync(join(passDir(root, runId, 1), "reconcile.json"), "utf8"),
+  );
+  const second = applyAdjudication({
+    root,
+    config: config(),
+    runId,
+    pass: 1,
+    record: stored,
+  });
+
+  assert.equal(second.record.findings[0].severity, "major", "downgrade, not twice");
+  assert.equal(second.record.findings[1].severity, "minor", "escalate, not twice");
+  assert.deepEqual(second.record.findings, first.record.findings);
+});
+
 test("a pass whose verdicts were rejected does not converge", () => {
   const { root, runId } = setup([{ id: "a1", verdict: "CONFIRMED_AS_REPORTED" }]);
   const { converged } = applyAdjudication({

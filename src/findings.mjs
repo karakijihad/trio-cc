@@ -192,14 +192,46 @@ export function diffPasses(prev, curr) {
 // nine recorded declines were exactly that. Exempting those would let a run
 // report `clean` over known defects, which is the one claim this codebase
 // spends the most effort refusing to make.
+//
+// `duplicate` also exempts, unconditionally. It is not a disposition of the
+// defect the way refute is — it is one lens's finding folded into another's,
+// via reconcile.mjs's applyVerdicts, which already merged the duplicate's
+// lens name onto the survivor. Counting the duplicate as live too would let
+// one defect reported by two lenses block convergence as two, which is
+// exactly the shape that had nothing to write but `escalate` before this
+// verdict existed.
 export const isLive = (f) =>
   f.verdict !== "refute" &&
+  f.verdict !== "duplicate" &&
   !(f.verdict === UNREVIEWED && f.carried?.priorVerdict === "refute");
 
+// A new finding blocks convergence only when it is both live and severe
+// enough to block on its own — the same bar `blockOn` already applies to
+// every other live finding, not "any new finding at all". That used to make
+// `clean` practically unreachable: a brand-new `info` note, or a real major
+// the reconciler had already downgraded to minor, blocked a run the same as
+// an unresolved critical. Across nine recorded runs none converged, because
+// every one of them turned up something new below the blocking bar in its
+// final pass.
+//
+// `diff.new` is always a subset of `curr` (diffPasses derives it from the
+// same array isConverged receives), so this can never fire without the
+// first check above already having fired too — the general severity gate
+// already covers a new *and blocking* finding. `requireNoNewFindings`
+// therefore no longer has independent effect on the outcome; it stays a
+// separate config key rather than being folded away so it can still be
+// turned off on its own if a future rule gives it one again, and so an old
+// config that sets it to `false` keeps meaning "do not gate on new findings
+// at all" rather than silently inheriting the general gate.
 export function isConverged(curr, diff, converge) {
+  const blockOn = converge.blockOn ?? [];
   const live = curr.filter(isLive);
-  const blocking = live.some((x) => (converge.blockOn ?? []).includes(x.severity));
+  const blocking = live.some((x) => blockOn.includes(x.severity));
   if (blocking) return false;
-  if (converge.requireNoNewFindings && diff.new.some(isLive)) return false;
+  if (
+    converge.requireNoNewFindings &&
+    diff.new.some((x) => isLive(x) && blockOn.includes(x.severity))
+  )
+    return false;
   return true;
 }

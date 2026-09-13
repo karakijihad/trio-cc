@@ -95,6 +95,13 @@ export function buildSettled(root, runId, uptoPass) {
     // opposite of tolerant.
     const usable = findings.filter((f) => f && typeof f === "object");
 
+    // `duplicate` deliberately does neither. It is not a disposition of the
+    // defect — it says a lens's finding is the same defect another finding
+    // in *this pass* already covers, folded into that survivor by
+    // reconcile.mjs's applyVerdicts. It settles nothing (a later pass that
+    // re-raises at the duplicate's own location gets a fresh look, not a
+    // false "already refuted") and overturns nothing (it says nothing about
+    // whether the defect is real, so a stale refutation elsewhere stands).
     for (const f of usable) {
       if (f.verdict === "refute") settle(f, "refuted", "refute", f.basis ?? "");
       else if (OVERTURNS.has(f.verdict)) drop(f);
