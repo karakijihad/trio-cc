@@ -64,8 +64,11 @@ name the closest match.
 - **Reconciler** — the Claude agent `trio-reconciler`. Rules on each finding:
   `confirm`, `refute` (must cite evidence), `downgrade` (real but
   overstated), `escalate` (worse than reported, or composes with another
-  finding into one bigger defect). Codex being confident is not evidence.
-  There is no fifth verdict. Its ruling is submitted through
+  finding into one bigger defect), `duplicate` with `of: <id>` (the same
+  defect another lens reported; it never blocks, and its lens is credited on
+  the survivor). Codex being confident is not evidence. Applying a verdict
+  twice, as extending a run does, changes nothing further: severity always
+  shifts from what the lens reported. Its ruling is submitted through
   `trio verdicts <runId> <pass>`, which refuses the whole submission and
   writes nothing if a verdict is unrecognised, a finding is left without one,
   or a disagreement cites nothing — every problem reported at once.
@@ -73,8 +76,9 @@ name the closest match.
   its own prior findings, the diff of what Claude changed, and which
   findings Claude declined and why. It then agrees, pushes back, or reports
   what the change broke.
-- **Convergence** — the loop stops clean when nothing open is
-  `critical`/`major` **and** nothing new appeared this pass.
+- **Convergence** — the loop stops clean when nothing live is at a
+  `blockOn` severity (`critical`/`major` by default). A new `info` or `minor`
+  finding no longer holds a run open.
 - **Verdict** — how a run ended: `clean` (converged), `ceiling_reached` (hit
   the pass limit with findings open — never reported as success), `failed`
   (something broke), `cancelled` (`/trio:cancel`). A crashed or unparseable

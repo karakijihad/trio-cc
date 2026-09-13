@@ -119,7 +119,7 @@ export function renderReconciliation({ runId, passes, date, verdict }) {
   const last = passes.at(-1);
   const outcome =
     verdict === "clean"
-      ? "Converged: no unresolved critical or major findings, and no new findings in the final pass."
+      ? "Converged: no unresolved finding at a blocking severity in the final pass."
       : verdict === "ceiling_reached"
         ? `Stopped at the iteration ceiling after ${passes.length} pass(es). Findings below remain open.`
         : `Run ended as \`${verdict}\`.`;
