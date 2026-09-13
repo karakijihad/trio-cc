@@ -283,6 +283,26 @@ test("unknownKeys tolerates a malformed lens list instead of throwing", () => {
     );
 });
 
+// It used to store the raw string, which convergence then checked
+// membership against as if it were a list.
+test("converge.blockOn is set as a validated list, and a string is refused", () => {
+  assert.deepEqual(
+    setConfigValue(DEFAULT_CONFIG, "converge.blockOn", "critical, major,critical")
+      .converge.blockOn,
+    ["critical", "major"],
+  );
+  for (const bad of ["", "severe", "critical,nope"])
+    assert.throws(
+      () => setConfigValue(DEFAULT_CONFIG, "converge.blockOn", bad),
+      /comma-separated list/,
+    );
+  const errs = configErrors({
+    ...DEFAULT_CONFIG,
+    converge: { ...DEFAULT_CONFIG.converge, blockOn: "critical,major" },
+  }).join(" ");
+  assert.match(errs, /converge\.blockOn must be a list/);
+});
+
 test("codexHome honours CODEX_HOME", () => {
   const prev = process.env.CODEX_HOME;
   process.env.CODEX_HOME = "/custom/codex";

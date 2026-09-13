@@ -169,14 +169,18 @@ export function main(rawStdin, root) {
   if (!marker.run || tapIsFull(runDir(root, marker.run))) return;
   try {
     const dir = runDir(root, marker.run);
-    const fields = normalize(JSON.parse(rawStdin));
-    if (!fields) return;
+    const input = JSON.parse(rawStdin);
+    // Scope before normalize: normalize computes the diff, which can be a
+    // 4000×4000 LCS, and an out-of-scope edit is dropped anyway.
     if (
-      fields.kind === "file_change" &&
-      !inScope(root, readTarget(dir), fields.payload.file)
+      input?.hook_event_name === "PostToolUse" &&
+      (input.tool_name === "Edit" || input.tool_name === "Write") &&
+      !inScope(root, readTarget(dir), input.tool_input?.file_path ?? "")
     ) {
       return;
     }
+    const fields = normalize(input);
+    if (!fields) return;
     appendEvent(
       dir,
       makeEvent({ run: marker.run, pass: marker.pass ?? 0, ...fields }),

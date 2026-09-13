@@ -147,6 +147,15 @@ export function configErrors(cfg) {
         );
     }
 
+  const blockOn = at(cfg, "converge.blockOn");
+  if (
+    !Array.isArray(blockOn) ||
+    blockOn.some((s) => !SEVERITIES.includes(s))
+  )
+    errors.push(
+      `converge.blockOn must be a list of: ${SEVERITIES.join(", ")}, got: ${JSON.stringify(blockOn)}`,
+    );
+
   const mode = at(cfg, "view.mode");
   if (!ENUMS["view.mode"].includes(mode))
     errors.push(
@@ -256,6 +265,21 @@ export function saveConfig(root, cfg) {
   writeFileSync(p, JSON.stringify(stored, null, 2) + "\n");
 }
 
+const SEVERITIES = ["critical", "major", "minor", "info"];
+
+function parseSeverities(raw) {
+  const list = String(raw ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const bad = list.filter((s) => !SEVERITIES.includes(s));
+  if (!list.length || bad.length)
+    throw new Error(
+      `converge.blockOn expects a comma-separated list of: ${SEVERITIES.join(", ")}, got: ${raw}`,
+    );
+  return [...new Set(list)];
+}
+
 export function setConfigValue(cfg, dottedKey, raw) {
   const next = clone(cfg);
   const parts = dottedKey.split(".");
@@ -307,6 +331,11 @@ export function setConfigValue(cfg, dottedKey, raw) {
     if (!["true", "false"].includes(raw))
       throw new Error(`${dottedKey} expects true or false, got: ${raw}`);
     cursor[leaf] = raw === "true";
+  } else if (dottedKey === "converge.blockOn") {
+    // Stored as the string it arrived as, `"critical,major"` was an array to
+    // nobody: convergence checks membership, and a string matched nothing
+    // the way it was meant to.
+    cursor[leaf] = parseSeverities(raw);
   } else {
     cursor[leaf] = raw;
   }
