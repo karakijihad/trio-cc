@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { codexHome, capabilitiesPath } from "./paths.mjs";
 import { preflight } from "./preflight.mjs";
+import { consultSettings } from "./config.mjs";
 
 const TTL_MS = 86_400_000;
 const FUTURE_SKEW_MS = 60_000;
@@ -114,6 +115,7 @@ export function modelsReport(caps, config) {
       effort,
       on,
     })),
+    consult: consultSettings(config),
   };
 }
 

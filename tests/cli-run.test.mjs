@@ -439,13 +439,97 @@ test("run: an invalid --max is rejected without invoking Codex at all", () => {
 // It warns rather than refuses — models_cache.json is Codex's own cache and
 // can lag, so a mismatch must never be able to block a run outright.
 test("run: warns before spending when a lens names a model the catalogue lacks", () => {
-  const { cli } = project();
+  const { root, cli } = project();
+  // Lenses ship unpinned, so pin a slug the fake catalogue (fake-model only)
+  // does not have — a retired model, as far as the run can tell.
+  const cfg = JSON.parse(cli(["config", "get"]).stdout);
+  cfg.codex.lenses.find((l) => l.name === "auditor").model = "retired-model";
+  writeFileSync(join(root, ".trio", "config.json"), JSON.stringify(cfg));
   const res = cli(["run", "--lenses", "auditor"]);
-  // DEFAULT_CONFIG pins a real slug; the fake catalogue knows only fake-model.
   assert.match(res.stderr, /lens auditor: unknown model/);
   // Warned, not refused — and on stderr, so stdout is still the run's JSON.
   assert.equal(res.status, 0, res.stderr);
   assert.equal(JSON.parse(res.stdout).verdict, "clean");
+});
+
+// Consult's own model, set apart from the lens it used to borrow — so the
+// invocation log proves which one reached Codex, not only what was warned.
+const consultProject = (consult) => {
+  const { root, cli } = project();
+  const cfg = JSON.parse(cli(["config", "get"]).stdout);
+  cfg.codex.consult = consult;
+  writeFileSync(join(root, ".trio", "config.json"), JSON.stringify(cfg));
+  const touched = join(root, "codex-was-invoked.log");
+  const pathDir = mkdtempSync(join(tmpdir(), "trio-bin-"));
+  const home = mkdtempSync(join(tmpdir(), "trio-home-"));
+  installFakeCodex(pathDir);
+  fakeCodexHome(home);
+  const env = fakeEnv({
+    pathDir,
+    codexHome: home,
+    project: root,
+    extra: { FAKE_CODEX_TOUCH: touched },
+  });
+  const run = (args) => spawnSync("node", [CLI, ...args], { env, encoding: "utf8" });
+  return { root, run, touched };
+};
+
+test("consult: invokes Codex with its own model and effort", () => {
+  const { run, touched } = consultProject({ model: "fake-model", effort: "high" });
+  const res = run(["consult", "is this sound?"]);
+  assert.equal(res.status, 0, res.stderr);
+  assert.doesNotMatch(res.stderr, /consult: /);
+  const exec = readFileSync(touched, "utf8")
+    .split("\n")
+    .find((l) => l.startsWith("exec") && !l.includes("--help"));
+  assert.match(exec, /--model fake-model/);
+  assert.match(exec, /model_reasoning_effort=high/);
+});
+
+test("consult: warns when its own model is not in the catalogue", () => {
+  const { run, touched } = consultProject({ model: "retired-model", effort: null });
+  const res = run(["consult", "is this sound?"]);
+  assert.match(res.stderr, /consult: unknown model: retired-model/);
+  assert.match(readFileSync(touched, "utf8"), /--model retired-model/);
+  // warned, not refused: the consult still completes
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(JSON.parse(res.stdout).failed, false);
+});
+
+test("lens consult validates, saves, and reports consult's own model", () => {
+  const { run } = consultProject({ model: null, effort: null });
+  const consultOf = () => JSON.parse(run(["config", "get"]).stdout).codex.consult;
+
+  const set = run(["lens", "consult", "model", "fake-model", "effort", "high"]);
+  assert.equal(set.status, 0, set.stdout + set.stderr);
+  assert.match(set.stdout, /^consult {2}fake-model {2}high/);
+  assert.deepEqual(consultOf(), { model: "fake-model", effort: "high" });
+
+  const bad = run(["lens", "consult", "model", "not-in-catalogue"]);
+  assert.equal(bad.status, 2);
+  assert.match(bad.stdout, /unknown model: not-in-catalogue/);
+  assert.deepEqual(consultOf(), { model: "fake-model", effort: "high" });
+});
+
+test("consult: refuses a malformed config instead of crashing", () => {
+  const { root, run } = consultProject({ model: null, effort: null });
+  const cfg = JSON.parse(readFileSync(join(root, ".trio", "config.json"), "utf8"));
+  cfg.codex.lenses = null;
+  writeFileSync(join(root, ".trio", "config.json"), JSON.stringify(cfg));
+  const res = run(["consult", "is this sound?"]);
+  assert.doesNotMatch(res.stderr, /TypeError/);
+  assert.match(res.stdout, /codex\.lenses/);
+  assert.notEqual(res.status, 0);
+});
+
+test("models --json carries what consult runs on", () => {
+  const { run } = consultProject({ model: "fake-model", effort: "low" });
+  const res = run(["models", "--json"]);
+  assert.equal(res.status, 0, res.stderr);
+  assert.deepEqual(JSON.parse(res.stdout).consult, {
+    model: "fake-model",
+    effort: "low",
+  });
 });
 
 // Trio ships on, so /trio:off is the whole opt-out. It has to hold before the

@@ -4,6 +4,12 @@ What went wrong, and what was done about it. One line each, newest first.
 
 ---
 
+## 2026-09-13 — who picks the model
+
+- **Trio shipped a model slug that would expire.** All five lenses pinned `gpt-5.6-terra`, so every project that never edited its config would one day start every run on a model OpenAI had retired. Lenses now ship `model: null` (the Codex CLI decides); a slug someone pins and later loses is flagged at run start with an offer to re-pick.
+- **Consult ran on whichever lens happened to be first.** It borrowed the first enabled lens's model, so it could not run heavier than an audit, and switching `auditor` off silently changed it. `codex.consult` is its own setting now, with the old borrowing as the fallback.
+- **A solo audit could be reviewed by a weaker model than the one that wrote the code** — `trio-lens` and `trio-reconciler` hardcode Sonnet. `claude.agentModel` overrides both, and `claude.consultModel` picks the Claude half of a consult.
+
 ## 2026-08-18 — the last pass, and what happens when Codex is out
 
 - **A run could reach `ceiling_reached` over findings nobody had reviewed.** The final pass was judged on raw lens output, where every finding is `unreviewed` and therefore live, so one unreviewed `major` closed the run. Every earlier pass was judged *after* adjudication — the last one was held to a different standard purely because the loop had run out of passes. It now parks like any other pass (`final: true`), and `continue` settles it once the verdicts are in.

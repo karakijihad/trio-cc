@@ -126,6 +126,10 @@ Skip this only if the operator explicitly asks for a Codex-only run.
    URL with VS Code's Simple Browser: the server is already running).
 2. Read the JSON the command prints.
 
+   A `⚠ lens <name>: unknown model` line on stderr means a pinned slug has
+   left the Codex catalogue. The run still goes ahead; when you report, name
+   the lens and offer `/trio:model <name>` to pick a current model.
+
    **`codexUnavailable` on the result** → Codex cannot be used, for a reason
    waiting will not fix. Do not retry it. Hand off to the **`trio-solo`**
    skill, which asks the operator whether to audit with Claude subagents
@@ -147,7 +151,9 @@ Skip this only if the operator explicitly asks for a Codex-only run.
    a. Read `.trio/runs/<runId>/pass-N/reconcile.json` — **now**, not earlier.
    Findings carry a `lens` naming every lane that raised them; one reading
    `claude` alone is yours and Codex's lenses all missed it. If there are
-   findings, dispatch the `trio-reconciler` agent with the findings array.
+   findings, dispatch the `trio-reconciler` agent with the findings array —
+   with `model` set to `claude.agentModel` from `trio config get` when that is
+   not null, and left off when it is.
    Your own findings are adjudicated too — being yours earns them nothing.
 
    Do not write `verdicts.json` yourself. Pipe the reconciler's reply to

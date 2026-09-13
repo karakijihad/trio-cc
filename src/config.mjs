@@ -19,35 +19,36 @@ export const DEFAULT_CONFIG = Object.freeze({
     timeoutMinutes: 15,
     // This is the setting that decides what reviews your code, and it is meant
     // to be edited — by hand in .trio/config.json, or with /trio:model and
-    // /trio:lens. The shipped slug is a starting point, not a constraint.
+    // /trio:lens. `trio models` lists what your CLI actually offers.
     //
-    // It is pinned rather than left to the CLI on purpose: an audit record has
-    // to say what produced it, and Trio does not read back the model Codex
-    // would have chosen on its own. Setting `model` to null is supported and
-    // means "whatever the Codex CLI defaults to" — the flag is then omitted
-    // entirely — but the run record can only report `codex default`, so prefer
-    // naming one. `trio models` lists what your CLI actually offers.
-    // All five ship the same model and effort: one baseline is easier to
-    // reason about than five, and per-lens tuning is a decision for whoever
-    // sees their own runs, not a default to inherit.
+    // It ships unpinned: `model: null` omits the flag and the Codex CLI picks.
+    // A slug shipped here expires on OpenAI's schedule, not Trio's, and every
+    // project that never touched its config would then start every run on a
+    // model that no longer exists. The cost is that an unpinned run's record
+    // can only say `codex default`, so pin one when the record matters — a
+    // pinned slug that later leaves the catalogue is flagged at run start.
+    // All five ship the same effort: one baseline is easier to reason about
+    // than five, and per-lens tuning is a decision for whoever sees their own
+    // runs, not a default to inherit.
     lenses: [
-      { name: "auditor", model: "gpt-5.6-terra", effort: "medium", on: true },
-      { name: "security", model: "gpt-5.6-terra", effort: "medium", on: true },
-      { name: "tester", model: "gpt-5.6-terra", effort: "medium", on: true },
-      {
-        name: "simplifier",
-        model: "gpt-5.6-terra",
-        effort: "medium",
-        on: true,
-      },
-      {
-        name: "consistency",
-        model: "gpt-5.6-terra",
-        effort: "medium",
-        on: true,
-      },
+      { name: "auditor", model: null, effort: "medium", on: true },
+      { name: "security", model: null, effort: "medium", on: true },
+      { name: "tester", model: null, effort: "medium", on: true },
+      { name: "simplifier", model: null, effort: "medium", on: true },
+      { name: "consistency", model: null, effort: "medium", on: true },
     ],
+    // What `trio consult` runs on. A null field falls back to the first
+    // enabled lens's, which is what consult always did — but borrowing meant a
+    // consult could not run heavier than an audit, and turning `auditor` off
+    // silently changed the consult model.
+    consult: { model: null, effort: null },
   },
+  // The Claude side. Aliases rather than model ids, so they survive a release.
+  // agentModel: the model for trio-lens and trio-reconciler subagents; null
+  // keeps what their definitions pin. consultModel: when set, the Claude half
+  // of a consult is answered by a subagent on that model instead of the
+  // session model.
+  claude: { agentModel: null, consultModel: null },
   view: { mode: "window", port: 4319, autoOpen: true },
   // offerExtension: hitting the ceiling with blocking findings still open is
   // ambiguous — a pass that closed twelve and opened eight was still
@@ -68,9 +69,21 @@ export const DEFAULT_CONFIG = Object.freeze({
 
 // Only modes with a production handler are offered. Raw runs always live under
 // .trio/runs — that path is not configurable, so it is not a setting.
+const CLAUDE_ALIASES = ["sonnet", "opus", "haiku", "fable"];
 const ENUMS = {
   "view.mode": ["pane", "window", "off"],
+  "claude.agentModel": CLAUDE_ALIASES,
+  "claude.consultModel": CLAUDE_ALIASES,
 };
+
+// Keys whose default is null, where `config set <key> null` is how a value is
+// cleared again. Every other key keeps the string "null" as a string.
+const NULLABLE = new Set([
+  "codex.consult.model",
+  "codex.consult.effort",
+  "claude.agentModel",
+  "claude.consultModel",
+]);
 
 const POSITIVE_INTEGERS = new Set([
   "maxIterations",
@@ -118,12 +131,50 @@ export function configErrors(cfg) {
   else if (lenses.some((l) => !l || typeof l.name !== "string" || !l.name))
     errors.push("every entry in codex.lenses needs a name");
 
+  // `"consult": null` survives merge the same way and would crash consult.
+  const consult = at(cfg, "codex.consult");
+  if (!consult || typeof consult !== "object" || Array.isArray(consult))
+    errors.push(
+      `codex.consult must be an object, got: ${JSON.stringify(consult)}`,
+    );
+  else
+    for (const field of ["model", "effort"]) {
+      const v = consult[field];
+      if (v !== null && v !== undefined && typeof v !== "string")
+        errors.push(
+          `codex.consult.${field} must be a string or null, got: ${JSON.stringify(v)}`,
+        );
+    }
+
   const mode = at(cfg, "view.mode");
   if (!ENUMS["view.mode"].includes(mode))
     errors.push(
       `view.mode must be one of: ${ENUMS["view.mode"].join(", ")}, got: ${JSON.stringify(mode)}`,
     );
+  // These reach an Agent call's `model` verbatim, so a hand-edited typo is
+  // refused here rather than failing the dispatch.
+  for (const key of ["claude.agentModel", "claude.consultModel"]) {
+    const v = at(cfg, key);
+    if (v !== null && v !== undefined && !ENUMS[key].includes(v))
+      errors.push(
+        `${key} must be one of: ${ENUMS[key].join(", ")} or null, got: ${JSON.stringify(v)}`,
+      );
+  }
   return errors;
+}
+
+// The model and effort `trio consult` runs on: its own setting per field, the
+// first enabled lens's where that is null — the first lens's when all are off.
+// Callers reach this before configErrors has run (gatherState backs the
+// panel), so a malformed hand-edited file must not throw here.
+export function consultSettings(cfg) {
+  const lenses = Array.isArray(cfg.codex?.lenses) ? cfg.codex.lenses : [];
+  const lens = lenses.find((l) => l?.on) ?? lenses[0] ?? {};
+  const own = cfg.codex?.consult ?? {};
+  return {
+    model: own.model ?? lens.model,
+    effort: own.effort ?? lens.effort,
+  };
 }
 
 const merge = (base, over) => {
@@ -181,6 +232,17 @@ export function setConfigValue(cfg, dottedKey, raw) {
   const leaf = parts.at(-1);
   if (template?.[leaf] === undefined)
     throw new Error(`unknown key: ${dottedKey}`);
+
+  if (NULLABLE.has(dottedKey) && raw === "null") {
+    cursor[leaf] = null;
+    return next;
+  }
+  // A model or effort is only valid against the live catalogue, which this
+  // pure setter cannot see. `trio lens consult` can, so values go through it.
+  if (dottedKey.startsWith("codex.consult."))
+    throw new Error(
+      `set consult's model and effort with: trio lens consult model <slug> effort <level> (it checks the catalogue). ${dottedKey} null hands it back to the lenses.`,
+    );
 
   const allowed = ENUMS[dottedKey];
   if (allowed && !allowed.includes(raw)) {

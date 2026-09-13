@@ -400,3 +400,8 @@ test("modelsReport tolerates null caps (probe never succeeded)", () => {
   assert.deepEqual(r.models, []);
   assert.equal(r.lenses.length, DEFAULT_CONFIG.codex.lenses.length);
 });
+
+test("modelsReport says what consult runs on", () => {
+  const r = modelsReport(null, DEFAULT_CONFIG);
+  assert.deepEqual(r.consult, { model: null, effort: "medium" });
+});

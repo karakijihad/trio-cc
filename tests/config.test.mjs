@@ -9,6 +9,7 @@ import {
   saveConfig,
   setConfigValue,
   configErrors,
+  consultSettings,
 } from "../src/config.mjs";
 import { codexHome, trioDir } from "../src/paths.mjs";
 
@@ -156,6 +157,86 @@ test("setConfigValue does not mutate the input", () => {
   const before = DEFAULT_CONFIG.maxIterations;
   setConfigValue(DEFAULT_CONFIG, "maxIterations", "9");
   assert.equal(DEFAULT_CONFIG.maxIterations, before);
+});
+
+// A shipped slug expires on OpenAI's schedule and strands every project that
+// never touched its config.
+test("lenses ship unpinned and the Claude side ships unset", () => {
+  for (const l of DEFAULT_CONFIG.codex.lenses) assert.equal(l.model, null);
+  assert.deepEqual(DEFAULT_CONFIG.codex.consult, { model: null, effort: null });
+  assert.deepEqual(DEFAULT_CONFIG.claude, {
+    agentModel: null,
+    consultModel: null,
+  });
+});
+
+test("consult borrows the first enabled lens per field until set", () => {
+  const cfg = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
+  cfg.codex.lenses[0] = { name: "auditor", model: "a", effort: "low", on: false };
+  cfg.codex.lenses[1] = { name: "security", model: "s", effort: "high", on: true };
+  assert.deepEqual(consultSettings(cfg), { model: "s", effort: "high" });
+  cfg.codex.consult.model = "c";
+  assert.deepEqual(consultSettings(cfg), { model: "c", effort: "high" });
+  cfg.codex.consult.effort = "xhigh";
+  assert.deepEqual(consultSettings(cfg), { model: "c", effort: "xhigh" });
+  // a config written before consult existed has no key at all
+  delete cfg.codex.consult;
+  assert.deepEqual(consultSettings(cfg), { model: "s", effort: "high" });
+  // every lens off: the first lens, as documented
+  for (const l of cfg.codex.lenses) l.on = false;
+  assert.deepEqual(consultSettings(cfg), { model: "a", effort: "low" });
+});
+
+test("a hand-edited consult model or effort must be a string or null", () => {
+  const errs = configErrors({
+    ...DEFAULT_CONFIG,
+    codex: { ...DEFAULT_CONFIG.codex, consult: { model: {}, effort: [] } },
+  }).join(" ");
+  assert.match(errs, /codex\.consult\.model must be a string or null/);
+  assert.match(errs, /codex\.consult\.effort must be a string or null/);
+});
+
+test("claude model keys take aliases only, and null clears them", () => {
+  for (const key of ["claude.agentModel", "claude.consultModel"]) {
+    const set = setConfigValue(DEFAULT_CONFIG, key, "opus");
+    assert.equal(set.claude[key.split(".")[1]], "opus");
+    assert.throws(
+      () => setConfigValue(DEFAULT_CONFIG, key, "claude-opus-5"),
+      /sonnet.*opus/s,
+    );
+    assert.equal(setConfigValue(set, key, "null").claude[key.split(".")[1]], null);
+  }
+  // No catalogue here, so consult values are routed to `trio lens consult`.
+  assert.throws(
+    () => setConfigValue(DEFAULT_CONFIG, "codex.consult.model", "m1"),
+    /trio lens consult/,
+  );
+  assert.equal(
+    setConfigValue(DEFAULT_CONFIG, "codex.consult.effort", "null").codex.consult
+      .effort,
+    null,
+  );
+});
+
+test("consultSettings survives a malformed config instead of throwing", () => {
+  for (const codex of [{ lenses: null }, { lenses: [] }, {}])
+    assert.deepEqual(consultSettings({ codex }), {
+      model: undefined,
+      effort: undefined,
+    });
+});
+
+test("a hand-edited claude alias or consult block is refused", () => {
+  const bad = (patch) =>
+    configErrors({ ...DEFAULT_CONFIG, ...patch }).join(" ");
+  assert.match(
+    bad({ claude: { agentModel: "gpt", consultModel: null } }),
+    /claude\.agentModel/,
+  );
+  assert.match(
+    bad({ codex: { ...DEFAULT_CONFIG.codex, consult: null } }),
+    /codex\.consult/,
+  );
 });
 
 test("codexHome honours CODEX_HOME", () => {

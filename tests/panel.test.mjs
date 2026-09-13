@@ -66,6 +66,24 @@ test("lists every lens with model, effort and on/off", () => {
   }
 });
 
+test("shows the resolved consult model and effort", () => {
+  const base = {
+    installed: true,
+    config: DEFAULT_CONFIG,
+    caps: CAPS,
+    drift: OK_DRIFT,
+    pre: READY,
+  };
+  assert.match(
+    renderPanel({ ...base, consult: { model: "gpt-5.6-luna", effort: "xhigh" } }),
+    /Consult\s+gpt-5\.6-luna\s+xhigh/,
+  );
+  assert.match(
+    renderPanel({ ...base, consult: { model: null, effort: "medium" } }),
+    /Consult\s+codex default\s+medium/,
+  );
+});
+
 test("the panel names an unpinned lens instead of printing null", () => {
   const config = {
     ...DEFAULT_CONFIG,

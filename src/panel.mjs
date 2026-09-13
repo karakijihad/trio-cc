@@ -18,6 +18,7 @@ const ago = (iso) => {
 export function renderPanel({
   installed,
   config,
+  consult,
   caps,
   drift,
   pre,
@@ -75,6 +76,13 @@ export function renderPanel({
       `${pad(i === 0 ? "Lenses" : "", 11)}${pad(l.name, 12)}${pad(modelLabel(l.model), 16)}${pad(l.effort, 9)}${l.on ? "● on" : "○ off"}`,
     );
   });
+  // Resolved by the caller: this module imports nothing, so the fallback to
+  // the first enabled lens is computed where the config is loaded.
+  if (consult) {
+    lines.push(
+      `${pad("Consult", 11)}${pad("", 12)}${pad(modelLabel(consult.model), 16)}${consult.effort}`,
+    );
+  }
   lines.push("");
   lines.push(
     `${pad("View", 11)}mode  ${pad(config.view.mode, 10)}port ${config.view.port}${pad("", 3)}autoOpen ${config.view.autoOpen ? "✓" : "✗"}`,

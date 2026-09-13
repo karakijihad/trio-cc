@@ -93,10 +93,12 @@ Each prompt carries three things and nothing else:
 Do not paste your own findings into their prompts. Do not tell one lens what
 another is looking at.
 
-**Models.** `trio-lens` is pinned to Sonnet at high effort. That is the
-default and you do not ask about it. Only if the operator names a model do you
-override it — pass `model` on the Agent call; effort comes from the definition
-and cannot be set per call.
+**Models.** `trio-lens` and `trio-reconciler` are pinned to Sonnet at high
+effort. Run `node "${CLAUDE_PLUGIN_ROOT}/bin/trio.mjs" config get` and read
+`claude.agentModel`: when it names an alias, pass it as `model` on every
+`trio-lens` and `trio-reconciler` Agent call. A model the operator names for
+this audit wins over both. Otherwise leave `model` off and do not ask about it.
+Effort comes from the definition and cannot be set per call.
 
 ## Merge, then adjudicate
 

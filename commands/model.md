@@ -1,23 +1,26 @@
 ---
 description: Pick a lens's model and reasoning effort
-argument-hint: "[lens]"
+argument-hint: "[lens|consult]"
 ---
 
 Run `node "${CLAUDE_PLUGIN_ROOT}/bin/trio.mjs" models --json` to read the
-live model catalogue and current lens assignments.
+live model catalogue, current lens assignments, and the model `consult` runs
+on.
 
-If `$ARGUMENTS` already name a lens and/or a model and effort, skip straight
-to applying them (step 4) — the picker below is for when they did not.
+If `$ARGUMENTS` already name a lens (or `consult`) and/or a model and effort,
+skip straight to applying them (step 4) — the picker below is for when they
+did not.
 
 Otherwise ask with `AskUserQuestion`, one question at a time. Each option is
 labelled with the lens's or model's current value where relevant.
 `AskUserQuestion` allows at most 4 options plus its own "Other" — never list
 more than four:
 
-1. **Which lens?** There are five; present the four most likely given the
-   conversation (e.g. the lenses the operator has been discussing), each
-   labelled with its current model and effort. Note that "Other" accepts any
-   of the five lens names.
+1. **Which lens?** There are five, plus `consult` — what `/trio:consult` asks
+   Codex on, which borrows the first enabled lens's model until it is set.
+   Present the four most likely given the conversation (e.g. the lenses the
+   operator has been discussing), each labelled with its current model and
+   effort. Note that "Other" accepts any of the five lens names or `consult`.
 2. **Which model?** Present at most four model slugs from the JSON `models`
    array, each described with its supported efforts. "Other" accepts any
    slug in the catalogue.
@@ -31,11 +34,13 @@ more than four:
 Apply with:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/bin/trio.mjs" lens <name> model <slug> effort <level>
+node "${CLAUDE_PLUGIN_ROOT}/bin/trio.mjs" lens <name|consult> model <slug> effort <level>
 ```
 
-and show the resulting lens line. If the CLI rejects the value, show its
-error verbatim — it already lists what is valid.
+and show the resulting line. If the CLI rejects the value, show its error
+verbatim — it already lists what is valid. To send `consult` back to
+borrowing from the lenses, set `codex.consult.model` and `codex.consult.effort`
+to `null` with `trio config set`.
 
 If `AskUserQuestion` is unavailable (e.g. a headless run), fall back to
 printing the options and asking in prose.

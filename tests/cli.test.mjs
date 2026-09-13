@@ -275,6 +275,19 @@ test("lens does not silently drop a value after on/off", () => {
   if (r.status === 2) assert.match(r.stdout + r.stderr, /not-a-real-model/);
 });
 
+test("lens consult is addressable, but has no on/off", () => {
+  const root = project();
+  const q = trio(root, ["lens", "consult"]);
+  assert.equal(q.status, 0);
+  assert.match(q.stdout, /^consult {2}codex default {2}medium/);
+  for (const flip of ["on", "off"]) {
+    const r = trio(root, ["lens", "consult", flip]);
+    assert.equal(r.status, 2);
+    assert.match(r.stdout, /no on\/off/);
+  }
+  assert.match(trio(root, ["lens", "nope"]).stdout, /known: .*consult/);
+});
+
 test("an unknown command exits non-zero with usage", () => {
   const r = trio(project(), ["frobnicate"]);
   assert.notEqual(r.status, 0);

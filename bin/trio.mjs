@@ -17,6 +17,7 @@ import {
   saveConfig,
   setConfigValue,
   configErrors,
+  consultSettings,
 } from "../src/config.mjs";
 import {
   checkDrift,
@@ -86,7 +87,16 @@ const gatherState = ({ force = false } = {}) => {
   const { caps, pre, cached, probedAt } = probeState({ root, run, force });
   const installed = pre.state !== "not_installed";
   const drift = caps ? checkDrift(caps) : { ok: true, warnings: [] };
-  return { config, pre, installed, caps, drift, cached, probedAt };
+  return {
+    config,
+    consult: consultSettings(config),
+    pre,
+    installed,
+    caps,
+    drift,
+    cached,
+    probedAt,
+  };
 };
 
 // D16: spawns the viewer once, at the start of the run, when the operator's
@@ -327,10 +337,15 @@ switch (cmd) {
   case "lens": {
     const [name, ...pairs] = rest;
     const config = loadConfig(root);
-    const lens = config.codex.lenses.find((l) => l.name === name);
+    // `consult` is addressed like a lens so /trio:model can set it the same
+    // way, but it is not one: it never runs in an audit, so it has no on/off.
+    const isConsult = name === "consult";
+    const lens = isConsult
+      ? config.codex.consult
+      : config.codex.lenses.find((l) => l.name === name);
     if (!lens) {
       out(
-        `unknown lens: ${name}. known: ${config.codex.lenses.map((l) => l.name).join(", ")}`,
+        `unknown lens: ${name}. known: ${config.codex.lenses.map((l) => l.name).join(", ")}, consult`,
       );
       process.exitCode = 2;
       break;
@@ -341,13 +356,23 @@ switch (cmd) {
       process.exitCode = 2;
       break;
     }
+    if (isConsult && "on" in parsed.changes) {
+      out("consult has no on/off — it only sets model and effort.");
+      process.exitCode = 2;
+      break;
+    }
     Object.assign(lens, parsed.changes);
+
+    // What consult will actually run on, fallbacks resolved — the pair that
+    // gets validated and the pair worth reporting.
+    const effective = isConsult ? consultSettings(config) : lens;
+    const line = isConsult
+      ? `consult  ${modelLabel(effective.model)}  ${effective.effort}`
+      : `${lens.name}  ${modelLabel(lens.model)}  ${lens.effort}  ${lens.on ? "on" : "off"}`;
 
     // No arguments is a query, not a change: report the lens and touch nothing.
     if (!Object.keys(parsed.changes).length) {
-      out(
-        `${lens.name}  ${modelLabel(lens.model)}  ${lens.effort}  ${lens.on ? "on" : "off"}`,
-      );
+      out(line);
       break;
     }
     const { caps, pre } = gatherState();
@@ -356,23 +381,21 @@ switch (cmd) {
       process.exitCode = 1;
       break;
     }
-    const check = validateLens(caps, lens);
+    const check = validateLens(caps, effective);
     if (!check.ok) {
       out(check.error);
       process.exitCode = 2;
       break;
     }
     saveConfig(root, config);
-    out(
-      `${lens.name}  ${modelLabel(lens.model)}  ${lens.effort}  ${lens.on ? "on" : "off"}`,
-    );
+    out(line);
     break;
   }
 
   case "models": {
     const asJson = rest.includes("--json");
     const { config, caps } = gatherState();
-    const { models, lenses } = modelsReport(caps, config);
+    const { models, lenses, consult } = modelsReport(caps, config);
     if (!models.length) {
       out("No Codex models known yet — run /trio:doctor to probe.");
       if (asJson) process.exitCode = 1;
@@ -380,8 +403,8 @@ switch (cmd) {
     }
     out(
       asJson
-        ? JSON.stringify({ models, lenses }, null, 2)
-        : renderModelsTable({ models, lenses }),
+        ? JSON.stringify({ models, lenses, consult }, null, 2)
+        : `${renderModelsTable({ models, lenses })}\n\nconsult runs on ${modelLabel(consult.model)} · ${consult.effort}`,
     );
     break;
   }
@@ -969,16 +992,25 @@ switch (cmd) {
       process.exitCode = 1;
       break;
     }
-    const { pre } = gatherState();
+    const bad = configErrors(config);
+    if (bad.length) {
+      out(`Refusing to consult — .trio/config.json is invalid:\n  ${bad.join("\n  ")}`);
+      process.exitCode = 2;
+      break;
+    }
+    const { pre, caps, consult } = gatherState();
     if (pre.state === "not_installed" || pre.state === "not_logged_in") {
       out(`${pre.message}\n  ${pre.fix}`);
       process.exitCode = 1;
       break;
     }
+    // Same warning, same stream, as a run's lens check: stdout is the JSON.
+    if ((caps?.models ?? []).length) {
+      const check = validateLens(caps, consult);
+      if (!check.ok) process.stderr.write(`⚠ consult: ${check.error}\n`);
+    }
 
     const runId = `consult-${newRunId()}`;
-    const lens =
-      config.codex.lenses.find((l) => l.on) ?? config.codex.lenses[0];
     mkdirSync(runDir(root, runId), { recursive: true });
     const { askCodex } = await import("../src/consult.mjs");
     let r;
@@ -986,8 +1018,8 @@ switch (cmd) {
       r = await askCodex({
         question,
         target: root,
-        model: lens.model,
-        effort: lens.effort,
+        model: consult.model,
+        effort: consult.effort,
         runDirPath: runDir(root, runId),
         run: runId,
         timeoutMs: config.codex.timeoutMinutes * 60_000,

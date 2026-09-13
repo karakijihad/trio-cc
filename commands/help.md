@@ -92,7 +92,10 @@ name the closest match.
   the source of truth. Secrets are scrubbed before anything is written.
 - **Model and effort** — each lens has its own Codex model and reasoning
   effort, read live from Codex's own catalogue — a new model appears without
-  a Trio update.
+  a Trio update. Lenses ship unpinned (`codex default`); a pinned slug that
+  leaves the catalogue is flagged at run start. Consult has its own pair,
+  borrowed from the first enabled lens until set. On the Claude side,
+  `claude.agentModel` and `claude.consultModel` take aliases.
 - **Preflight and the drift guard** — before a run, Trio checks Codex is
   installed, logged in, and still accepts the flags Trio depends on. It
   refuses to start with a clear message rather than failing mid-run.
@@ -107,7 +110,7 @@ name the closest match.
 | `/trio:consult <question>`                                             | Ask Claude and Codex the same question independently; compare, disagreements named.                                   |
 | `/trio:cancel`                                                         | Stop the active run: cancellation token, run process stopped, `cancelled` recorded.                                   |
 | `/trio:lenses [preset\|list]`                                          | Interactive picker for which lenses run — preset or custom, this run or saved.                                        |
-| `/trio:model [lens] [model] [effort]`                                  | Interactive picker for a lens's model and reasoning effort, from the live catalogue.                                  |
+| `/trio:model [lens\|consult] [model] [effort]`                         | Interactive picker for a lens's (or consult's) model and reasoning effort, from the live catalogue.                   |
 | `/trio:auditor` / `security` / `tester` / `simplifier` / `consistency` | Run the loop through that one lens only.                                                                              |
 | `/trio:config get` / `set <key> <value>`                               | Read or change any setting; `set` rejects invalid values with the valid list.                                         |
 | `/trio:lens <name> [on\|off] [model <slug>] [effort <level>]`          | Direct, non-interactive lens change.                                                                                  |
@@ -126,7 +129,10 @@ it thinks."
 | `maxIterations`                 | `2`                    | Pass ceiling.                                  |
 | `codex.parallel`                | `5`                    | Lenses run at once. Wall-clock only, not cost. |
 | `codex.timeoutMinutes`          | `15`                   | How long one lens may run before it is stopped and marked degraded. |
-| `codex.lenses[]`                | 5 entries, all `on`    | `{name, model, effort, on}` per lens.          |
+| `codex.lenses[]`                | 5 entries, all `on`    | `{name, model, effort, on}` per lens; `model` ships `null` (Codex CLI default). |
+| `codex.consult`                 | `{model: null, effort: null}` | What `trio consult` runs on; a null field borrows the first enabled lens's (the first lens's if all are off). |
+| `claude.agentModel`             | `null`                 | `sonnet`/`opus`/`haiku`/`fable` for trio-lens and trio-reconciler subagents; null keeps Sonnet. |
+| `claude.consultModel`           | `null`                 | Alias the Claude half of a consult is answered on; null answers in session. |
 | `view.mode`                     | `window`               | `window` opens a browser · `pane` prints the viewer URL to open yourself · `off`. |
 | `view.port`                     | `4319`                 | Viewer's local port.                           |
 | `view.autoOpen`                 | `true`                 | Auto-open the browser in `window` mode.        |
