@@ -496,6 +496,18 @@ test("consult: warns when its own model is not in the catalogue", () => {
   assert.equal(JSON.parse(res.stdout).failed, false);
 });
 
+test("lens consult refuses a malformed consult block instead of faking success", () => {
+  for (const consult of [[], "x"]) {
+    const { root, run } = consultProject(consult);
+    const file = join(root, ".trio", "config.json");
+    const before = readFileSync(file, "utf8");
+    const res = run(["lens", "consult", "model", "fake-model", "effort", "high"]);
+    assert.equal(res.status, 2, JSON.stringify(consult));
+    assert.match(res.stdout, /codex\.consult must be an object/);
+    assert.equal(readFileSync(file, "utf8"), before);
+  }
+});
+
 test("lens consult validates, saves, and reports consult's own model", () => {
   const { run } = consultProject({ model: null, effort: null });
   const consultOf = () => JSON.parse(run(["config", "get"]).stdout).codex.consult;

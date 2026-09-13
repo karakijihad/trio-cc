@@ -337,6 +337,14 @@ switch (cmd) {
   case "lens": {
     const [name, ...pairs] = rest;
     const config = loadConfig(root);
+    // A malformed block cannot hold a change: an array drops named keys on
+    // save and a primitive never takes them, and either would report success.
+    const bad = configErrors(config);
+    if (bad.length) {
+      out(`.trio/config.json is invalid:\n  ${bad.join("\n  ")}`);
+      process.exitCode = 2;
+      break;
+    }
     // `consult` is addressed like a lens so /trio:model can set it the same
     // way, but it is not one: it never runs in an audit, so it has no on/off.
     const isConsult = name === "consult";
