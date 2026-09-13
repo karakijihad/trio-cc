@@ -24,6 +24,8 @@ export function renderPanel({
   pre,
   cached,
   probedAt,
+  configErrors = [],
+  unknownKeys = [],
 }) {
   const lines = [];
 
@@ -47,6 +49,25 @@ export function renderPanel({
 
   if (cached && probedAt) {
     lines.push(`ⓘ cached probe from ${ago(probedAt)} · /trio:doctor to re-probe`);
+  }
+
+  // A hand-edited config that fails this check cannot be read as a lens list,
+  // a view mode, or anything else below — reading it that far is exactly what
+  // used to throw `codex.lenses.forEach is not a function`. Say what is wrong
+  // and stop here, the same refusal `run`, `consult` and `lens` already give.
+  if (configErrors.length) {
+    lines.push("⚠ .trio/config.json is invalid:");
+    for (const e of configErrors) lines.push(`    ${e}`);
+    lines.push("");
+    lines.push(
+      "  trio config set <key> <value> to repair it, or delete .trio/config.json to restore defaults.",
+    );
+    lines.push(RULE);
+    return lines.join("\n");
+  }
+
+  if (unknownKeys.length) {
+    lines.push(`ⓘ unknown config key(s), ignored: ${unknownKeys.join(", ")}`);
   }
 
   if (!drift.ok) {

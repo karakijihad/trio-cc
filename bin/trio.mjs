@@ -17,6 +17,7 @@ import {
   saveConfig,
   setConfigValue,
   configErrors,
+  unknownKeys,
   consultSettings,
 } from "../src/config.mjs";
 import {
@@ -35,8 +36,9 @@ import {
   releaseOwnClaim,
   reopenRun,
   readClaudeFindings,
+  finalizeIfUnfinished,
 } from "../src/driver.mjs";
-import { finalizeRun, newRunId } from "../src/orchestrator.mjs";
+import { newRunId } from "../src/orchestrator.mjs";
 import { runLens, killTree, stopAllLenses } from "../src/codex-lane.mjs";
 import { ping } from "../src/ping.mjs";
 import { start } from "../src/serve.mjs";
@@ -49,7 +51,7 @@ import {
   isRunId,
   processIsTrio,
 } from "../src/paths.mjs";
-import { readMarker, removeMarker } from "../src/marker.mjs";
+import { readMarker } from "../src/marker.mjs";
 import {
   USAGE,
   RUN_FLAGS,
@@ -60,6 +62,7 @@ import {
   valuelessFlags,
   lensSelection,
   parseLensArgs,
+  flagValue,
 } from "../src/cli-args.mjs";
 
 const root = process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
@@ -187,12 +190,8 @@ const beforeFirstPass = async ({ runId }) => {
 // through here: it is operator-writable state, so `run` is only returned when
 // it is shaped like an id Trio actually minted.
 const activeRun = (root) => {
-  try {
-    const { run } = JSON.parse(readFileSync(activeMarker(root), "utf8"));
-    return isRunId(run) ? run : null;
-  } catch {
-    return null;
-  }
+  const held = readMarker(root);
+  return held && isRunId(held.run) ? held.run : null;
 };
 
 // Newest run directory that reached a verdict — what `trio promote` defaults
@@ -271,7 +270,7 @@ switch (cmd) {
       break;
     }
     const s = gatherState();
-    out(renderPanel(s));
+    out(renderPanel({ ...s, configErrors: configErrors(s.config), unknownKeys: unknownKeys(s.config) }));
     break;
   }
 
@@ -279,7 +278,14 @@ switch (cmd) {
     const config = { ...loadConfig(root), enabled: true };
     saveConfig(root, config);
     ensureGitignore();
-    out(renderPanel({ ...gatherState(), config }));
+    out(
+      renderPanel({
+        ...gatherState(),
+        config,
+        configErrors: configErrors(config),
+        unknownKeys: unknownKeys(config),
+      }),
+    );
     break;
   }
 
@@ -288,12 +294,7 @@ switch (cmd) {
     // worker keeps going, keeps spending, and is now unreachable by `cancel`,
     // which finds the run through that very marker. Refuse instead, and name
     // the command that actually ends it.
-    let held = null;
-    try {
-      held = JSON.parse(readFileSync(activeMarker(root), "utf8"));
-    } catch {
-      /* nothing in flight */
-    }
+    const held = readMarker(root);
     if (
       held?.run &&
       !existsSync(join(runDir(root, held.run), "verdict.json"))
@@ -319,7 +320,7 @@ switch (cmd) {
 
   case "doctor": {
     const s = gatherState({ force: true });
-    out(renderPanel(s));
+    out(renderPanel({ ...s, configErrors: configErrors(s.config), unknownKeys: unknownKeys(s.config) }));
     out("");
     // Doctor is the command you run when Codex is broken, so it has to
     // survive Codex being broken and say what it found.
@@ -331,7 +332,13 @@ switch (cmd) {
   case "config": {
     const [action, key, value] = rest;
     if (action === "get") {
-      out(JSON.stringify(loadConfig(root), null, 2));
+      const cfg = loadConfig(root);
+      const unknown = unknownKeys(cfg);
+      if (unknown.length)
+        process.stderr.write(
+          `⚠ unknown config key(s), ignored: ${unknown.join(", ")}\n`,
+        );
+      out(JSON.stringify(cfg, null, 2));
       break;
     }
     if (action !== "set" || !key) {
@@ -418,6 +425,12 @@ switch (cmd) {
   case "models": {
     const asJson = rest.includes("--json");
     const { config, caps } = gatherState();
+    const bad = configErrors(config);
+    if (bad.length) {
+      out(`.trio/config.json is invalid:\n  ${bad.join("\n  ")}`);
+      process.exitCode = 2;
+      break;
+    }
     const { models, lenses, consult } = modelsReport(caps, config);
     if (!models.length) {
       out("No Codex models known yet — run /trio:doctor to probe.");
@@ -561,9 +574,7 @@ switch (cmd) {
       break;
     }
 
-    const source = rest.includes("--file")
-      ? rest[rest.indexOf("--file") + 1]
-      : 0;
+    const source = flagValue(rest, "--file", 0);
     let text;
     try {
       text = readFileSync(source, "utf8");
@@ -607,12 +618,7 @@ switch (cmd) {
   }
 
   case "cancel": {
-    let marker = null;
-    try {
-      marker = JSON.parse(readFileSync(activeMarker(root), "utf8"));
-    } catch {
-      /* no active run */
-    }
+    const marker = readMarker(root);
     if (!marker) {
       out("No active run.");
       break;
@@ -665,14 +671,7 @@ switch (cmd) {
       }
     }
 
-    if (!existsSync(join(runDir(root, runId), "verdict.json"))) {
-      let passCount = 0;
-      while (
-        existsSync(join(passDir(root, runId, passCount + 1), "reconcile.json"))
-      )
-        passCount++;
-      finalizeRun({ root, runId, verdict: "cancelled", passCount });
-    }
+    finalizeIfUnfinished({ root, runId });
     try {
       rmSync(activeMarker(root));
     } catch {
@@ -712,10 +711,11 @@ switch (cmd) {
     }
 
     // Arguments and stored config are validated before Codex is probed or
-    // anything is spawned — gatherState({force:true}) shells out to the real
-    // CLI, so validating after it would mean a malformed flag still ran a
-    // process. An unvalidated --max is not cosmetic either: NaN compares
-    // false against every pass number, removing the ceiling the loop needs.
+    // anything is spawned — gatherState() can still shell out to the real CLI
+    // when its cache has aged out, so validating after it would mean a
+    // malformed flag still ran a process. An unvalidated --max is not
+    // cosmetic either: NaN compares false against every pass number, removing
+    // the ceiling the loop needs.
     const config = loadConfig(root);
     const maxFlag = rest.indexOf("--max");
     if (maxFlag !== -1) {
@@ -736,15 +736,23 @@ switch (cmd) {
       break;
     }
 
-    // Before the probe, not after: gatherState({force:true}) shells out to the
-    // real Codex CLI, and an opted-out project must reach Codex not at all.
+    // Before the probe, not after: gatherState() can still shell out to the
+    // real Codex CLI when its cache has aged out, and an opted-out project
+    // must reach Codex not at all.
     if (!config.enabled) {
       out("Trio is off. Run /trio:on first.");
       process.exitCode = 1;
       break;
     }
 
-    const { drift, pre, caps } = gatherState({ force: true });
+    // Not forced: the capability cache is good for 24h (DESIGN §4), and only
+    // /trio:doctor pays to refresh it early. Reusing a fresh cache here is
+    // what cuts a run's own Codex traffic to just the ping below — the wave
+    // of lenses is the thing actually being paid for. The gap this leaves
+    // (Codex uninstalled in the last 24h) is caught late and generically
+    // rather than with the friendly not-installed message doctor would give,
+    // but that trade is the cache's whole point, not a new one.
+    const { drift, pre, caps } = gatherState();
     if (pre.state === "not_installed" || pre.state === "not_logged_in") {
       out(`${pre.message}\n  ${pre.fix}`);
       process.exitCode = 1;
@@ -756,18 +764,12 @@ switch (cmd) {
       break;
     }
 
-    const target = rest.includes("--target")
-      ? rest[rest.indexOf("--target") + 1]
-      : root;
+    const target = flagValue(rest, "--target", root);
     // Reaches Codex inside the brief, which is written to the child's stdin —
     // never a command line — so this needs no shell quoting. It is trimmed
     // because an all-whitespace scope would print an empty "concentrate on".
-    const scope = rest.includes("--scope")
-      ? rest[rest.indexOf("--scope") + 1].trim() || null
-      : null;
-    const claudeFindingsPath = rest.includes("--claude-findings")
-      ? rest[rest.indexOf("--claude-findings") + 1]
-      : null;
+    const scope = flagValue(rest, "--scope")?.trim() || null;
+    const claudeFindingsPath = flagValue(rest, "--claude-findings");
     const lenses =
       lensNames?.length === 1 && lensNames[0] === "all"
         ? "all"
@@ -911,9 +913,7 @@ switch (cmd) {
     // ceiling and claims the lock; a handover file rejected afterwards would
     // leave the run torn open with the claim held and nothing to release it.
     // Validate the cheap thing first and mutate nothing until it passes.
-    const extendFindings = rest.includes("--claude-findings")
-      ? rest[rest.indexOf("--claude-findings") + 1]
-      : null;
+    const extendFindings = flagValue(rest, "--claude-findings");
     const checked = readClaudeFindings(extendFindings);
     if (!checked.ok) {
       out(`--claude-findings: ${checked.error}`);
@@ -969,9 +969,7 @@ switch (cmd) {
     const r = await continueRun({
       root,
       runLensFn: runLens,
-      claudeFindingsPath: rest.includes("--claude-findings")
-        ? rest[rest.indexOf("--claude-findings") + 1]
-        : null,
+      claudeFindingsPath: flagValue(rest, "--claude-findings"),
     });
     if (r.status === "invalid_findings") {
       out(`--claude-findings: ${r.error}`);

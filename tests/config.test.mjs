@@ -9,6 +9,7 @@ import {
   saveConfig,
   setConfigValue,
   configErrors,
+  unknownKeys,
   consultSettings,
 } from "../src/config.mjs";
 import { codexHome, trioDir } from "../src/paths.mjs";
@@ -237,6 +238,49 @@ test("a hand-edited claude alias or consult block is refused", () => {
     bad({ codex: { ...DEFAULT_CONFIG.codex, consult: null } }),
     /codex\.consult/,
   );
+});
+
+// This repo's own .trio/config.json carries exactly these two, left behind
+// by an older release — a setting nothing reads is never a reason to refuse,
+// only to say so.
+test("unknownKeys names a stale top-level key and a stale nested one", () => {
+  const found = unknownKeys({
+    ...DEFAULT_CONFIG,
+    auto: "ask",
+    artifacts: { ...DEFAULT_CONFIG.artifacts, raw: ".trio/runs" },
+  });
+  assert.ok(found.includes("auto"));
+  assert.ok(found.includes("artifacts.raw"));
+});
+
+test("unknownKeys is quiet over the untouched default config", () => {
+  assert.deepEqual(unknownKeys(DEFAULT_CONFIG), []);
+});
+
+test("unknownKeys never flags the load-time unreadable marker", () => {
+  assert.deepEqual(unknownKeys({ ...DEFAULT_CONFIG, unreadable: true }), []);
+});
+
+// Lens entries are their own small schema, not a dotted path into
+// DEFAULT_CONFIG — an extra field on one entry is still nameable.
+test("unknownKeys checks lens entries against name/model/effort/on, not the array itself", () => {
+  const cfg = {
+    ...DEFAULT_CONFIG,
+    codex: {
+      ...DEFAULT_CONFIG.codex,
+      lenses: [{ name: "auditor", model: null, effort: "medium", on: true, weight: 3 }],
+    },
+  };
+  assert.deepEqual(unknownKeys(cfg), ["codex.lenses[0].weight"]);
+});
+
+// `"codex.lenses": null` is the crash this whole feature guards against
+// elsewhere — unknownKeys must not throw on it either.
+test("unknownKeys tolerates a malformed lens list instead of throwing", () => {
+  for (const lenses of [null, "auditor", 3])
+    assert.doesNotThrow(() =>
+      unknownKeys({ ...DEFAULT_CONFIG, codex: { ...DEFAULT_CONFIG.codex, lenses } }),
+    );
 });
 
 test("codexHome honours CODEX_HOME", () => {

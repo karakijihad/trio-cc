@@ -208,6 +208,29 @@ test("probe reads only auth_mode from auth.json, never tokens", () => {
   }
 });
 
+test("probe reuses a supplied cliVersion instead of asking again", () => {
+  const dir = mkdtempSync(join(tmpdir(), "trio-probe-"));
+  writeFileSync(join(dir, "auth.json"), JSON.stringify({ auth_mode: "chatgpt" }));
+  writeFileSync(join(dir, "models_cache.json"), JSON.stringify(CACHE));
+  const prev = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = dir;
+  try {
+    let versionCalls = 0;
+    const caps = probe({
+      cliVersion: "0.145.0",
+      run: (_cmd, args) => {
+        if (args[0] === "--version") versionCalls++;
+        return { status: 0, stdout: "  --json\n" };
+      },
+    });
+    assert.equal(versionCalls, 0);
+    assert.equal(caps.cliVersion, "0.145.0");
+  } finally {
+    if (prev === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = prev;
+  }
+});
+
 test("saveCapabilities writes the probe result where the panel can find it", () => {
   const root = mkdtempSync(join(tmpdir(), "trio-caps-"));
   saveCapabilities(root, { cliVersion: "0.145.0", models: [] });
@@ -360,6 +383,31 @@ test("probeState re-probes a stale cache without force", () => {
   });
   assert.ok(calls > 0);
   assert.equal(r.cached, false);
+});
+
+// preflight and probe both used to ask `codex --version` — once each, on
+// every single probe, forced or not. probeState hands preflight's answer to
+// probe so it never asks a second time.
+test("probeState asks the CLI's version only once, not twice", () => {
+  const root = mkdtempSync(join(tmpdir(), "trio-probestate-"));
+  saveCapabilities(root, {
+    cliVersion: "0.144.0",
+    models: [],
+    probedAt: "2020-01-01T00:00:00.000Z",
+    preflight: { state: "ready", message: "ok", fix: "" },
+  });
+  let versionCalls = 0;
+  const run = (bin, args) => {
+    if (args[0] === "--version") {
+      versionCalls++;
+      return { status: 0, stdout: "codex-cli 0.145.0" };
+    }
+    if (args[0] === "login") return { status: 0, stdout: "Logged in using ChatGPT" };
+    return { status: 0, stdout: "  --json\n" };
+  };
+  const r = probeState({ root, force: true, run });
+  assert.equal(versionCalls, 1);
+  assert.equal(r.caps.cliVersion, "0.145.0");
 });
 
 test("probeState never throws when the probe fails, and still yields a usable pre", () => {

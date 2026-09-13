@@ -60,6 +60,20 @@ test("ready on a ChatGPT login", () => {
   assert.equal(r.state, "ready");
 });
 
+// capabilities.mjs's probe() used to ask `codex --version` a second time for
+// the same answer. preflight hands its own reading forward so it does not
+// have to.
+test("carries the version it already parsed, so probe need not ask again", () => {
+  const r = preflight({
+    run: runner({
+      "codex --version": { status: 0, stdout: "codex-cli 0.145.0" },
+      "codex login status": { status: 0, stdout: "Logged in using ChatGPT" },
+    }),
+    codexHomeDir: home("chatgpt"),
+  });
+  assert.equal(r.cliVersion, "0.145.0");
+});
+
 test("api_key_mode warns about per-token billing", () => {
   const r = preflight({
     run: runner({

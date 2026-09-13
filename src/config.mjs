@@ -164,6 +164,43 @@ export function configErrors(cfg) {
   return errors;
 }
 
+// Lens entries are their own small schema (name/model/effort/on), not a
+// dotted path into DEFAULT_CONFIG — so they get their own check rather than
+// falling out of the generic walk below.
+const LENS_ENTRY_KEYS = new Set(["name", "model", "effort", "on"]);
+
+// A key `.trio/config.json` carries that DEFAULT_CONFIG does not — a setting
+// this version of Trio never reads, most often left behind by an older
+// release or a hand edit. Never a reason to refuse: the value is simply
+// ignored, so the only harm is an operator wondering why it does nothing.
+// `unreadable` is excluded because it is a load-time signal loadConfig adds
+// to a config that failed to parse, never a key that came from the file.
+export function unknownKeys(cfg) {
+  const found = [];
+  const walk = (obj, template, path) => {
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return;
+    for (const key of Object.keys(obj)) {
+      if (path === "" && key === "unreadable") continue;
+      const full = path ? `${path}.${key}` : key;
+      if (!template || typeof template !== "object" || !(key in template)) {
+        found.push(full);
+        continue;
+      }
+      if (key === "lenses" && Array.isArray(obj[key])) {
+        obj[key].forEach((entry, i) => {
+          if (!entry || typeof entry !== "object") return;
+          for (const k of Object.keys(entry))
+            if (!LENS_ENTRY_KEYS.has(k)) found.push(`${full}[${i}].${k}`);
+        });
+        continue;
+      }
+      walk(obj[key], template[key], full);
+    }
+  };
+  walk(cfg, DEFAULT_CONFIG, "");
+  return found;
+}
+
 // The model and effort `trio consult` runs on: its own setting per field, the
 // first enabled lens's where that is null — the first lens's when all are off.
 // Callers reach this before configErrors has run (gatherState backs the

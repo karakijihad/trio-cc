@@ -26,6 +26,11 @@ export function preflight({ run, codexHomeDir = codexHome() }) {
       fix: INSTALL,
     };
   }
+  // Handed to probe() below (via probeState) so it does not have to ask
+  // `codex --version` a second time for the same answer.
+  const cliVersion = (String(version.stdout ?? "").match(/\d+\.\d+\.\d+/) ?? [
+    null,
+  ])[0];
 
   const status = run("codex", ["login", "status"]);
   const out = scrub(status.stdout ?? "");
@@ -34,6 +39,7 @@ export function preflight({ run, codexHomeDir = codexHome() }) {
       state: "not_logged_in",
       message: "Codex is installed but not logged in.",
       fix: LOGIN,
+      cliVersion,
     };
   }
 
@@ -52,11 +58,13 @@ export function preflight({ run, codexHomeDir = codexHome() }) {
       message:
         "Codex is logged in with an API key — usage is billed per token. Trio runs lenses in parallel, so a pass costs roughly (lenses x audit). Lower codex.parallel or log in with a ChatGPT plan.",
       fix: "codex login   (to switch to a subscription)",
+      cliVersion,
     };
   }
   return {
     state: "ready",
     message: out.trim() || "Codex is logged in.",
     fix: "",
+    cliVersion,
   };
 }

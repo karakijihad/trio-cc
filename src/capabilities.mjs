@@ -119,9 +119,16 @@ export function modelsReport(caps, config) {
   };
 }
 
-export function probe({ run }) {
-  const version = run("codex", ["--version"]);
-  const cliVersion = (version.stdout.match(/\d+\.\d+\.\d+/) ?? ["unknown"])[0];
+// `cliVersion`, when given (even as null, meaning "asked, no version-looking
+// string came back"), is preflight's own answer to `codex --version` —
+// probeState always calls preflight first, and asking the same question of
+// the same process a second time bought nothing but another Codex spawn.
+export function probe({ run, cliVersion }) {
+  if (cliVersion === undefined) {
+    const version = run("codex", ["--version"]);
+    cliVersion = (version.stdout.match(/\d+\.\d+\.\d+/) ?? [null])[0];
+  }
+  cliVersion = cliVersion ?? "unknown";
 
   let cache = {};
   try {
@@ -212,7 +219,7 @@ export function probeState({ root, run, force = false, now = Date.now() }) {
   let caps = null;
   if (pre.state !== "not_installed") {
     try {
-      caps = probe({ run });
+      caps = probe({ run, cliVersion: pre.cliVersion });
     } catch {
       caps = null;
     }

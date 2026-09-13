@@ -30,7 +30,11 @@ the verdict is in the JSON, not the code), 1 refused or nothing to do, 2 you
 called it wrong, 3 another run holds this project's lock (retry later).
 
 A run spends the operator's own OpenAI credit, so an unrecognised flag is
-refused rather than ignored.`;
+refused rather than ignored.
+
+A consult holds no lock — there is nothing for /trio:cancel to find — and
+cannot be cancelled once started; it runs until it answers or its own
+timeout ends it.`;
 
 export const RUN_FLAGS = new Set([
   "--max",
@@ -97,6 +101,14 @@ export const lensSelection = (args) => {
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
+};
+
+// The value following a flag, or `fallback` when the flag is absent. Every
+// call site that reads one flag's value used to repeat
+// `args.includes(x) ? args[args.indexOf(x)+1] : fallback` by hand.
+export const flagValue = (args, flag, fallback = null) => {
+  const at = args.indexOf(flag);
+  return at === -1 ? fallback : args[at + 1];
 };
 
 // The old parser stepped in twos from index 0, so `lens auditor on model x`

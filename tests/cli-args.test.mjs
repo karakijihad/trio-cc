@@ -10,6 +10,7 @@ import {
   valuelessFlags,
   lensSelection,
   parseLensArgs,
+  flagValue,
 } from "../src/cli-args.mjs";
 
 test("asksForHelp recognises both spellings, anywhere", () => {
@@ -58,6 +59,20 @@ test("lensSelection separates 'not asked' from 'asked for nothing'", () => {
     "security",
   ]);
   assert.deepEqual(lensSelection(["--lenses", "all"]), ["all"]);
+});
+
+test("flagValue reads the value following a flag, or falls back", () => {
+  assert.equal(flagValue(["--target", "/repo"], "--target"), "/repo");
+  assert.equal(flagValue(["--max", "2"], "--target"), null);
+  assert.equal(flagValue(["--max", "2"], "--target", "."), ".");
+  // The value at the end of argv, or another flag's own name, is handed back
+  // as-is — the caller decides whether that is a value worth having.
+  assert.equal(flagValue(["--target"], "--target"), undefined);
+  assert.equal(
+    flagValue(["--file"], "--file", 0),
+    undefined,
+    "a flag with nothing after it still overrides the fallback",
+  );
 });
 
 test("parseLensArgs reads the whole grammar", () => {

@@ -82,6 +82,35 @@ function isAbandonedClaim(root, held) {
   return !existsSync(join(passDir(root, held.run, pass), "reconcile.json"));
 }
 
+// The count of passes that reached adjudication, from pass 1 up to the first
+// one that has not. Needed only to fill in `passCount` on a run that is being
+// closed out from the outside — its own bookkeeping never got to count them.
+function completedPassCount(root, runId) {
+  let passCount = 0;
+  while (
+    existsSync(join(passDir(root, runId, passCount + 1), "reconcile.json"))
+  )
+    passCount++;
+  return passCount;
+}
+
+// Closes out a run that never reached its own verdict, recording it
+// "cancelled" (or whatever `verdict` names) with however many passes it
+// completed. Three callers were computing this by hand: a signal releasing
+// its own claim, a reclaimed abandoned claim, and `trio cancel` itself — all
+// of them "something outside the run is ending it, and it never got its own
+// verdict."
+export function finalizeIfUnfinished({ root, runId, verdict = "cancelled" }) {
+  if (existsSync(join(runDir(root, runId), "verdict.json"))) return false;
+  finalizeRun({
+    root,
+    runId,
+    verdict,
+    passCount: completedPassCount(root, runId),
+  });
+  return true;
+}
+
 // Release a claim this process owns, on the way out of a signal. process.exit
 // skips the `finally` in startRun that would have done it, and on win32 no
 // handler runs at all — so this is the graceful half, and isAbandonedClaim
@@ -99,14 +128,7 @@ export function releaseOwnClaim({ root, pid = process.pid } = {}) {
   const held = readMarker(root);
   if (!held || held.pid !== pid) return false;
   const runId = isRunId(held.run) ? held.run : null;
-  if (runId && !existsSync(join(runDir(root, runId), "verdict.json"))) {
-    let passCount = 0;
-    while (
-      existsSync(join(passDir(root, runId, passCount + 1), "reconcile.json"))
-    )
-      passCount++;
-    finalizeRun({ root, runId, verdict: "cancelled", passCount });
-  }
+  if (runId) finalizeIfUnfinished({ root, runId });
   // Compare-and-delete either way. A named claim is matched on its run id; an
   // unnamed one has no id to match, so it is matched on the pid that wrote it
   // — passing undefined here would delete whatever marker happened to be
@@ -144,14 +166,7 @@ function claimActiveRun(root) {
         // what the detached viewer waits for before it stops listening, and a
         // run directory with no verdict reads as still in flight for ever.
         try {
-          let passCount = 0;
-          while (
-            existsSync(
-              join(passDir(root, held.run, passCount + 1), "reconcile.json"),
-            )
-          )
-            passCount++;
-          finalizeRun({ root, runId: held.run, verdict: "cancelled", passCount });
+          finalizeIfUnfinished({ root, runId: held.run });
         } catch {
           /* reclaiming the lock matters more than the epitaph */
         }

@@ -42,6 +42,16 @@ function project({ findings } = {}) {
   fakeCodexHome(home);
   mkdirSync(join(root, "src"), { recursive: true });
   writeFileSync(join(root, "src", "app.js"), "export const add = (a, b) => a - b;\n");
+  // Trio ships enabled, so the only setting these tests actually need is the
+  // viewer off. Writing it straight to disk — rather than spawning `on` and
+  // `config set` as separate CLI processes, as this used to — is most of
+  // this file's own runtime: node's own startup dwarfs anything a fake Codex
+  // does.
+  mkdirSync(join(root, ".trio"), { recursive: true });
+  writeFileSync(
+    join(root, ".trio", "config.json"),
+    JSON.stringify({ view: { mode: "off" } }),
+  );
 
   const env = fakeEnv({
     pathDir,
@@ -52,8 +62,6 @@ function project({ findings } = {}) {
   const cli = (args) =>
     spawnSync("node", [CLI, ...args], { env, encoding: "utf8" });
 
-  assert.equal(cli(["on"]).status, 0);
-  assert.equal(cli(["config", "set", "view.mode", "off"]).status, 0);
   return { root, cli };
 }
 
@@ -290,8 +298,11 @@ test("run --scope: reaches pass 1 and survives into continue", () => {
     extra: { FAKE_CODEX_FINDINGS: FINDING, FAKE_CODEX_BRIEF_LOG: briefs },
   });
   const cli = (args) => spawnSync("node", [CLI, ...args], { env, encoding: "utf8" });
-  assert.equal(cli(["on"]).status, 0);
-  assert.equal(cli(["config", "set", "view.mode", "off"]).status, 0);
+  mkdirSync(join(root, ".trio"), { recursive: true });
+  writeFileSync(
+    join(root, ".trio", "config.json"),
+    JSON.stringify({ view: { mode: "off" } }),
+  );
 
   const first = JSON.parse(
     cli(["run", "--lenses", "auditor", "--scope", "src/app.js only"]).stdout,
@@ -380,8 +391,11 @@ test("run: a lens that exits non-zero finishes the run rather than crashing", ()
   });
   const cli = (args) =>
     spawnSync("node", [CLI, ...args], { env, encoding: "utf8" });
-  cli(["on"]);
-  cli(["config", "set", "view.mode", "off"]);
+  mkdirSync(join(root, ".trio"), { recursive: true });
+  writeFileSync(
+    join(root, ".trio", "config.json"),
+    JSON.stringify({ view: { mode: "off" } }),
+  );
 
   const res = cli(["run", "--lenses", "auditor", "--max", "1"]);
   assert.equal(res.status, 0, res.stderr);
@@ -405,15 +419,15 @@ test("run: an invalid --max is rejected without invoking Codex at all", () => {
   fakeCodexHome(home);
   const touched = join(root, "codex-was-invoked.log");
   const base = { pathDir, codexHome: home, project: root };
-  const setup = fakeEnv(base);
-  spawnSync("node", [CLI, "on"], { env: setup, encoding: "utf8" });
-  spawnSync("node", [CLI, "config", "set", "view.mode", "off"], {
-    env: setup,
-    encoding: "utf8",
-  });
+  mkdirSync(join(root, ".trio"), { recursive: true });
+  writeFileSync(
+    join(root, ".trio", "config.json"),
+    JSON.stringify({ view: { mode: "off" } }),
+  );
 
-  // Only the run invocation is watched — `on` and `config set` legitimately
-  // probe, and the probe cache is deliberately bypassed by run's force:true.
+  // Validation happens before the capability cache is even consulted, so
+  // this must hold with no warm-up at all — not only with the cache the
+  // other tests pre-warm.
   const res = spawnSync(
     "node",
     [CLI, "run", "--max", "nope", "--lenses", "auditor"],
@@ -432,6 +446,48 @@ test("run: an invalid --max is rejected without invoking Codex at all", () => {
       : "not invoked",
     "not invoked",
   );
+});
+
+// The capability probe used to be forced on every `run`, spending a
+// `--version`, a `login status`, another `--version` and an `exec --help`
+// before the wave even started. `on` above already warmed the cache to
+// fresh, so a `run` right after it should touch Codex only for the ping and
+// the lens itself — the wave is what is actually being paid for.
+test("run: a fresh capability cache means only the ping and the lens reach Codex", () => {
+  const root = mkdtempSync(join(tmpdir(), "trio-run-cache-"));
+  const pathDir = mkdtempSync(join(tmpdir(), "trio-bin-"));
+  const home = mkdtempSync(join(tmpdir(), "trio-home-"));
+  installFakeCodex(pathDir);
+  fakeCodexHome(home);
+  const touched = join(root, "codex-was-invoked.log");
+  const base = { pathDir, codexHome: home, project: root };
+  const setup = fakeEnv(base);
+  // `on` warms the capability cache to fresh — only this call may probe.
+  spawnSync("node", [CLI, "on"], { env: setup, encoding: "utf8" });
+  spawnSync("node", [CLI, "config", "set", "view.mode", "off"], {
+    env: setup,
+    encoding: "utf8",
+  });
+
+  const res = spawnSync(
+    "node",
+    [CLI, "run", "--lenses", "auditor"],
+    {
+      env: fakeEnv({ ...base, extra: { FAKE_CODEX_TOUCH: touched } }),
+      encoding: "utf8",
+    },
+  );
+  assert.equal(res.status, 0, res.stderr);
+
+  const invocations = readFileSync(touched, "utf8")
+    .trim()
+    .split("\n")
+    .filter(Boolean);
+  // No --version, no login status, no exec --help: the fresh cache is
+  // reused rather than re-probed. Only the ping and the one lens's own exec
+  // reach Codex.
+  assert.equal(invocations.length, 2, invocations.join(" | "));
+  for (const line of invocations) assert.match(line, /^exec /);
 });
 
 // Both audit lanes found the same gap: a slug that had moved was only

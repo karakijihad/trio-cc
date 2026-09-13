@@ -119,6 +119,60 @@ test("renderModelsTable still accounts for a lens with no model pinned", () => {
   assert.match(out, /gpt-5\.6-luna.*auditor/);
 });
 
+// `config.codex.lenses.forEach` used to throw a raw TypeError here when the
+// config was malformed. The panel is the one caller that cannot simply
+// refuse — it is what /trio:on and bare `trio` render — so it reports the
+// errors and stops instead of reading a config it cannot trust.
+test("reports config errors instead of crashing on a malformed lens list", () => {
+  const out = renderPanel({
+    installed: true,
+    config: { ...DEFAULT_CONFIG, codex: { ...DEFAULT_CONFIG.codex, lenses: null } },
+    caps: CAPS,
+    drift: OK_DRIFT,
+    pre: READY,
+    configErrors: ["codex.lenses must be a non-empty array, got: null"],
+  });
+  assert.match(out, /codex\.lenses/);
+  assert.doesNotMatch(out, /TypeError/);
+});
+
+test("a config error takes over the panel before drift, lenses, or anything else", () => {
+  const out = renderPanel({
+    installed: true,
+    config: DEFAULT_CONFIG,
+    caps: CAPS,
+    drift: { ok: false, warnings: ["codex exec no longer accepts: --json"] },
+    pre: READY,
+    configErrors: ["codex.consult must be an object, got: null"],
+  });
+  assert.match(out, /codex\.consult/);
+  assert.doesNotMatch(out, /--json/);
+});
+
+test("surfaces unknown config keys as a warning, never a refusal", () => {
+  const out = renderPanel({
+    installed: true,
+    config: DEFAULT_CONFIG,
+    caps: CAPS,
+    drift: OK_DRIFT,
+    pre: READY,
+    unknownKeys: ["artifacts.raw", "auto"],
+  });
+  assert.match(out, /artifacts\.raw/);
+  assert.match(out, /auto/);
+});
+
+test("omits the unknown-key line when there are none", () => {
+  const out = renderPanel({
+    installed: true,
+    config: DEFAULT_CONFIG,
+    caps: CAPS,
+    drift: OK_DRIFT,
+    pre: READY,
+  });
+  assert.doesNotMatch(out, /unknown config key/);
+});
+
 test("surfaces drift warnings", () => {
   const out = renderPanel({
     installed: true,

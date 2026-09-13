@@ -15,13 +15,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { installFakeCodex, fakeCodexHome, fakeEnv } from "./helpers/fake-codex.mjs";
 
 const CLI = fileURLToPath(new URL("../bin/trio.mjs", import.meta.url));
+
+// A fake Codex on PATH, shared by every test in this file (node:test runs
+// each file in its own process, so this cannot leak into another file's
+// suite). Without it, any command reaching gatherState — `on`, `doctor`,
+// `lens` when it validates a model — probed whatever Codex the machine
+// running the tests happened to have installed, and the result depended on
+// it.
+const fakePathDir = mkdtempSync(join(tmpdir(), "trio-cli-bin-"));
+const fakeHomeDir = mkdtempSync(join(tmpdir(), "trio-cli-home-"));
+installFakeCodex(fakePathDir);
+fakeCodexHome(fakeHomeDir);
 
 const project = () => mkdtempSync(join(tmpdir(), "trio-cli-"));
 const trio = (root, args) =>
   spawnSync("node", [CLI, ...args], {
-    env: { ...process.env, CLAUDE_PROJECT_DIR: root },
+    env: fakeEnv({ pathDir: fakePathDir, codexHome: fakeHomeDir, project: root }),
     encoding: "utf8",
   });
 
@@ -253,9 +265,12 @@ test("lens rejects malformed arguments instead of reporting success", () => {
   }
 });
 
-// `lens auditor on model X` used to drop the model and still exit 0. Whether
-// the capability check then accepts X depends on the machine, so this asserts
-// the one thing that must hold everywhere: the model was seen, not discarded.
+// `lens auditor on model X` used to drop the model and still exit 0. Against
+// the real Codex CLI, whether the capability check then accepted X depended
+// on the machine running the test. The fake catalogue on PATH here only ever
+// knows "fake-model" (see fake-codex.mjs), so the outcome is deterministic:
+// the capability check refuses it, and refuses it by name — proving the
+// model reached the check rather than being silently dropped.
 test("lens does not silently drop a value after on/off", () => {
   const root = project();
   const modelOf = () =>
@@ -265,14 +280,9 @@ test("lens does not silently drop a value after on/off", () => {
   const before = modelOf();
   const r = trio(root, ["lens", "auditor", "on", "model", "not-a-real-model"]);
 
-  if (r.status === 0) {
-    assert.equal(modelOf(), "not-a-real-model", "the model was dropped");
-    return;
-  }
-  // Rejected — by the capability check, which must have been given the model
-  // to reject. Anything that never mentions it means it never arrived.
+  assert.equal(r.status, 2);
+  assert.match(r.stdout + r.stderr, /not-a-real-model/);
   assert.equal(modelOf(), before, "a rejected change must not persist");
-  if (r.status === 2) assert.match(r.stdout + r.stderr, /not-a-real-model/);
 });
 
 test("lens consult is addressable, but has no on/off", () => {
@@ -286,6 +296,87 @@ test("lens consult is addressable, but has no on/off", () => {
     assert.match(r.stdout, /no on\/off/);
   }
   assert.match(trio(root, ["lens", "nope"]).stdout, /known: .*consult/);
+});
+
+// `"codex.lenses": null` is valid JSON and survives config.mjs's merge as
+// null (see config.mjs's own comment on `merge`). Every command below used to
+// reach `config.codex.lenses.forEach` or `.map` on it and throw a raw
+// TypeError instead of a message an operator could act on.
+const withNullLenses = (root) => {
+  mkdirSync(join(root, ".trio"), { recursive: true });
+  writeFileSync(
+    join(root, ".trio", "config.json"),
+    JSON.stringify({ codex: { lenses: null } }),
+  );
+};
+
+test("the panel reports a malformed lens list instead of crashing", () => {
+  const root = project();
+  withNullLenses(root);
+  const r = trio(root, []);
+  assert.doesNotMatch(r.stderr, /TypeError|forEach is not a function/);
+  assert.match(r.stdout, /codex\.lenses/);
+});
+
+test("on reports a malformed lens list instead of crashing", () => {
+  const root = project();
+  withNullLenses(root);
+  const r = trio(root, ["on"]);
+  assert.doesNotMatch(r.stderr, /TypeError|forEach is not a function/);
+  assert.match(r.stdout, /codex\.lenses/);
+  // `on` still does its own job — config get/set has to keep working so the
+  // file can be repaired.
+  assert.equal(JSON.parse(trio(root, ["config", "get"]).stdout).enabled, true);
+});
+
+test("doctor reports a malformed lens list instead of crashing", () => {
+  const root = project();
+  withNullLenses(root);
+  const r = trio(root, ["doctor"]);
+  assert.doesNotMatch(r.stderr, /TypeError|forEach is not a function/);
+  assert.match(r.stdout, /codex\.lenses/);
+});
+
+test("models refuses a malformed lens list instead of crashing", () => {
+  const root = project();
+  withNullLenses(root);
+  const r = trio(root, ["models"]);
+  assert.doesNotMatch(r.stderr, /TypeError|map is not a function/);
+  assert.equal(r.status, 2);
+  assert.match(r.stdout, /codex\.lenses/);
+});
+
+// config get/set are the way out of a malformed file, so they must keep
+// working over one — this is the whole point of refusing rather than
+// crashing everywhere else.
+test("config get and set still work over a malformed lens list", () => {
+  const root = project();
+  withNullLenses(root);
+  const got = trio(root, ["config", "get"]);
+  assert.equal(got.status, 0);
+  assert.equal(JSON.parse(got.stdout).codex.lenses, null);
+  const set = trio(root, ["config", "set", "maxIterations", "3"]);
+  assert.equal(set.status, 0);
+});
+
+// .trio/config.json can carry keys this version of Trio no longer reads —
+// left behind by an older release, or a hand edit — and that must never be a
+// reason to refuse. It should only ever warn.
+test("an unknown config key warns without refusing anything", () => {
+  const root = project();
+  mkdirSync(join(root, ".trio"), { recursive: true });
+  writeFileSync(
+    join(root, ".trio", "config.json"),
+    JSON.stringify({ artifacts: { raw: ".trio/runs" }, auto: "ask" }),
+  );
+  const got = trio(root, ["config", "get"]);
+  assert.equal(got.status, 0);
+  assert.match(got.stderr, /artifacts\.raw/);
+  assert.match(got.stderr, /auto/);
+
+  const panel = trio(root, []);
+  assert.equal(panel.status, 0);
+  assert.match(panel.stdout, /artifacts\.raw/);
 });
 
 test("an unknown command exits non-zero with usage", () => {
