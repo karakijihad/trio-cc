@@ -362,3 +362,48 @@ test("a duplicate naming an unknown survivor still applies without crashing", ()
   assert.equal(out[0].verdict, "duplicate");
   assert.equal(out[0].of, "zzzz");
 });
+
+// `outOfScope` says a confirmed/escalated finding is real, at the severity
+// shown, but outside the change under audit — the explicit alternative to
+// misusing `downgrade` for the same purpose (see agents/trio-reconciler.md).
+test("outOfScope carries onto a confirmed finding without touching severity", () => {
+  const out = applyVerdicts(
+    [f("a1", { severity: "major" })],
+    [{ id: "a1", verdict: "confirm", basis: "real but not this diff's problem", outOfScope: true }],
+  );
+  assert.equal(out[0].verdict, "confirm");
+  assert.equal(out[0].severity, "major");
+  assert.equal(out[0].outOfScope, true);
+});
+
+test("outOfScope carries onto an escalated finding the same way", () => {
+  const out = applyVerdicts(
+    [f("a1", { severity: "major" })],
+    [{ id: "a1", verdict: "escalate", basis: "composes, but not this diff's problem", outOfScope: true }],
+  );
+  assert.equal(out[0].severity, "critical");
+  assert.equal(out[0].outOfScope, true);
+});
+
+test("a finding with no outOfScope verdict is not flagged", () => {
+  const out = applyVerdicts(
+    [f("a1")],
+    [{ id: "a1", verdict: "confirm", basis: "reproduced" }],
+  );
+  assert.equal(out[0].outOfScope, false);
+});
+
+// A stale flag from a prior application must not survive a fresh verdict
+// that no longer carries it — applyVerdicts always writes the current
+// answer, never inherits it from the finding's own last-round output.
+test("outOfScope does not survive being re-adjudicated without it", () => {
+  const first = applyVerdicts(
+    [f("a1", { severity: "major" })],
+    [{ id: "a1", verdict: "confirm", basis: "x", outOfScope: true }],
+  );
+  const second = applyVerdicts(
+    first,
+    [{ id: "a1", verdict: "confirm", basis: "actually ours to fix" }],
+  );
+  assert.equal(second[0].outOfScope, false);
+});

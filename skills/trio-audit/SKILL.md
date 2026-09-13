@@ -193,7 +193,12 @@ Skip this only if the operator explicitly asks for a Codex-only run.
 
    A run never reaches its verdict on findings nobody has looked at. The
    final pass is adjudicated on the same terms as every pass before it —
-   that call is how.
+   that call is how. But the verdict is computed from what the reconciler
+   adjudicated, not from what step (b) went on to fix — there is no pass
+   N+1 to re-audit that fix, so it stays unverified. A blocking finding
+   marked `fixed` in step (c) still blocks the verdict; the settling call's
+   result carries `fixedUnverified: {ids, count}` naming exactly what landed
+   with nobody re-checking it. See Reporting.
 3. View-mode table:
 
    | Mode     | What to do                                                            |
@@ -206,6 +211,16 @@ Skip this only if the operator explicitly asks for a Codex-only run.
 
 Report exactly what `verdict.json` says:
 
+- If the settling call's result carries `fixedUnverified: {ids, count}`, say
+  so plainly regardless of which verdict came back: "N fix(es) applied after
+  the last pass, not re-audited" — name the ids. Those were fixed in the
+  final pass's step (b)/(c), after which the loop never ran another audit, so
+  nobody has re-checked them; the verdict itself is still honest (a blocking
+  finding marked fixed there still holds the run at `ceiling_reached`, and a
+  `clean` verdict here only means nothing blocking survived adjudication of
+  what was found, not that the fix was verified). Offer one more audit pass
+  to verify them — `extend` on a `ceiling_reached` run, or a fresh `run` if
+  the verdict was `clean` — and let the operator decide.
 - `clean` — converged. Say so, and name what was fixed.
 - `ceiling_reached` — say so plainly and list the open findings. **This is not success.**
   It is the **run's** verdict, never the final pass's: the last pass completed

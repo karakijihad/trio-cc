@@ -58,7 +58,6 @@ export const DEFAULT_CONFIG = Object.freeze({
   // this false stops the offer without changing the ceiling.
   converge: {
     blockOn: ["critical", "major"],
-    requireNoNewFindings: true,
     offerExtension: true,
   },
   // offerToCreate: promotion needs artifacts.promoteTo to exist, and Trio does
@@ -184,12 +183,22 @@ const LENS_ENTRY_KEYS = new Set(["name", "model", "effort", "on"]);
 // ignored, so the only harm is an operator wondering why it does nothing.
 // `unreadable` is excluded because it is a load-time signal loadConfig adds
 // to a config that failed to parse, never a key that came from the file.
+//
+// `converge.requireNoNewFindings` is excluded for a different reason: it is
+// a real setting Trio itself wrote into every `.trio/config.json` that ever
+// existed, retired because a new finding blocking only when it is live and
+// at a blocking severity (the general rule below) already covered it —
+// there was nothing left for it to independently gate. saveConfig writes
+// the whole config back out on every save, so the key survives in projects
+// that upgraded; flagging it would warn every one of them about a setting
+// Trio itself put there and no longer reads.
 export function unknownKeys(cfg) {
   const found = [];
   const walk = (obj, template, path) => {
     if (!obj || typeof obj !== "object" || Array.isArray(obj)) return;
     for (const key of Object.keys(obj)) {
       if (path === "" && key === "unreadable") continue;
+      if (path === "converge" && key === "requireNoNewFindings") continue;
       const full = path ? `${path}.${key}` : key;
       if (!template || typeof template !== "object" || !(key in template)) {
         found.push(full);

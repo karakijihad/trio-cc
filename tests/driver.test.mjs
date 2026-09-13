@@ -246,7 +246,12 @@ const located = (title, line = 10, file = "a.rs") => ({
   id: findingId(file, title),
 });
 
-test("continueRun: a refuted finding re-raised in pass 2 is told to the lens and carried", async () => {
+// A location-only match is not the claim that was refuted — it is a
+// different claim (the title drifted) that happens to land on the same
+// line — so it must stay live and keep blocking. Before this rule, any
+// carried refute exempted a re-raise regardless of how it matched, which
+// let a genuinely new, unadjudicated claim close a run `clean`.
+test("continueRun: a refuted claim re-raised worded differently at the same line stays live and blocks", async () => {
   const root = tmp();
   // Two findings: one refuted, to seed the ledger, and one confirmed, so pass
   // 1 does not converge on the spot and there is a pass 2 at all.
@@ -300,8 +305,58 @@ test("continueRun: a refuted finding re-raised in pass 2 is told to the lens and
   assert.equal(f.carried.matchedBy, "location", "the title drifted, the line did not");
   assert.equal(f.verdict, "unreviewed", "the carry must not invent a verdict");
 
-  // and the payoff: a major finding that would otherwise block does not,
-  // because this run already refuted it.
+  // and the payoff: a location-only match does not excuse a claim nobody has
+  // adjudicated — pass 2 is the last the budget allows, so it parks rather
+  // than reaching a verdict on it.
+  assert.equal(r.status, "awaiting_response");
+  assert.equal(r.final, true);
+});
+
+// The other half of the same rule, pinned beside it: the exact same claim —
+// same file, same title — re-raised after being refuted still auto-clears,
+// because settledMatcher matches it by `id` this time.
+test("continueRun: the exact same refuted claim re-raised still converges without a fresh verdict", async () => {
+  const root = tmp();
+  const started = await startRun({
+    root,
+    config: cfg({ maxIterations: 2 }),
+    target: "/repo",
+    runLensFn: okLens([located("leak"), located("other", 20, "b.rs")]),
+  });
+
+  writeFileSync(
+    join(passDir(root, started.runId, 1), "verdicts.json"),
+    JSON.stringify({
+      verdicts: [
+        {
+          id: findingId("a.rs", "leak"),
+          verdict: "refute",
+          basis: "pinned by a.test.mjs:8 — intended",
+        },
+        { id: findingId("b.rs", "other"), verdict: "confirm", basis: "real" },
+      ],
+    }),
+  );
+
+  // unchanged title this time — the exact same claim comes back.
+  const r = await continueRun({
+    root,
+    runLensFn: async () => ({
+      lens: "auditor",
+      status: "ok",
+      findings: [located("leak")],
+      threadId: "t",
+      raw: "",
+    }),
+  });
+
+  const rec = JSON.parse(
+    readFileSync(join(passDir(root, started.runId, 2), "reconcile.json"), "utf8"),
+  );
+  const [f] = rec.findings;
+  assert.equal(f.carried.matchedBy, "id", "the exact same claim, not just the same line");
+  assert.equal(f.verdict, "unreviewed", "the carry must not invent a verdict");
+
   assert.equal(r.status, "finished");
   assert.equal(r.verdict, "clean");
 });
@@ -377,6 +432,59 @@ test("continueRun: pass 2 still finding the issue hits the ceiling", async () =>
   assert.equal(r.passes, 2);
   assert.equal(existsSync(activeMarker(root)), false);
   void started;
+});
+
+// The final pass's fix, applied after the run's last look. Nothing re-audits
+// it — there is no pass 3 — so the verdict must still reflect the pre-fix
+// finding (unreviewed still blocks), while the result and the promoted
+// report say plainly that a fix landed unverified.
+test("continueRun: a fix applied after the final pass is recorded as fixedUnverified and still blocks", async () => {
+  const root = tmp();
+  mkdirSync(join(root, "Docs", "Audit"), { recursive: true });
+  const config = cfg({ maxIterations: 2 });
+  const runLensFn = okLens([finding("leak")]);
+  const started = await startRun({ root, config, target: "/repo", runLensFn });
+  const parked = await continueRun({ root, runLensFn });
+  assert.equal(parked.final, true);
+
+  // Claude "fixes" it and writes response.json before settling — but there
+  // is no next pass to re-audit the fix.
+  writeFileSync(
+    join(passDir(root, started.runId, 2), "response.json"),
+    JSON.stringify({
+      findings: [
+        { id: findingId("a.rs", "leak"), action: "fixed", note: "patched" },
+      ],
+    }),
+  );
+
+  const r = await continueRun({ root, runLensFn });
+  assert.equal(r.status, "finished");
+  // Still blocking: nobody adjudicated pass 2's finding, so it stays
+  // `unreviewed`, and unreviewed findings block regardless of response.json.
+  assert.equal(r.verdict, "ceiling_reached");
+  assert.deepEqual(r.fixedUnverified, {
+    ids: [findingId("a.rs", "leak")],
+    count: 1,
+  });
+
+  const report = readFileSync(r.promoted.claudePath, "utf8");
+  assert.match(
+    report,
+    /1 fix\(es\) applied after the last pass, not re-audited/,
+  );
+  assert.match(report, new RegExp(findingId("a.rs", "leak")));
+});
+
+test("continueRun: no fixedUnverified when nothing was fixed after the final pass", async () => {
+  const root = tmp();
+  const config = cfg({ maxIterations: 2 });
+  const runLensFn = okLens([finding("leak")]);
+  await startRun({ root, config, target: "/repo", runLensFn });
+  await continueRun({ root, runLensFn });
+  const r = await continueRun({ root, runLensFn });
+  assert.equal(r.verdict, "ceiling_reached");
+  assert.equal(r.fixedUnverified, undefined);
 });
 
 test("continueRun: no active run", async () => {

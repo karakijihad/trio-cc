@@ -161,6 +161,29 @@ export function validateVerdicts(parsed, { knownIds } = {}) {
       problems.push(`${at} (${id}): "of" is only valid on a duplicate verdict`);
     }
 
+    // `outOfScope` says a confirmed or escalated finding is real, at the
+    // severity shown, but outside the change under audit — it warrants no
+    // change here. `downgrade` used to be overloaded for this ("real but
+    // small" and "real but not mine to fix" read identically once severity
+    // is lowered), which silently stopped a genuine major from blocking. This
+    // is the explicit, recorded alternative: severity is untouched, and the
+    // report names it in its own section rather than dropping it (see
+    // isConverged in findings.mjs and the "Outside this change" section in
+    // promote.mjs). Valid only on confirm/escalate — refute already says
+    // there is no defect, duplicate and downgrade already have their own
+    // meaning, and stacking this onto either would just invent a sixth verdict
+    // under a different name.
+    let outOfScope;
+    if (v.outOfScope != null) {
+      if (typeof v.outOfScope !== "boolean")
+        problems.push(`${at} (${id}): outOfScope must be true or false`);
+      else if (verdict !== "confirm" && verdict !== "escalate")
+        problems.push(
+          `${at} (${id}): outOfScope is only valid on confirm or escalate`,
+        );
+      else outOfScope = v.outOfScope;
+    }
+
     // Every verdict, not only the disagreements. A refute without cited
     // evidence is refused by the reconciler's own rules, and a confirm is
     // required to state the failure path — "if you cannot write the path, the
@@ -185,6 +208,7 @@ export function validateVerdicts(parsed, { knownIds } = {}) {
       basis,
       ...(bounds ? { bounds } : {}),
       ...(verdict === "duplicate" ? { of } : {}),
+      ...(outOfScope ? { outOfScope: true } : {}),
     });
   }
 
@@ -268,7 +292,19 @@ export function applyVerdicts(findings, verdicts, { onInvalid } = {}) {
   const updated = findings.map((f) => {
     const reported = f.reported ?? f.severity;
     const v = byId.get(f.id);
-    if (!v) return { ...f, verdict: UNREVIEWED, basis: "", bounds: "", reported };
+    // `outOfScope` is reset here too, the same as `basis`/`bounds`: it is a
+    // claim about this pass's adjudication, not a permanent fact, and an
+    // unreviewed finding must not go on silently reading as out of scope on
+    // the strength of a verdict nobody repeated.
+    if (!v)
+      return {
+        ...f,
+        verdict: UNREVIEWED,
+        basis: "",
+        bounds: "",
+        reported,
+        outOfScope: false,
+      };
 
     // `duplicate` never shifts severity — the survivor already carries its
     // own, and this finding is about to stop counting as live at all (see
@@ -294,6 +330,12 @@ export function applyVerdicts(findings, verdicts, { onInvalid } = {}) {
         : v.verdict === "escalate"
           ? shift(reported, -1)
           : reported;
+    // `outOfScope` is written only when this verdict actually carries it —
+    // never re-derived from the finding's own prior value — so a finding
+    // that was out of scope last time this ran (the reopenRun/extend replay
+    // in applyAdjudication's own comment above) and is adjudicated afresh
+    // without it here simply stops being flagged, rather than the flag
+    // surviving on stale say-so from `...f`.
     return {
       ...f,
       verdict: v.verdict,
@@ -301,6 +343,7 @@ export function applyVerdicts(findings, verdicts, { onInvalid } = {}) {
       bounds: v.bounds ?? "",
       severity,
       reported,
+      outOfScope: v.outOfScope === true,
     };
   });
 

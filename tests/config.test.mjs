@@ -261,6 +261,32 @@ test("unknownKeys never flags the load-time unreadable marker", () => {
   assert.deepEqual(unknownKeys({ ...DEFAULT_CONFIG, unreadable: true }), []);
 });
 
+// requireNoNewFindings was removed because a new finding already blocks only
+// when live and at a blockOn severity — it had no independent effect. Every
+// `.trio/config.json` written by an earlier release still carries it
+// (saveConfig writes the whole config back out), and that must never read
+// as a stale setting for the operator to clean up.
+test("unknownKeys never flags the retired converge.requireNoNewFindings key", () => {
+  assert.deepEqual(
+    unknownKeys({
+      ...DEFAULT_CONFIG,
+      converge: { ...DEFAULT_CONFIG.converge, requireNoNewFindings: true },
+    }),
+    [],
+  );
+});
+
+test("loading a config that still carries requireNoNewFindings does not warn or refuse", () => {
+  assert.deepEqual(configErrors(DEFAULT_CONFIG), []);
+  assert.deepEqual(
+    configErrors({
+      ...DEFAULT_CONFIG,
+      converge: { ...DEFAULT_CONFIG.converge, requireNoNewFindings: true },
+    }),
+    [],
+  );
+});
+
 // Lens entries are their own small schema, not a dotted path into
 // DEFAULT_CONFIG — an extra field on one entry is still nameable.
 test("unknownKeys checks lens entries against name/model/effort/on, not the array itself", () => {

@@ -187,11 +187,21 @@ export function diffPasses(prev, curr) {
 // pass's reconciler has not spoken — a fresh verdict always overrides the
 // carry, in both directions, so the reconciler keeps the last word.
 //
-// Only a carried `refute` exempts. A finding that was confirmed and then
-// declined is a real defect somebody chose to carry, not a mistake: four of
-// nine recorded declines were exactly that. Exempting those would let a run
-// report `clean` over known defects, which is the one claim this codebase
-// spends the most effort refusing to make.
+// Only a carried `refute` exempts, and only when it was matched by `id` —
+// the same claim, re-raised. settledMatcher (src/settled.mjs) also matches by
+// bare location (`file:line`), because a re-raise is usually reworded and an
+// id match alone missed every one of them. But a location match proves
+// nothing about the claim: a new, different defect that happens to land on a
+// line an earlier finding was refuted at is not the thing that was refuted,
+// and exempting it would close a claim nobody has ever adjudicated. Only the
+// carry is checked here — a location-matched re-raise still reaches the
+// reconciler as `unreviewed`, so a fresh verdict can settle it either way.
+//
+// A finding that was confirmed and then declined is a real defect somebody
+// chose to carry, not a mistake: four of nine recorded declines were exactly
+// that. Exempting those would let a run report `clean` over known defects,
+// which is the one claim this codebase spends the most effort refusing to
+// make.
 //
 // `duplicate` also exempts, unconditionally. It is not a disposition of the
 // defect the way refute is — it is one lens's finding folded into another's,
@@ -203,7 +213,11 @@ export function diffPasses(prev, curr) {
 export const isLive = (f) =>
   f.verdict !== "refute" &&
   f.verdict !== "duplicate" &&
-  !(f.verdict === UNREVIEWED && f.carried?.priorVerdict === "refute");
+  !(
+    f.verdict === UNREVIEWED &&
+    f.carried?.priorVerdict === "refute" &&
+    f.carried?.matchedBy === "id"
+  );
 
 // A new finding blocks convergence only when it is both live and severe
 // enough to block on its own — the same bar `blockOn` already applies to
@@ -215,23 +229,25 @@ export const isLive = (f) =>
 // final pass.
 //
 // `diff.new` is always a subset of `curr` (diffPasses derives it from the
-// same array isConverged receives), so this can never fire without the
-// first check above already having fired too — the general severity gate
-// already covers a new *and blocking* finding. `requireNoNewFindings`
-// therefore no longer has independent effect on the outcome; it stays a
-// separate config key rather than being folded away so it can still be
-// turned off on its own if a future rule gives it one again, and so an old
-// config that sets it to `false` keeps meaning "do not gate on new findings
-// at all" rather than silently inheriting the general gate.
+// same array isConverged receives), so a new-and-blocking finding was always
+// already covered by the check below on its own — `converge.requireNoNewFindings`
+// never had independent effect on the outcome and has been removed
+// (src/config.mjs). `diff` stays a parameter rather than being dropped: it
+// keeps callers unchanged and leaves room for a rule that genuinely needs
+// the new/open/closed split.
+//
+// `outOfScope` (reconcile.mjs's validateVerdicts/applyVerdicts) is the other
+// exemption: the reconciler confirmed or escalated the finding — it is real,
+// at the severity shown — but ruled it outside the change under audit.
+// `isLive` does not exempt it (it is not refuted or duplicated, and it is
+// never silently dropped — src/promote.mjs reports it in its own "Outside
+// this change" section instead of "Open findings"); it simply does not count
+// toward the blocking bar here.
 export function isConverged(curr, diff, converge) {
   const blockOn = converge.blockOn ?? [];
   const live = curr.filter(isLive);
-  const blocking = live.some((x) => blockOn.includes(x.severity));
-  if (blocking) return false;
-  if (
-    converge.requireNoNewFindings &&
-    diff.new.some((x) => isLive(x) && blockOn.includes(x.severity))
-  )
-    return false;
-  return true;
+  const blocking = live.some(
+    (x) => blockOn.includes(x.severity) && !x.outOfScope,
+  );
+  return !blocking;
 }

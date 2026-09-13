@@ -14,7 +14,7 @@ import {
   collectPasses,
   applyAdjudication,
 } from "./adjudicate.mjs";
-import { validateFindings } from "./findings.mjs";
+import { validateFindings, isLive } from "./findings.mjs";
 import { buildSettled } from "./settled.mjs";
 import { codexUnavailable } from "./failure.mjs";
 import { promote, promoteTarget } from "./promote.mjs";
@@ -294,8 +294,12 @@ function extensionOffer({ root, runId, config, verdict, passes }) {
   const last = passes[passes.length - 1];
   if (!last) return {};
   const blockOn = config.converge?.blockOn ?? [];
+  // isLive, not a bare verdict check: a duplicate or an id-matched carried
+  // refute is not open work either, and an out-of-scope finding never counts
+  // toward blocking convergence — so none of the three should read as a
+  // reason to spend another pass.
   const blocking = (last.findings ?? []).filter(
-    (f) => f.verdict !== "refute" && blockOn.includes(f.severity),
+    (f) => isLive(f) && !f.outOfScope && blockOn.includes(f.severity),
   );
   if (!blocking.length) return {};
   return {
@@ -421,7 +425,7 @@ export function reopenRun({ root, runId, by = 1, hasClaudeFindings = false }) {
   }
 }
 
-function finalize({ root, runId, config, verdict }) {
+function finalize({ root, runId, config, verdict, fixedUnverified = null }) {
   const passes = collectPasses(root, runId);
   try {
     finalizeRun({ root, runId, verdict, passCount: passes.length });
@@ -442,7 +446,15 @@ function finalize({ root, runId, config, verdict }) {
 
     let promoted = null;
     try {
-      if (audited) promoted = promote({ root, config, runId, passes, verdict });
+      if (audited)
+        promoted = promote({
+          root,
+          config,
+          runId,
+          passes,
+          verdict,
+          fixedUnverified,
+        });
     } catch (err) {
       appendEvent(
         runDir(root, runId),
@@ -462,6 +474,14 @@ function finalize({ root, runId, config, verdict }) {
       runId,
       passes: passes.length,
       promoted,
+      // Set only when the final pass's response.json marked something
+      // `fixed`: that fix was never re-audited (finalizing means there is no
+      // next pass to do it), and the verdict above is computed from the
+      // pre-fix findings regardless — a blocking one marked fixed here still
+      // holds the run open. This is the flag that tells the operator a
+      // change landed after the last look, so a verification pass can be
+      // offered rather than the fix silently going unchecked.
+      ...(fixedUnverified?.count ? { fixedUnverified } : {}),
       // Two different silences, and they must not read alike. `offer` is what
       // tells Claude to ask once whether to create the directory; the operator
       // declining sets artifacts.offerToCreate false and this goes quiet for
@@ -533,11 +553,41 @@ function finalizeFailed({ root, runId, config, err }) {
 // is what makes `ceiling_reached` here mean "Claude looked at these findings
 // and they stand", and it is the difference this function used to elide —
 // see justRanPass below.
-function finalizeIfDone({ root, runId, config, pass, converged }) {
-  if (converged) return finalize({ root, runId, config, verdict: "clean" });
+function finalizeIfDone({
+  root,
+  runId,
+  config,
+  pass,
+  converged,
+  fixedUnverified = null,
+}) {
+  if (converged)
+    return finalize({ root, runId, config, verdict: "clean", fixedUnverified });
   if (pass >= config.maxIterations)
-    return finalize({ root, runId, config, verdict: "ceiling_reached" });
+    return finalize({
+      root,
+      runId,
+      config,
+      verdict: "ceiling_reached",
+      fixedUnverified,
+    });
   return null;
+}
+
+// Fixes response.json marked `fixed` for the pass Trio is about to finalize
+// on. Read only from the caller that knows this might be the last pass —
+// justRanPass never calls this, because a pass it just ran always came from
+// a fresh audit, so anything fixed before it was already re-checked. Only
+// continueRun's finalizeIfDone call sits at the point where a fix can land
+// with no further pass to verify it.
+function fixedUnverifiedIn(root, runId, pass) {
+  const response = readPassResponse(root, runId, pass);
+  const ids = (response?.findings ?? [])
+    .filter((r) => r && typeof r === "object")
+    .filter((r) => String(r.action ?? "").trim().toLowerCase() === "fixed")
+    .map((r) => r.id)
+    .filter((id) => typeof id === "string" && id);
+  return ids.length ? { ids, count: ids.length } : null;
 }
 
 // Every lens failed, and for a reason that waiting will not fix — the account
@@ -864,7 +914,19 @@ export async function continueRun({
       record: stored,
     });
 
-    const done1 = finalizeIfDone({ root, runId, config, pass: N, converged });
+    // Read regardless of whether this pass turns out to finalize: it is
+    // cheap, and finalizeIfDone only carries it into a result when it
+    // actually finalizes — a pass that goes on to N+1 gets a fresh audit
+    // instead, which re-checks the fix properly.
+    const fixedUnverified = fixedUnverifiedIn(root, runId, N);
+    const done1 = finalizeIfDone({
+      root,
+      runId,
+      config,
+      pass: N,
+      converged,
+      fixedUnverified,
+    });
     if (done1) return done1;
 
     // Only past this line is there going to be a pass N+1, and only a pass

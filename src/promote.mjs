@@ -6,6 +6,13 @@ import { isLive } from "./findings.mjs";
 const SEV_ORDER = ["critical", "major", "minor", "info"];
 const dateOf = (now) => now.toISOString().slice(0, 10);
 
+// A finding belongs in "## Open findings" unless something else already
+// accounts for it: `refute` says it is not a defect, `duplicate` says it is
+// counted under its survivor, and `outOfScope` says it is real but reported
+// in its own section instead ("## Outside this change" below).
+const isOpenFinding = (f) =>
+  f.verdict !== "refute" && f.verdict !== "duplicate" && !f.outOfScope;
+
 export function nextAuditNumber(dir) {
   let entries;
   try {
@@ -115,7 +122,13 @@ export function renderCodexAudit({ runId, passes, date }) {
   ].join("\n");
 }
 
-export function renderReconciliation({ runId, passes, date, verdict }) {
+export function renderReconciliation({
+  runId,
+  passes,
+  date,
+  verdict,
+  fixedUnverified = null,
+}) {
   const last = passes.at(-1);
   const outcome =
     verdict === "clean"
@@ -139,6 +152,19 @@ export function renderReconciliation({ runId, passes, date, verdict }) {
     "## Outcome",
     "",
     outcome,
+    // Written after the fix, on the final pass — the pass whose result is
+    // this verdict, so there is no next pass to re-audit them. A blocking
+    // finding marked fixed here still shows as open below and still holds
+    // the run's verdict open (isConverged never reads response.json); this
+    // is only the honest flag that a change landed nobody has re-checked.
+    ...(fixedUnverified?.count
+      ? [
+          "",
+          `${fixedUnverified.count} fix(es) applied after the last pass, not re-audited: ` +
+            fixedUnverified.ids.map((id) => `\`${id}\``).join(", ") +
+            ". Run another pass to verify them.",
+        ]
+      : []),
     "",
     "## Pass trail",
     "",
@@ -158,10 +184,17 @@ export function renderReconciliation({ runId, passes, date, verdict }) {
     // it here too would show the one defect the survivor's row already
     // covers a second time, which is exactly the double-count `duplicate`
     // exists to stop. It is named instead in "## Duplicates" below.
-    last.findings.filter((f) => f.verdict !== "refute" && f.verdict !== "duplicate")
-      .length
+    //
+    // `outOfScope` is excluded the same way, for the same reason: it is
+    // real and it stayed confirmed/escalated at its reported severity, but it
+    // is not this run's business to fix, and it never blocked convergence
+    // (isConverged, findings.mjs). Naming it here too would read as a second
+    // open defect. It is named once, in "## Outside this change" below —
+    // never silently, the one thing `downgrade` used to do when misused for
+    // this.
+    last.findings.filter(isOpenFinding).length
       ? last.findings
-          .filter((f) => f.verdict !== "refute" && f.verdict !== "duplicate")
+          .filter(isOpenFinding)
           .map((f) => {
             const head = `- **${f.severity}** \`${f.file}\` — ${f.title} (\`${f.id}\`)`;
             // An indented continuation line, not a table cell — bounds is
@@ -214,6 +247,28 @@ export function renderReconciliation({ runId, passes, date, verdict }) {
           "",
         ]
       : []),
+    ...(last.findings.some((f) => f.outOfScope)
+      ? [
+          "## Outside this change",
+          "",
+          "Confirmed real, at the severity shown — the reconciler ruled these",
+          "outside the change under audit rather than wrong or overstated. They",
+          "did not block convergence and are not counted in \"Open findings\"",
+          "above.",
+          "",
+          last.findings
+            .filter((f) => f.outOfScope)
+            .map((f) => {
+              const basis = String(f.basis ?? "").replace(/\s+/g, " ").trim();
+              return (
+                `- **${f.severity}** \`${f.file}\` — ${f.title} (\`${f.id}\`)` +
+                (basis ? `\n  ${basis}` : "")
+              );
+            })
+            .join("\n"),
+          "",
+        ]
+      : []),
   ].join("\n");
 }
 
@@ -231,6 +286,7 @@ export function promote({
   runId,
   passes,
   verdict,
+  fixedUnverified = null,
   now = new Date(),
 }) {
   const base = join(root, config.artifacts.promoteTo);
@@ -249,7 +305,7 @@ export function promote({
   writeFileSync(codexPath, renderCodexAudit({ runId, passes, date }));
   writeFileSync(
     claudePath,
-    renderReconciliation({ runId, passes, date, verdict }),
+    renderReconciliation({ runId, passes, date, verdict, fixedUnverified }),
   );
   return { codexPath, claudePath };
 }

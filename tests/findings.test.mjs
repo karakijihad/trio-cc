@@ -10,7 +10,7 @@ import {
   locationOf,
 } from "../src/findings.mjs";
 
-const CONVERGE = { blockOn: ["critical", "major"], requireNoNewFindings: true };
+const CONVERGE = { blockOn: ["critical", "major"] };
 const f = (over) => ({
   severity: "major",
   file: "a.rs",
@@ -149,10 +149,7 @@ test("a re-worded finding is neither closed nor new", () => {
   assert.equal(diff.closed.length, 0, "it was never fixed");
   assert.equal(diff.new.length, 0, "and it is not a new defect");
   assert.equal(diff.open.length, 1, "it is the same one, still open");
-  assert.equal(
-    isConverged(curr, diff, { blockOn: [], requireNoNewFindings: true }),
-    true,
-  );
+  assert.equal(isConverged(curr, diff, { blockOn: [] }), true);
 });
 
 // The mirror: an earlier fix shifts later lines, so an unchanged finding
@@ -182,10 +179,7 @@ test("a finding at a genuinely new place is new and blocks convergence", () => {
   assert.equal(diff.new.length, 1);
   assert.equal(diff.closed.length, 1, "and the old one really is gone");
   assert.equal(
-    isConverged(diff.new, diff, {
-      blockOn: ["major"],
-      requireNoNewFindings: true,
-    }),
+    isConverged(diff.new, diff, { blockOn: ["major"] }),
     false,
   );
 });
@@ -379,6 +373,31 @@ test("a new duplicate does not block either", () => {
   );
 });
 
+// `outOfScope` (reconcile.mjs's validateVerdicts) says the reconciler
+// confirmed or escalated a real defect but ruled it outside the change under
+// audit. It keeps its severity and stays live (it is not refuted or
+// duplicated), but must not count toward the blocking bar — that is the
+// whole point of the flag over misusing `downgrade` to the same end.
+test("isConverged ignores a confirmed finding marked outOfScope", () => {
+  const curr = [
+    { ...f({ severity: "critical" }), id: "aaaa1111", verdict: "confirm", outOfScope: true },
+  ];
+  assert.equal(
+    isConverged(curr, { new: [], open: curr, closed: [] }, CONVERGE),
+    true,
+  );
+});
+
+test("a new finding marked outOfScope does not block either", () => {
+  const curr = [
+    { ...f({ severity: "critical" }), id: "aaaa1111", verdict: "escalate", outOfScope: true },
+  ];
+  assert.equal(
+    isConverged(curr, { new: curr, open: [], closed: [] }, CONVERGE),
+    true,
+  );
+});
+
 test("isConverged ignores findings already refuted by the reconciler", () => {
   const curr = [
     { ...f({ severity: "critical" }), id: "aaaa1111", verdict: "refute" },
@@ -390,13 +409,21 @@ test("isConverged ignores findings already refuted by the reconciler", () => {
 });
 
 // The decline ledger's convergence half. The carry is history, so it excuses a
-// finding only while this pass's reconciler has said nothing about it, and only
-// when what it carries is a refutation.
+// finding only while this pass's reconciler has said nothing about it, only
+// when what it carries is a refutation, and only when settledMatcher matched
+// it by `id` — the same claim, re-raised. `matchedBy` defaults to "id" here;
+// the tests below flip it to "location" to pin the other half of the rule.
 const carried = (over) => ({
   ...f({ severity: "critical" }),
   id: "aaaa1111",
   verdict: "unreviewed",
-  carried: { fromPass: 1, kind: "refuted", priorVerdict: "refute", basis: "b" },
+  carried: {
+    fromPass: 1,
+    kind: "refuted",
+    priorVerdict: "refute",
+    matchedBy: "id",
+    basis: "b",
+  },
   ...over,
 });
 
@@ -413,6 +440,28 @@ test("a carried refutation excuses a finding in the new column too", () => {
   assert.equal(
     isConverged(curr, { new: curr, open: [], closed: [] }, CONVERGE),
     true,
+  );
+});
+
+// The other half: settledMatcher (src/settled.mjs) also matches by bare
+// location, because a re-raise is usually reworded. But a location match
+// proves nothing about the claim itself — a genuinely new, different defect
+// that happens to land on a line an earlier finding was refuted at is not
+// the thing that was refuted, and closing over it would be an unaudited
+// `clean`. Only an id match — the same claim — is excused.
+test("a location-only carried refutation does not excuse a different claim", () => {
+  const curr = [carried({ carried: { ...carried().carried, matchedBy: "location" } })];
+  assert.equal(
+    isConverged(curr, { new: [], open: curr, closed: [] }, CONVERGE),
+    false,
+  );
+});
+
+test("a location-only carried refutation still blocks from the new column", () => {
+  const curr = [carried({ carried: { ...carried().carried, matchedBy: "location" } })];
+  assert.equal(
+    isConverged(curr, { new: curr, open: [], closed: [] }, CONVERGE),
+    false,
   );
 });
 
@@ -466,9 +515,7 @@ test("extractFindings rejects a null finding instead of throwing", () => {
 test("isConverged does not throw when blockOn is absent", () => {
   const curr = [{ ...f({ severity: "critical" }), id: "aaaa1111" }];
   assert.doesNotThrow(() =>
-    isConverged(curr, { new: [], open: curr, closed: [] }, {
-      requireNoNewFindings: true,
-    }),
+    isConverged(curr, { new: [], open: curr, closed: [] }, {}),
   );
 });
 

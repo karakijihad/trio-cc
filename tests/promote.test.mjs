@@ -374,6 +374,9 @@ const carriedPass = (carried) => ({
   ],
 });
 
+// Only an id match is excused now (isLive, src/findings.mjs) — a location
+// match proves nothing about the claim, so it is a "carried" line without
+// "did not block convergence". See the sibling test below for that half.
 test("the report says why a carried finding did not block", () => {
   const out = renderReconciliation({
     runId: "r1",
@@ -384,16 +387,39 @@ test("the report says why a carried finding did not block", () => {
         fromPass: 1,
         kind: "refuted",
         priorVerdict: "refute",
-        matchedBy: "location",
+        matchedBy: "id",
         basis: "pinned by a.test.mjs:8",
       }),
     ],
   });
   assert.match(out, /a resource is not released/);
   assert.match(out, /carried: refuted in pass 1 \(refute\)/);
-  assert.match(out, /matched by location/);
+  assert.match(out, /matched by id/);
   assert.match(out, /did not block convergence/);
   assert.match(out, /pinned by a\.test\.mjs:8/);
+});
+
+// The other half of the same rule: a re-raise settledMatcher only matched by
+// bare location is not the claim that was refuted, so it still blocked, and
+// the report must not say otherwise.
+test("a carried finding matched only by location is not described as excused", () => {
+  const out = renderReconciliation({
+    runId: "r1",
+    date: "2026-08-05",
+    verdict: "ceiling_reached",
+    passes: [
+      carriedPass({
+        fromPass: 1,
+        kind: "refuted",
+        priorVerdict: "refute",
+        matchedBy: "location",
+        basis: "pinned by a.test.mjs:8",
+      }),
+    ],
+  });
+  assert.match(out, /carried: refuted in pass 1 \(refute\)/);
+  assert.match(out, /matched by location/);
+  assert.doesNotMatch(out, /did not block convergence/);
 });
 
 test("a carried decline is not described as having been excused", () => {
@@ -534,4 +560,85 @@ test("a newline in a carried field cannot break out of the list item", () => {
   assert.doesNotMatch(out, /^## Injected heading/m);
   assert.match(out, /carried: refuted ## Injected heading in pass 1/);
   assert.match(out, /one two/);
+});
+
+// `outOfScope` (reconcile.mjs) says the reconciler confirmed or escalated a
+// real defect but ruled it outside the change under audit. It must never
+// disappear the way a misused `downgrade` would — it gets its own section,
+// named plainly, and it must not also appear as an open finding (that would
+// double-count the one defect).
+test("an outOfScope finding is named in its own section, not Open findings", () => {
+  const out = renderReconciliation({
+    runId: "r1",
+    date: "2026-08-05",
+    verdict: "clean",
+    passes: [
+      {
+        pass: 1,
+        lenses: [{ lens: "auditor", status: "ok" }],
+        degraded: [],
+        diff: { new: [], open: [], closed: [] },
+        findings: [
+          {
+            id: "o1",
+            severity: "major",
+            file: "src/legacy.rs",
+            line: 5,
+            title: "retries without a cap",
+            lens: "auditor",
+            verdict: "confirm",
+            basis: "real, but only reachable from the migration script",
+            bounds: "",
+            outOfScope: true,
+          },
+        ],
+      },
+    ],
+  });
+  const [openSection] = out.split("## Outside this change");
+  assert.doesNotMatch(
+    openSection,
+    /retries without a cap/,
+    "an out-of-scope finding must not also read as an open finding",
+  );
+  assert.match(out, /## Outside this change/);
+  assert.match(out, /retries without a cap/);
+  assert.match(out, /real, but only reachable from the migration script/);
+});
+
+test("no Outside-this-change section is rendered when nothing is out of scope", () => {
+  const out = renderReconciliation({
+    runId: "r1",
+    date: "2026-08-05",
+    verdict: "clean",
+    passes: [PASS],
+  });
+  assert.doesNotMatch(out, /## Outside this change/);
+});
+
+// The verification-pass flag: a fix landed after the run's last look, and
+// nothing re-audited it. Rendered regardless of the verdict — see
+// isConverged/isLive, which never read response.json, so the verdict above
+// is already honest about whether the pre-fix finding still blocks.
+test("fixedUnverified is reported in its own line, naming the ids", () => {
+  const out = renderReconciliation({
+    runId: "r1",
+    date: "2026-08-05",
+    verdict: "ceiling_reached",
+    passes: [PASS],
+    fixedUnverified: { ids: ["a1"], count: 1 },
+  });
+  assert.match(out, /1 fix\(es\) applied after the last pass, not re-audited/);
+  assert.match(out, /`a1`/);
+  assert.match(out, /verify/i);
+});
+
+test("no fixedUnverified line when nothing was fixed after the last pass", () => {
+  const out = renderReconciliation({
+    runId: "r1",
+    date: "2026-08-05",
+    verdict: "clean",
+    passes: [PASS],
+  });
+  assert.doesNotMatch(out, /not re-audited/);
 });

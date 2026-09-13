@@ -29,7 +29,7 @@ verdict:
 | ----------- | ------------------------------------------------------------------------------------------------------------------ |
 | `confirm`   | You reproduced the claim. Severity as reported.                                                                    |
 | `refute`    | The claim is wrong. **You must cite what disproves it.**                                                           |
-| `downgrade` | Real but overstated — for example, a fail-open path that cannot currently be reached.                              |
+| `downgrade` | Real but overstated in severity only — for example, a fail-open path that cannot currently be reached.            |
 | `escalate`  | Worse than reported, or it composes with another finding into a single larger defect. Name the other finding's id. |
 | `duplicate` | Two findings in this pass describe the same defect. **You must name the survivor's id in `of`.**                   |
 
@@ -46,13 +46,24 @@ Rules:
   as importantly — where it demonstrably does not. A confirmed defect with an
   unbounded blast radius gets over-fixed, and "nowhere else" is the most
   useful thing you can write there. Leave it out only when you did not look.
-- `downgrade` is also how you file a finding that is real, correctly reported,
-  and warrants no change — it works as documented. There are only five
-  verdicts; anything else is refused outright by the tool your caller submits
-  this to, which writes nothing and makes them do it again — and a
-  `confirm` nobody intends to act on keeps the run from converging. A
-  downgrade moves one step, so a `critical` filed this way lands on `major`
-  and still blocks — say so in the basis when that happens.
+- `downgrade` means the severity was overstated — nothing else. A finding
+  that is real, correctly reported, and simply not this change's problem to
+  fix is not a downgrade: it is a `confirm` or `escalate` with
+  `outOfScope: true` (see below). Using `downgrade` for that silently
+  understates a real defect just to stop it from blocking, which is a worse
+  outcome than leaving it open and saying plainly that it is out of scope.
+  There are only five verdicts; anything else is refused outright by the tool
+  your caller submits this to, which writes nothing and makes them do it
+  again — and a `confirm` nobody intends to act on keeps the run from
+  converging.
+- `outOfScope: true` is an optional field on a `confirm` or `escalate`
+  verdict, not a sixth verdict. It says: this is real, at the severity shown,
+  but outside the change under audit — real code, wrong diff. It keeps the
+  reported severity untouched, never blocks convergence, and is listed in the
+  promoted report's own "Outside this change" section rather than either
+  blocking the run or vanishing. Say in `basis` why it is out of scope (what
+  change would actually touch it, or when it was introduced). Do not set it
+  on `refute` or `downgrade` — the tool rejects that.
 - `duplicate` is for two findings — usually from two different lenses, or the
   same lens and Claude's own lane — that describe one defect the merge step
   did not catch, typically because they cite adjacent but different lines. Do
@@ -67,11 +78,13 @@ Rules:
   more severe or better-evidenced finding as the duplicate of a weaker one
   would understate what actually survives.
 - A finding about code the diff never touched is still one of the five. If the
-  claim is wrong, `refute` it. If it is true of code that this change did not
-  introduce, `downgrade` it and say so in the basis. Do not invent a sixth
-  verdict for it — `out_of_scope`, `partial`, `needs_info` and the like are
-  rejected on sight, and the finding is left unadjudicated as though you had
-  never looked at it.
+  claim is wrong, `refute` it. If it is true and belongs to this change,
+  `confirm` or `escalate` it as usual. If it is true of code that this change
+  did not introduce — real, at the severity shown, just not this diff's
+  problem — `confirm` or `escalate` it with `outOfScope: true` and say why in
+  the basis. Do not invent a sixth verdict for it — `out_of_scope` as a
+  `verdict` value, `partial`, `needs_info` and the like are rejected on sight,
+  and the finding is left unadjudicated as though you had never looked at it.
 - A `refute` without concrete evidence is not acceptable. Cite file and line.
 - Before agreeing a file is oversized, check how much of it is test code.
   Count production lines only.
@@ -95,7 +108,10 @@ to the worst case, where it was retyped by hand.
 CONFIRMED and REFUTED — do not write them back that way, and do not write a
 heading like `**CONFIRMED**` in place of the field. Put your reasoning in
 `basis`, which is prose and where it belongs. A `duplicate` also needs `of`:
-the id of the finding in this same batch that it duplicates.
+the id of the finding in this same batch that it duplicates. A `confirm` or
+`escalate` may add `"outOfScope": true` — real, at the severity shown, but
+outside the change under audit; leave it out entirely rather than writing
+`false`.
 
 Return only the block, nothing after it:
 
@@ -112,6 +128,12 @@ Return only the block, nothing after it:
       "verdict": "confirm",
       "basis": "spawn() at src/lane.mjs:88 returns before the marker is written; a second call in the same tick reads it absent and provisions twice",
       "bounds": "same shape at src/pool.mjs:41; NOT at src/lane.mjs:120 or :164 — both latch, so they retry rather than double-provision"
+    },
+    {
+      "id": "f7a8b9c0",
+      "verdict": "confirm",
+      "basis": "real: retries without a cap at src/retry.mjs:22, but that path is only reachable from the migration script this change does not touch",
+      "outOfScope": true
     },
     {
       "id": "c9d0e1f2",

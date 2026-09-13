@@ -305,3 +305,89 @@ test("`of` on a non-duplicate verdict is refused", () => {
   assert.equal(r.ok, false);
   assert.ok(r.problems.some((p) => /only valid on a duplicate/.test(p)));
 });
+
+// `outOfScope` is the recorded alternative to misusing `downgrade` for "real
+// but not this diff's problem" (see agents/trio-reconciler.md).
+test("outOfScope is accepted on a confirm verdict", () => {
+  const r = validateVerdicts(
+    {
+      verdicts: [
+        { id: "a1", verdict: "confirm", basis: "real, not this change's fix", outOfScope: true },
+      ],
+    },
+    { knownIds: ["a1"] },
+  );
+  assert.equal(r.ok, true, r.problems.join("; "));
+  assert.equal(r.verdicts[0].outOfScope, true);
+});
+
+test("outOfScope is accepted on an escalate verdict", () => {
+  const r = validateVerdicts(
+    {
+      verdicts: [
+        { id: "a1", verdict: "escalate", basis: "composes, but not ours", outOfScope: true },
+      ],
+    },
+    { knownIds: ["a1"] },
+  );
+  assert.equal(r.ok, true, r.problems.join("; "));
+  assert.equal(r.verdicts[0].outOfScope, true);
+});
+
+test("outOfScope on a refute is refused", () => {
+  const r = validateVerdicts(
+    { verdicts: [{ id: "a1", verdict: "refute", basis: "x", outOfScope: true }] },
+    { knownIds: ["a1"] },
+  );
+  assert.equal(r.ok, false);
+  assert.ok(r.problems.some((p) => /outOfScope is only valid on confirm or escalate/.test(p)));
+});
+
+test("outOfScope on a downgrade is refused", () => {
+  const r = validateVerdicts(
+    { verdicts: [{ id: "a1", verdict: "downgrade", basis: "x", outOfScope: true }] },
+    { knownIds: ["a1"] },
+  );
+  assert.equal(r.ok, false);
+  assert.ok(r.problems.some((p) => /outOfScope is only valid on confirm or escalate/.test(p)));
+});
+
+test("a non-boolean outOfScope is refused rather than coerced", () => {
+  const r = validateVerdicts(
+    { verdicts: [{ id: "a1", verdict: "confirm", basis: "x", outOfScope: "true" }] },
+    { knownIds: ["a1"] },
+  );
+  assert.equal(r.ok, false);
+  assert.ok(r.problems.some((p) => /outOfScope must be true or false/.test(p)));
+});
+
+test("outOfScope: false is accepted but not carried onto the verdict", () => {
+  const r = validateVerdicts(
+    { verdicts: [{ id: "a1", verdict: "confirm", basis: "x", outOfScope: false }] },
+    { knownIds: ["a1"] },
+  );
+  assert.equal(r.ok, true, r.problems.join("; "));
+  assert.equal(r.verdicts[0].outOfScope, undefined);
+});
+
+// End to end through the real write boundary: outOfScope must survive the
+// CLI's own serialization, since applyVerdicts reads verdicts.json back.
+test("outOfScope survives the CLI round trip into verdicts.json", () => {
+  const { root, dir } = project(["a1"]);
+  const r = submit(
+    root,
+    JSON.stringify({
+      verdicts: [
+        {
+          id: "a1",
+          verdict: "confirm",
+          basis: "real, not this change's fix",
+          outOfScope: true,
+        },
+      ],
+    }),
+  );
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const written = JSON.parse(readFileSync(join(dir, "verdicts.json"), "utf8"));
+  assert.equal(written.verdicts[0].outOfScope, true);
+});
