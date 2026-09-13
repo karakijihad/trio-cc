@@ -5,7 +5,7 @@ import { EXTEND_FLAGS, unknownFlags, valuelessFlags, flagValue } from "../cli-ar
 // `trio extend [runId]` — the "yes" half of the offer a ceiling-reached run
 // makes: one more pass on the same run, rather than a fresh run that would
 // re-find everything from scratch and compare against nothing.
-export default async function extendCommand({ root, rest, out, latestFinishedRun, stopLensesOnSignal }) {
+export default async function extendCommand({ root, rest, out, run, latestFinishedRun, stopLensesOnSignal }) {
   const strays = unknownFlags(rest, EXTEND_FLAGS);
   if (strays.length) {
     out(`unknown flag${strays.length > 1 ? "s" : ""}: ${strays.join(", ")}`);
@@ -50,10 +50,14 @@ export default async function extendCommand({ root, rest, out, latestFinishedRun
     root,
     runId,
     hasClaudeFindings: Boolean(checked.findings),
+    run,
   });
   if (!opened.ok) {
     out(opened.error);
-    process.exitCode = opened.inProgress ? 3 : 1;
+    // 3 for both flavors of "another Trio process owns this project right
+    // now" — inProgress (the marker) and worker_busy (the lock a live pass
+    // or finalize holds) — the one distinction that means waiting helps.
+    process.exitCode = opened.inProgress || opened.status === "worker_busy" ? 3 : 1;
     return;
   }
   process.stderr.write(
@@ -67,10 +71,22 @@ export default async function extendCommand({ root, rest, out, latestFinishedRun
     root,
     runLensFn: runLens,
     claudeFindingsPath: extendFindings,
+    run,
   });
   if (r.status === "invalid_findings" || r.status === "claude_lane_missing") {
     out(r.error);
     process.exitCode = 2;
+    return;
+  }
+  // reopenRun just took (and released) the worker lock, so this call should
+  // find it free — but if some other process's start or continue slipped in
+  // during the gap, report it the same way `run` and `continue` do.
+  if (r.status === "worker_busy") {
+    const h = r.holder ?? {};
+    out(
+      `Another Trio process is already working this run: pid ${h.pid} (run ${h.run ?? "unnamed"}${Number.isSafeInteger(h.pass) ? `, pass ${h.pass}` : ""}).\n  Wait for it to finish, or /trio:cancel to end it.`,
+    );
+    process.exitCode = 3;
     return;
   }
   out(JSON.stringify(r, null, 2));

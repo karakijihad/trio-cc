@@ -13,7 +13,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawnSync, spawn } from "node:child_process";
 import {
   installFakeCodex,
   fakeCodexHome,
@@ -140,6 +140,59 @@ test("run: refuses to start a second run while the first is awaiting a response"
   // The first run's marker is untouched.
   const marker = JSON.parse(readFileSync(join(root, ".trio", "active"), "utf8"));
   assert.equal(marker.run, first.runId);
+});
+
+// The worker lock's own CLI wiring, end to end through a real spawned
+// process: `continue` on a legitimately parked run must refuse — distinctly
+// from run_in_progress, and with the same exit code — when a second, still
+// live Trio worker holds the lock that actually runs a pass, not just when
+// the marker names one.
+test("continue: exits 3 when a live worker holds the lock, and touches nothing", () => {
+  const { root, cli } = project({ findings: FINDING });
+  const first = JSON.parse(cli(["run", "--lenses", "auditor"]).stdout);
+  assert.equal(first.status, "awaiting_response");
+
+  // Spawned from a file named trio.mjs, not `node -e`: the lock's staleness
+  // check identifies a holder by command line, and a stand-in nothing would
+  // honestly identify as Trio proves nothing here.
+  const workerDir = mkdtempSync(join(tmpdir(), "trio-worker-lock-"));
+  const workerPath = join(workerDir, "trio.mjs");
+  writeFileSync(
+    workerPath,
+    'process.on("SIGTERM", () => process.exit(1));\nsetInterval(() => {}, 1000);\n',
+  );
+  const worker = spawn(process.execPath, [workerPath], { stdio: "ignore" });
+  try {
+    writeFileSync(
+      join(root, ".trio", "worker.lock"),
+      JSON.stringify({
+        pid: worker.pid,
+        run: first.runId,
+        pass: 1,
+        since: new Date().toISOString(),
+      }),
+    );
+
+    const res = cli(["continue"]);
+    assert.equal(res.status, 3);
+    assert.match(res.stdout, new RegExp(String(worker.pid)));
+    assert.match(res.stdout, new RegExp(first.runId));
+
+    // Refused before touching anything: the marker and the lock are both
+    // exactly as they were.
+    const marker = JSON.parse(readFileSync(join(root, ".trio", "active"), "utf8"));
+    assert.equal(marker.run, first.runId);
+    const lock = JSON.parse(
+      readFileSync(join(root, ".trio", "worker.lock"), "utf8"),
+    );
+    assert.equal(lock.pid, worker.pid);
+  } finally {
+    try {
+      worker.kill();
+    } catch {
+      /* already gone */
+    }
+  }
 });
 
 // A harness timeout, a crash, or a reboot leaves a marker no signal handler

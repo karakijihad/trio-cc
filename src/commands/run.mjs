@@ -17,6 +17,7 @@ export default async function runCommand({
   root,
   rest,
   out,
+  run,
   gatherState,
   codexRefusal,
   ensureGitignore,
@@ -192,6 +193,7 @@ export default async function runCommand({
     lenses,
     scope,
     claudeFindingsPath,
+    run,
   });
   if (r.status === "invalid_findings") {
     out(`--claude-findings: ${r.error}`);
@@ -210,6 +212,17 @@ export default async function runCommand({
   if (r.status === "run_in_progress") {
     out(
       `A run is already in progress: ${r.runId}${r.pass ? ` (pass ${r.pass})` : ""}.\n  Wait for it to finish, or /trio:cancel to end it.`,
+    );
+    process.exitCode = 3;
+    return;
+  }
+  // The narrower sibling of run_in_progress: the marker was free but a
+  // worker still holds the lock that actually executes a pass — the same
+  // "wait, do not cancel" answer, so the same exit code.
+  if (r.status === "worker_busy") {
+    const h = r.holder ?? {};
+    out(
+      `Another Trio process is already working this project: pid ${h.pid} (run ${h.run ?? "unnamed"}${Number.isSafeInteger(h.pass) ? `, pass ${h.pass}` : ""}).\n  Wait for it to finish, or /trio:cancel to end it.`,
     );
     process.exitCode = 3;
     return;

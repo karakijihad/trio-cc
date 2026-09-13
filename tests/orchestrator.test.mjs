@@ -1,8 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Worker } from "node:worker_threads";
 import { runPass, finalizeRun, newRunId } from "../src/orchestrator.mjs";
 import { DEFAULT_CONFIG } from "../src/config.mjs";
 import { findingId } from "../src/findings.mjs";
@@ -429,6 +430,72 @@ test("a finding's secret-shaped evidence is scrubbed before it hits disk", async
   );
   assert.doesNotMatch(lensJson, /sk-proj-AAAABBBBCCCCDDDD1234/);
   assert.match(lensJson, /<redacted:token>/);
+});
+
+// The real race: two threads calling finalizeRun for the same run at as
+// close to the same instant as Atomics.wait/notify can arrange, each on its
+// own OS thread so the underlying fs syscalls genuinely interleave — a
+// sequential pre-write-then-call test cannot exercise this, because the old
+// read-then-write code already handles "the file was already there when I
+// looked" correctly; the bug only shows when both callers look before either
+// writes.
+test("finalizeRun: two threads racing to finalize the same run agree on one verdict", async () => {
+  const root = tmp();
+  const workerScript = `
+import { parentPort, workerData } from "node:worker_threads";
+import { finalizeRun } from ${JSON.stringify(
+    new URL("../src/orchestrator.mjs", import.meta.url).href,
+  )};
+const { root, runId, verdict, passCount, sab } = workerData;
+const sync = new Int32Array(sab);
+Atomics.wait(sync, 0, 0);
+parentPort.postMessage(finalizeRun({ root, runId, verdict, passCount }));
+`;
+  const scriptPath = join(root, "finalize-worker.mjs");
+  writeFileSync(scriptPath, workerScript);
+
+  const race = (runId, verdict, passCount, sab) =>
+    new Promise((resolve, reject) => {
+      const w = new Worker(scriptPath, {
+        workerData: { root, runId, verdict, passCount, sab },
+      });
+      w.once("message", (msg) => {
+        w.terminate();
+        resolve(msg);
+      });
+      w.once("error", reject);
+    });
+
+  // One shot at this has roughly a coin-flip's chance of landing in the old
+  // code's read-then-write gap (empirically ~40% per attempt against the
+  // pre-fix implementation) — repeated with a fresh run each time so a
+  // regression is caught reliably rather than depending on one lucky draw.
+  for (let i = 0; i < 15; i++) {
+    const runId = `race-${i}`;
+    mkdirSync(runDir(root, runId), { recursive: true });
+    const sab = new SharedArrayBuffer(4);
+    const sync = new Int32Array(sab);
+
+    const a = race(runId, "clean", 2, sab);
+    const b = race(runId, "failed", 3, sab);
+    // Both workers are parked on Atomics.wait by now (they have nothing to
+    // do before it); release them together so they race as tightly as
+    // possible.
+    Atomics.store(sync, 0, 1);
+    Atomics.notify(sync, 0);
+
+    const [ra, rb] = await Promise.all([a, b]);
+
+    // Whichever verdict actually won, both callers must report the same
+    // one — the old race let a loser return its own input instead of what
+    // actually landed on disk.
+    assert.deepEqual(ra, rb, `attempt ${i}: the two callers disagreed`);
+    assert.ok(ra.verdict === "clean" || ra.verdict === "failed");
+    const onDisk = JSON.parse(
+      readFileSync(join(runDir(root, runId), "verdict.json"), "utf8"),
+    );
+    assert.deepEqual(onDisk, ra, `attempt ${i}: disk disagreed with both callers`);
+  }
 });
 
 test("finalizeRun keeps the written verdict even if the run_finished event write fails", () => {

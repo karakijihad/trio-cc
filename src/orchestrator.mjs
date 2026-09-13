@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, linkSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { diffPasses, isConverged, mergeFindings } from "./findings.mjs";
 import { applyVerdicts } from "./reconcile.mjs";
@@ -203,20 +203,44 @@ function readVerdict(dir) {
 
 // The run's tail: writes verdict.json and emits run_finished. Always runs,
 // including on the "failed" path (D13).
+//
+// First verdict wins, made atomic. A run cancelled from another terminal
+// writes its verdict while this process may still be finishing a pass, and a
+// plain read-then-write cannot promise the worker arriving late will not
+// clobber "cancelled" with its own outcome — both can read "nothing there
+// yet" before either writes. The fix is not a bare exclusive create on
+// verdict.json itself, either: that would let a loser's read land in the gap
+// between the winner's file being created and its content actually being
+// written, and report "unknown" for a run that finished cleanly a moment
+// later. Writing the full content to a private temp file first and then
+// linking it into place means the destination only ever comes into existence
+// already complete — `linkSync` either succeeds for exactly one writer or
+// fails with `EEXIST` for every other one, and whichever it is, an existing
+// destination is always readable.
 export function finalizeRun({ root, runId, verdict, passCount }) {
   const dir = runDir(root, runId);
   mkdirSync(dir, { recursive: true });
-
-  // First verdict wins. A run cancelled from another terminal writes its
-  // verdict while this process may still be finishing a pass; the worker
-  // arriving late must not overwrite "cancelled" with its own outcome.
-  const existing = readVerdict(dir);
-  if (existing) return existing;
-
-  writeFileSync(
-    join(dir, "verdict.json"),
-    JSON.stringify({ verdict, passes: passCount, runId }, null, 2) + "\n",
+  const path = join(dir, "verdict.json");
+  const payload = { verdict, passes: passCount, runId };
+  const tmp = join(
+    dir,
+    `.verdict.json.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`,
   );
+
+  writeFileSync(tmp, JSON.stringify(payload, null, 2) + "\n");
+  try {
+    linkSync(tmp, path);
+  } catch (err) {
+    if (err.code !== "EEXIST") throw err;
+    return readVerdict(dir) ?? { verdict: "unknown", passes: passCount, runId };
+  } finally {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      /* the destination link (if any) survives this regardless */
+    }
+  }
+
   try {
     appendEvent(
       dir,
@@ -233,6 +257,6 @@ export function finalizeRun({ root, runId, verdict, passCount }) {
     // verdict.json is already written and is the authority; a bus-write
     // fault here must not bubble up and be mistaken for a run failure.
   }
-  return { verdict, passes: passCount, runId };
+  return payload;
 }
 

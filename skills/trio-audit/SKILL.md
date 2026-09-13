@@ -38,6 +38,15 @@ the run is parked waiting for the other session to adjudicate.
 `run` exits **3** when it loses this race, distinct from every other refusal
 (exit 1 — Trio off, Codex not logged in, drift) where waiting never helps.
 
+`continue` and `extend` can now exit **3** too, for a narrower reason: a
+second worker lock, held only while a process is actively running a pass or
+finalizing, catches two `continue` calls racing the same parked run, or a
+`continue` called while another process's pass has not finished yet. It
+answers the same way — the run and pass are named, and waiting (or
+`/trio:cancel`) is the fix — so treat it exactly like `run`'s busy exit: do
+not retry in a tight loop, and do not take it as license to cancel someone
+else's audit.
+
 ## Running the command without it being killed
 
 A run is every enabled lens in parallel, each allowed `codex.timeoutMinutes`

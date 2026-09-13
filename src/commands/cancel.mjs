@@ -1,7 +1,7 @@
 import { rmSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { activeMarker, runDir, isRunId, processIsTrio } from "../paths.mjs";
-import { readMarker } from "../marker.mjs";
+import { readMarker, releaseWorkerLock } from "../marker.mjs";
 import { cancelToken, finalizeIfUnfinished } from "../driver.mjs";
 import { killTree } from "../codex-lane.mjs";
 
@@ -66,5 +66,12 @@ export default function cancelCommand({ root, out, run }) {
   } catch {
     /* already gone */
   }
+  // A worker that catches its own SIGTERM releases this itself (releaseOwnClaim
+  // does both locks now); on win32, or a worker that dies before it gets the
+  // chance, nothing else will until some later start, continue or extend
+  // notices the pid is gone and reclaims it. Ownership-scoped by the same pid
+  // just signalled, so this is a no-op rather than a hazard when the lock (if
+  // any) belongs to somebody else entirely.
+  if (pid) releaseWorkerLock(root, pid);
   out(stopped ? `Run cancelled (stopped pid ${stopped}).` : "Run cancelled.");
 }

@@ -14,6 +14,7 @@ import { DEFAULT_CONFIG } from "../src/config.mjs";
 import { findingId } from "../src/findings.mjs";
 import { classifyFailure } from "../src/failure.mjs";
 import { appendEvent, makeEvent, readEvents } from "../src/bus.mjs";
+import { workerLockPath } from "../src/marker.mjs";
 import {
   runDir,
   passDir,
@@ -1217,4 +1218,197 @@ test("finalize: a partially degraded run still promotes", async () => {
   assert.equal(done.status, "finished");
   assert.ok(done.promoted, "a degraded audit is still an audit");
   void r;
+});
+
+// --- Worker lock: mutual exclusion across run/continue/extend ---
+
+// Old code had no second lock: two continueRun calls on the same parked run
+// both read pass 1 complete, both adjudicated it and both ran pass 2,
+// overwriting each other's artifacts. Since Node runs each call's synchronous
+// prefix (marker read, lock acquire, adjudicate, writeMarker to N+1) to
+// completion before the first `await runPass` ever yields, calling
+// continueRun a second time — without awaiting the first — genuinely lands
+// while the first still holds the lock, no real OS concurrency required.
+test("continueRun: two concurrent calls on the same parked run — exactly one runs the pass, the other is refused", async () => {
+  const root = tmp();
+  const config = cfg({ maxIterations: 3 });
+  const started = await startRun({
+    root,
+    config,
+    target: "/repo",
+    runLensFn: okLens([finding("leak")]),
+  });
+  assert.equal(started.status, "awaiting_response");
+
+  let release;
+  const gate = new Promise((r) => (release = r));
+  const firstLensFn = async ({ lens }) => {
+    await gate;
+    return { lens: lens.name, status: "ok", findings: [], threadId: "t", raw: "" };
+  };
+
+  // Not awaited: this runs synchronously up to the pending `gate`, by which
+  // point it has already taken the worker lock and advanced the marker.
+  const firstPromise = continueRun({ root, runLensFn: firstLensFn });
+
+  const second = await continueRun({ root, runLensFn: okLens([]) });
+  assert.equal(second.status, "worker_busy");
+  assert.equal(second.holder.run, started.runId);
+  assert.equal(second.holder.pid, process.pid);
+
+  release();
+  const first = await firstPromise;
+  assert.equal(first.status, "finished");
+  assert.equal(first.verdict, "clean");
+
+  // Only the winner's pass exists — the loser never touched the run.
+  assert.ok(existsSync(join(passDir(root, started.runId, 2), "reconcile.json")));
+  assert.equal(existsSync(workerLockPath(root)), false);
+});
+
+// The bug named in the background: calling `continue` while pass 1 has not
+// finished used to find no completed pass on disk and finalize the run as
+// "failed" out from under the still-running worker. The worker lock, taken
+// by startRun before it ever calls a lens, must stop that before it ever
+// reaches the "no completed pass" check at all.
+test("continueRun: refused while the run's pass 1 is still executing, and never finalizes it", async () => {
+  const root = tmp();
+  const config = cfg({ maxIterations: 2 });
+  let release;
+  const gate = new Promise((r) => (release = r));
+  const hangingLensFn = async ({ lens }) => {
+    await gate;
+    return {
+      lens: lens.name,
+      status: "ok",
+      findings: [finding("leak")],
+      threadId: "t",
+      raw: "",
+    };
+  };
+
+  const firstPromise = startRun({ root, config, target: "/repo", runLensFn: hangingLensFn });
+
+  const second = await continueRun({ root, runLensFn: okLens([]) });
+  assert.equal(second.status, "worker_busy");
+
+  release();
+  const first = await firstPromise;
+  assert.equal(first.status, "awaiting_response");
+  assert.equal(
+    existsSync(join(runDir(root, first.runId), "verdict.json")),
+    false,
+    "continue must not have finalized the still-running run as failed",
+  );
+  assert.equal(existsSync(workerLockPath(root)), false);
+});
+
+// Every exit path releases the lock, thrown errors included — otherwise one
+// failed pass would wedge the project until something noticed the (in this
+// case, perfectly alive) pid was stale.
+test("startRun: the worker lock is released even when a lens throws, and does not wedge later runs", async () => {
+  const root = tmp();
+  const boom = async () => {
+    throw new Error("boom");
+  };
+  const r = await startRun({ root, config: cfg(), target: "/repo", runLensFn: boom });
+  assert.equal(r.verdict, "failed");
+  assert.equal(existsSync(workerLockPath(root)), false);
+
+  const next = await startRun({
+    root,
+    config: cfg(),
+    target: "/repo",
+    runLensFn: okLens([]),
+  });
+  assert.equal(next.status, "finished");
+  assert.equal(next.verdict, "clean");
+});
+
+test("continueRun: the worker lock is released even when a lens throws", async () => {
+  const root = tmp();
+  const config = cfg({ maxIterations: 2 });
+  const started = await startRun({
+    root,
+    config,
+    target: "/repo",
+    runLensFn: okLens([finding("leak")]),
+  });
+  assert.equal(started.status, "awaiting_response");
+
+  const boom = async () => {
+    throw new Error("boom");
+  };
+  const r = await continueRun({ root, runLensFn: boom });
+  assert.equal(r.verdict, "failed");
+  assert.equal(existsSync(workerLockPath(root)), false);
+});
+
+// D-artifacts-promoteTo: the operator's promoteTo setting has to reach the
+// off-limits section of every lens brief, not just the shipped default —
+// otherwise a project that promotes somewhere other than Docs/Audit leaves
+// that real directory unguarded against a repo-wide lens exploring into it.
+test("startRun: a custom artifacts.promoteTo reaches the lens brief's off-limits section", async () => {
+  const root = tmp();
+  const config = cfg({ artifacts: { promoteTo: "Reports/Audits" } });
+  let seenBrief = null;
+  const r = await startRun({
+    root,
+    config,
+    target: "/repo",
+    runLensFn: async ({ lens, brief }) => {
+      seenBrief = brief;
+      return { lens: lens.name, status: "ok", findings: [], threadId: "t", raw: "" };
+    },
+  });
+  assert.equal(r.status, "finished");
+  assert.match(seenBrief, /Reports\/Audits\/`/);
+  assert.doesNotMatch(seenBrief, /Docs\/Audit\//);
+});
+
+test("continueRun: a custom artifacts.promoteTo reaches pass 2's lens brief too", async () => {
+  const root = tmp();
+  const config = cfg({
+    maxIterations: 2,
+    artifacts: { promoteTo: "Reports/Audits" },
+  });
+  await startRun({
+    root,
+    config,
+    target: "/repo",
+    runLensFn: okLens([finding("leak")]),
+  });
+
+  let seenBrief = null;
+  const r = await continueRun({
+    root,
+    runLensFn: async ({ lens, brief }) => {
+      seenBrief = brief;
+      return { lens: lens.name, status: "ok", findings: [], threadId: "t", raw: "" };
+    },
+  });
+  assert.equal(r.status, "finished");
+  assert.match(seenBrief, /Reports\/Audits\/`/);
+});
+
+// The signal handler's own release path (context.mjs's stopLensesOnSignal)
+// calls releaseOwnClaim, and it has to free both locks a process can be
+// holding when a signal lands mid-pass — not just the marker.
+test("releaseOwnClaim: also releases a worker lock this process holds", async () => {
+  const { releaseOwnClaim } = await import("../src/driver.mjs");
+  const { acquireWorkerLock } = await import("../src/marker.mjs");
+  const root = mkdtempSync(join(tmpdir(), "trio-release-lock-"));
+  const runId = "2026-01-01T00-00-00";
+  mkdirSync(runDir(root, runId), { recursive: true });
+  mkdirSync(trioDir(root), { recursive: true });
+  writeFileSync(
+    activeMarker(root),
+    JSON.stringify({ run: runId, pass: 1, pid: process.pid }),
+  );
+  const lock = acquireWorkerLock({ root, runId, pass: 1 });
+  assert.equal(lock.ok, true);
+
+  assert.equal(releaseOwnClaim({ root }), true);
+  assert.equal(existsSync(activeMarker(root)), false);
+  assert.equal(existsSync(workerLockPath(root)), false);
 });

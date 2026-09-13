@@ -25,6 +25,8 @@ import {
   writeMarker,
   removeMarker,
   removeMarkerOwnedBy,
+  acquireWorkerLock,
+  releaseWorkerLock,
 } from "./marker.mjs";
 import { DEFAULT_CONFIG } from "./config.mjs";
 
@@ -125,8 +127,15 @@ export function finalizeIfUnfinished({ root, runId, verdict = "cancelled" }) {
 // signalling a real CLI process — which on win32 is TerminateProcess, so the
 // handler that calls this would never run and the test would prove nothing.
 export function releaseOwnClaim({ root, pid = process.pid } = {}) {
+  // Two separate claims can both be this process's: the marker (which names
+  // the run) and the worker lock (held for as long as it is actually running
+  // a pass or finalizing). releaseWorkerLock is ownership-scoped by pid on
+  // its own, so trying it unconditionally here is safe even when only the
+  // marker turns out to be this process's, or neither does — a signal must
+  // release whatever this process actually holds, not just one of the two.
+  const lockReleased = releaseWorkerLock(root, pid);
   const held = readMarker(root);
-  if (!held || held.pid !== pid) return false;
+  if (!held || held.pid !== pid) return lockReleased;
   const runId = isRunId(held.run) ? held.run : null;
   if (runId) finalizeIfUnfinished({ root, runId });
   // Compare-and-delete either way. A named claim is matched on its run id; an
@@ -323,7 +332,14 @@ function extensionOffer({ root, runId, config, verdict, passes }) {
 // The verdict is evidence and is never simply deleted: it moves into the pass
 // that produced it, so the record still shows the run stopped at the ceiling
 // and was extended, rather than pretending it never did.
-export function reopenRun({ root, runId, by = 1, hasClaudeFindings = false }) {
+export function reopenRun({
+  root,
+  runId,
+  by = 1,
+  hasClaudeFindings = false,
+  run,
+  pid = process.pid,
+}) {
   if (!isRunId(runId)) return { ok: false, error: `Not a run id: ${runId}` };
   const verdictPath = join(runDir(root, runId), "verdict.json");
   let verdict;
@@ -374,6 +390,25 @@ export function reopenRun({ root, runId, by = 1, hasClaudeFindings = false }) {
       error: `A run is already in progress: ${claim.runId ?? "(unnamed)"}.`,
     };
 
+  // And, exactly as a start does, nothing below is touched unless this
+  // process also owns the worker lock — extending mutates the run's
+  // artifacts (archives the ceiling verdict, raises maxIterations, removes
+  // the old verdict) exactly as running a pass does.
+  const lock = acquireWorkerLock({ root, runId, pass: passCount, run, pid });
+  if (!lock.ok) {
+    // The marker claim above is now orphaned — nothing will finish extending
+    // to release it — so it comes off here, the same way a failed mutation
+    // below releases it, or every later start, continue or extend would
+    // refuse against a claim nothing owns.
+    removeMarkerOwnedBy(root, process.pid);
+    return {
+      ok: false,
+      status: "worker_busy",
+      holder: lock.holder,
+      error: `Cannot extend ${runId}: worker lock held by pid ${lock.holder?.pid} (run ${lock.holder?.run ?? "unnamed"}${Number.isSafeInteger(lock.holder?.pass) ? `, pass ${lock.holder.pass}` : ""}).`,
+    };
+  }
+
   try {
     const parsed = JSON.parse(
       readFileSync(join(runDir(root, runId), "run.json"), "utf8"),
@@ -422,6 +457,11 @@ export function reopenRun({ root, runId, by = 1, hasClaudeFindings = false }) {
     // failed extend would have locked the project out of every future run.
     removeMarkerOwnedBy(root, process.pid);
     return { ok: false, error: `Could not extend ${runId}: ${err.message}` };
+  } finally {
+    // Released either way, success or failure: continueRun (called right
+    // after by the `extend` command) takes this lock fresh for the pass it
+    // actually runs, and would otherwise refuse itself as busy.
+    releaseWorkerLock(root, pid);
   }
 }
 
@@ -672,16 +712,18 @@ function baseBrief(root, lens) {
 // The pass-aware brief builder (D14): pass 1 (or no prior pass) is the
 // lens's base brief unchanged; pass 2+ folds in that lens's own prior
 // findings, Claude's file changes since, and Claude's response.json.
-function briefFor(root, runId, scope, settled = []) {
+function briefFor(root, runId, scope, promoteTo, settled = []) {
   return (lens, pass, prevRecord) => {
     const brief = baseBrief(root, lens);
-    if (pass <= 1 || !prevRecord) return buildLensPrompt({ brief, scope });
+    if (pass <= 1 || !prevRecord)
+      return buildLensPrompt({ brief, scope, promoteTo });
     return buildLensPrompt({
       brief,
       lens,
       pass,
       scope,
       settled,
+      promoteTo,
       prior: {
         findings:
           prevRecord.lenses.find((l) => l.lens === lens.name)?.findings ?? [],
@@ -740,6 +782,8 @@ export async function startRun({
   lenses,
   scope = null,
   claudeFindingsPath = null,
+  run,
+  pid = process.pid,
 }) {
   const selection = applyLensSelection(config, lenses);
   if (selection.error) return { status: "invalid_lenses", error: selection.error };
@@ -769,6 +813,19 @@ export async function startRun({
       pass: claim.pass,
     };
 
+  // And nothing below *this* line runs unless it also owns the worker lock.
+  // The marker's own `wx` create only ever serializes starting a run — a
+  // `continue` racing the tail of pass 1 would otherwise see no completed
+  // pass on disk yet and finalize this run as failed out from under it.
+  const lock = acquireWorkerLock({ root, runId: null, pass: 1, run, pid });
+  if (!lock.ok) {
+    // The marker claim above is now orphaned — nothing will ever run pass 1
+    // to release it — so it comes off here, or every later start and
+    // continue would refuse against a claim naming a run that never began.
+    removeMarker(root);
+    return { status: "worker_busy", ...lock };
+  }
+
   let runId, dir;
   try {
     const startedAt = now ?? new Date();
@@ -791,18 +848,19 @@ export async function startRun({
     // The claim is held but the run never existed — release it, or every
     // later start would refuse against a marker naming nothing.
     removeMarker(root);
+    releaseWorkerLock(root, pid);
     return { status: "finished", verdict: "failed", runId: null, error: err.message };
   }
 
-  if (beforeFirstPass) {
-    try {
-      await beforeFirstPass({ runId, dir });
-    } catch {
-      /* a viewer must never block a run */
-    }
-  }
-
   try {
+    if (beforeFirstPass) {
+      try {
+        await beforeFirstPass({ runId, dir });
+      } catch {
+        /* a viewer must never block a run */
+      }
+    }
+
     const { record, converged } = await runPass({
       config,
       target,
@@ -811,7 +869,7 @@ export async function startRun({
       pass: 1,
       prevRecord: null,
       runLensFn,
-      briefFor: briefFor(root, runId, scope),
+      briefFor: briefFor(root, runId, scope, config.artifacts.promoteTo),
       claudeFindings: claude.findings,
     });
 
@@ -827,6 +885,12 @@ export async function startRun({
     return justRanPass({ root, runId, config, pass: 1, converged, record });
   } catch (err) {
     return finalizeFailed({ root, runId, config, err });
+  } finally {
+    // Every exit past this point — clean, parked, failed, cancelled, or a
+    // thrown error finalizeFailed itself could not recover from — releases
+    // the worker lock. Held any longer and a legitimate `continue` on this
+    // very run would refuse itself as busy forever.
+    releaseWorkerLock(root, pid);
   }
 }
 
@@ -837,6 +901,8 @@ export async function continueRun({
   root,
   runLensFn,
   claudeFindingsPath = null,
+  run,
+  pid = process.pid,
 }) {
   // The marker first: "there is nothing to continue" is the more useful
   // answer, and reporting a bad handover file instead sends the operator to
@@ -860,132 +926,168 @@ export async function continueRun({
         ".trio/active names a run id Trio did not mint — refusing to continue it. /trio:cancel clears the claim.",
     };
 
-  // The overwrite guard needs neither config nor target, so it is checked
-  // before run.json is even read — a corrupt run.json must never bypass it
-  // and reach a code path that could rewrite an existing verdict.json.
-  const verdictPath = join(runDir(root, runId), "verdict.json");
-  if (existsSync(verdictPath)) {
-    let parsed;
-    try {
-      parsed = JSON.parse(readFileSync(verdictPath, "utf8"));
-    } catch {
-      // The file is evidence — a corrupt verdict.json is never rewritten,
-      // only reported as unknown.
-      removeMarker(root, runId);
-      return { status: "already_finished", verdict: "unknown" };
-    }
-    removeMarker(root, runId);
-    return { status: "already_finished", verdict: parsed.verdict };
-  }
-
-  let target, config, scope;
-  try {
-    ({ target, config, scope } = readRunJson(root, runId));
-  } catch (err) {
-    return finalizeFailed({
-      root,
-      runId,
-      config: DEFAULT_CONFIG,
-      err: new Error(`could not read run.json: ${err.message}`),
-    });
-  }
-
-  const N = latestCompletedPass(root, runId);
-  if (N == null) {
-    return finalizeFailed({
-      root,
-      runId,
-      config,
-      err: new Error("no completed pass found on disk (corrupt run state)"),
-    });
-  }
-
-  if (isCancelled(root, runId))
-    return finalize({ root, runId, config, verdict: "cancelled" });
+  // Selecting a pass, adjudicating it, and running or finalizing the next one
+  // all mutate the run — and the marker's own `wx` create only ever
+  // serialized *starting* one. Two `continue` calls on the same parked run,
+  // or one racing the tail of a pass another process is still running, would
+  // otherwise both read the same completed pass and both act on it. Nothing
+  // past this line runs unless this process also owns the worker lock.
+  const lock = acquireWorkerLock({ root, runId, pass: marker.pass ?? null, run, pid });
+  if (!lock.ok) return { status: "worker_busy", ...lock };
 
   try {
-    const stored = readReconcile(root, runId, N);
-
-    const { record, converged } = applyAdjudication({
-      root,
-      config,
-      runId,
-      pass: N,
-      record: stored,
-    });
-
-    // Read regardless of whether this pass turns out to finalize: it is
-    // cheap, and finalizeIfDone only carries it into a result when it
-    // actually finalizes — a pass that goes on to N+1 gets a fresh audit
-    // instead, which re-checks the fix properly.
-    const fixedUnverified = fixedUnverifiedIn(root, runId, N);
-    const done1 = finalizeIfDone({
-      root,
-      runId,
-      config,
-      pass: N,
-      converged,
-      fixedUnverified,
-    });
-    if (done1) return done1;
-
-    // Only past this line is there going to be a pass N+1, and only a pass
-    // N+1 needs a Claude lane. The guard used to run before adjudication, so
-    // the settling call that closes a ceiling-reached run — which runs no
-    // pass and needs no fresh audit — was refused for not carrying one.
-    //
-    // A lane that audited the previous pass and not this one is worse than a
-    // lane that never ran. diffPasses compares this pass against the last, so
-    // every Claude-only finding from pass N would appear in pass N+1's
-    // `closed` column — reported fixed because nobody looked, which is the
-    // precise failure the diff was rewritten to stop (see findings.mjs, run
-    // 2026-08-01T12-27-09: 21 of 21 "closed", 14 still in the code).
-    if (stored?.claude && !claude.findings)
+    // Compare-and-set: `marker` above was read before this process owned the
+    // worker lock, so it can already be stale by the time the lock is
+    // actually granted — another process could have advanced this run, or
+    // finalized it, in that gap. Nothing below may act on it until it is
+    // re-read with the lock held, when nothing else can be changing it.
+    const fresh = readMarker(root);
+    if (!fresh || fresh.run !== runId)
       return {
-        status: "claude_lane_missing",
-        error:
-          `Pass ${N} carried a Claude audit and this one does not. Its findings ` +
-          `would be diffed as closed without anyone re-checking them. Audit the ` +
-          `scope again and pass --claude-findings.`,
+        status: "run_advanced",
+        error: `${runId} is no longer the active run — another process already advanced or finalized it.`,
       };
 
-    writeMarker(root, runId, N + 1);
+    // The overwrite guard needs neither config nor target, so it is checked
+    // before run.json is even read — a corrupt run.json must never bypass it
+    // and reach a code path that could rewrite an existing verdict.json.
+    const verdictPath = join(runDir(root, runId), "verdict.json");
+    if (existsSync(verdictPath)) {
+      let parsed;
+      try {
+        parsed = JSON.parse(readFileSync(verdictPath, "utf8"));
+      } catch {
+        // The file is evidence — a corrupt verdict.json is never rewritten,
+        // only reported as unknown.
+        removeMarker(root, runId);
+        return { status: "already_finished", verdict: "unknown" };
+      }
+      removeMarker(root, runId);
+      return { status: "already_finished", verdict: parsed.verdict };
+    }
 
-    // Built once, after applyAdjudication has folded pass N's verdicts into
-    // its record, and handed to both consumers: the prompt (so a lens is told
-    // what this run already settled) and the merge (so a re-raise carries that
-    // history). Building it inside briefFor would re-read every prior pass
-    // once per lens.
-    const settled = buildSettled(root, runId, N);
+    let target, config, scope;
+    try {
+      ({ target, config, scope } = readRunJson(root, runId));
+    } catch (err) {
+      return finalizeFailed({
+        root,
+        runId,
+        config: DEFAULT_CONFIG,
+        err: new Error(`could not read run.json: ${err.message}`),
+      });
+    }
 
-    const { record: record2, converged: converged2 } = await runPass({
-      config,
-      target,
-      root,
-      runId,
-      pass: N + 1,
-      prevRecord: record,
-      runLensFn,
-      briefFor: briefFor(root, runId, scope, settled),
-      claudeFindings: claude.findings,
-      settled,
-    });
+    const N = latestCompletedPass(root, runId);
+    if (N == null) {
+      return finalizeFailed({
+        root,
+        runId,
+        config,
+        err: new Error("no completed pass found on disk (corrupt run state)"),
+      });
+    }
+
+    // The other half of the compare-and-set: the pass this call is about to
+    // build on must still be the one the marker (re-read under the lock)
+    // names. It always will, absent a bug — the worker lock already rules
+    // out a concurrent mutation — but a mismatch here is a clearer answer
+    // than silently adjudicating a pass nobody asked this call to.
+    if (fresh.pass !== N)
+      return {
+        status: "run_advanced",
+        error: `Pass ${N} is no longer current (the marker names pass ${fresh.pass}) — another process already advanced or finalized this run.`,
+      };
 
     if (isCancelled(root, runId))
       return finalize({ root, runId, config, verdict: "cancelled" });
 
-    const out = codexIsOut({ root, runId, config, record: record2 });
-    if (out) return out;
+    try {
+      const stored = readReconcile(root, runId, N);
 
-    return justRanPass({
-      root,
-      runId,
-      config,
-      pass: N + 1,
-      converged: converged2,
-      record: record2,
-    });
-  } catch (err) {
-    return finalizeFailed({ root, runId, config, err });
+      const { record, converged } = applyAdjudication({
+        root,
+        config,
+        runId,
+        pass: N,
+        record: stored,
+      });
+
+      // Read regardless of whether this pass turns out to finalize: it is
+      // cheap, and finalizeIfDone only carries it into a result when it
+      // actually finalizes — a pass that goes on to N+1 gets a fresh audit
+      // instead, which re-checks the fix properly.
+      const fixedUnverified = fixedUnverifiedIn(root, runId, N);
+      const done1 = finalizeIfDone({
+        root,
+        runId,
+        config,
+        pass: N,
+        converged,
+        fixedUnverified,
+      });
+      if (done1) return done1;
+
+      // Only past this line is there going to be a pass N+1, and only a pass
+      // N+1 needs a Claude lane. The guard used to run before adjudication, so
+      // the settling call that closes a ceiling-reached run — which runs no
+      // pass and needs no fresh audit — was refused for not carrying one.
+      //
+      // A lane that audited the previous pass and not this one is worse than a
+      // lane that never ran. diffPasses compares this pass against the last, so
+      // every Claude-only finding from pass N would appear in pass N+1's
+      // `closed` column — reported fixed because nobody looked, which is the
+      // precise failure the diff was rewritten to stop (see findings.mjs, run
+      // 2026-08-01T12-27-09: 21 of 21 "closed", 14 still in the code).
+      if (stored?.claude && !claude.findings)
+        return {
+          status: "claude_lane_missing",
+          error:
+            `Pass ${N} carried a Claude audit and this one does not. Its findings ` +
+            `would be diffed as closed without anyone re-checking them. Audit the ` +
+            `scope again and pass --claude-findings.`,
+        };
+
+      writeMarker(root, runId, N + 1);
+
+      // Built once, after applyAdjudication has folded pass N's verdicts into
+      // its record, and handed to both consumers: the prompt (so a lens is told
+      // what this run already settled) and the merge (so a re-raise carries that
+      // history). Building it inside briefFor would re-read every prior pass
+      // once per lens.
+      const settled = buildSettled(root, runId, N);
+
+      const { record: record2, converged: converged2 } = await runPass({
+        config,
+        target,
+        root,
+        runId,
+        pass: N + 1,
+        prevRecord: record,
+        runLensFn,
+        briefFor: briefFor(root, runId, scope, config.artifacts.promoteTo, settled),
+        claudeFindings: claude.findings,
+        settled,
+      });
+
+      if (isCancelled(root, runId))
+        return finalize({ root, runId, config, verdict: "cancelled" });
+
+      const out = codexIsOut({ root, runId, config, record: record2 });
+      if (out) return out;
+
+      return justRanPass({
+        root,
+        runId,
+        config,
+        pass: N + 1,
+        converged: converged2,
+        record: record2,
+      });
+    } catch (err) {
+      return finalizeFailed({ root, runId, config, err });
+    }
+  } finally {
+    releaseWorkerLock(root, pid);
   }
 }
