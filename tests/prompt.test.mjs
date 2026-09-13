@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readdirSync,
+  readFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -8,6 +14,7 @@ import {
   claudeChanges,
   buildLensPrompt,
   MAX_CHANGES_BYTES,
+  DEFAULT_PROMOTE_TO,
 } from "../src/prompt.mjs";
 import { passDir } from "../src/paths.mjs";
 
@@ -77,24 +84,26 @@ test("claudeChanges filters by actor, kind, and pass, preserving order", () => {
   ]);
 });
 
-test("buildLensPrompt returns the brief verbatim for pass 1", () => {
+test("buildLensPrompt returns the brief plus the off-limits guard for pass 1", () => {
   const out = buildLensPrompt({
     brief: "BRIEF TEXT",
     lens: "auditor",
     pass: 1,
     prior: { findings: [], changes: [], response: null },
   });
-  assert.equal(out, "BRIEF TEXT");
+  assert.ok(out.startsWith("BRIEF TEXT\n\n## Off-limits"));
+  assert.doesNotMatch(out, /## Scope/);
+  assert.doesNotMatch(out, /## Your findings/);
 });
 
-test("buildLensPrompt returns the brief verbatim when prior is null", () => {
+test("buildLensPrompt returns the brief plus the off-limits guard when prior is null", () => {
   const out = buildLensPrompt({
     brief: "BRIEF TEXT",
     lens: "auditor",
     pass: 2,
     prior: null,
   });
-  assert.equal(out, "BRIEF TEXT");
+  assert.ok(out.startsWith("BRIEF TEXT\n\n## Off-limits"));
 });
 
 // The decline ledger's prompt half (src/settled.mjs). It is the primary
@@ -163,7 +172,7 @@ test("pass 1 never carries the ledger, even if one is passed", () => {
     prior: null,
     settled: SETTLED,
   });
-  assert.equal(out, "BRIEF");
+  assert.doesNotMatch(out, /Already settled/);
 });
 
 test("pass-2 prompt carries the brief, a prior finding, a diff hunk, and a declined reason", () => {
@@ -242,7 +251,8 @@ test("empty prior findings and changes produce fallback statements", () => {
 
 test("scope is absent from the prompt when no scope was given", () => {
   const out = buildLensPrompt({ brief: "BRIEF", pass: 1, prior: null });
-  assert.equal(out, "BRIEF");
+  assert.ok(out.startsWith("BRIEF\n\n## Off-limits"));
+  assert.doesNotMatch(out, /## Scope/);
 });
 
 test("scope reaches pass 1, which has no prior turn to carry it", () => {
@@ -394,5 +404,64 @@ test("buildLensPrompt ignores an extra lens argument", () => {
   });
   const withoutLens = buildLensPrompt({ brief: "BRIEF", pass: 1, prior: null });
   assert.equal(withLens, withoutLens);
+});
+
+// Codex briefs (lenses/*.md) say nothing about staying out of `.trio/` or the
+// promoted audit directory — only agents/trio-lens.md (Claude's lens) does.
+// The shared builder is where that rule has to live instead, so every lens's
+// brief carries it on every pass, not just the ones a maintainer remembers to
+// update by hand.
+const LENS_FILES = readdirSync(
+  new URL("../lenses/", import.meta.url),
+).filter((f) => f.endsWith(".md"));
+
+test("every lens brief carries the no-artifacts rule on pass 1", () => {
+  assert.ok(LENS_FILES.length > 0, "expected at least one lens brief file");
+  for (const file of LENS_FILES) {
+    const brief = readFileSync(
+      new URL(`../lenses/${file}`, import.meta.url),
+      "utf8",
+    );
+    const out = buildLensPrompt({ brief, pass: 1, prior: null });
+    assert.match(
+      out,
+      /Do not read `\.trio\/`/,
+      `${file} pass-1 brief missing the off-limits rule`,
+    );
+    assert.ok(
+      out.includes(DEFAULT_PROMOTE_TO),
+      `${file} pass-1 brief missing the promoted-directory name`,
+    );
+  }
+});
+
+test("every lens brief carries the no-artifacts rule on pass 2+ too", () => {
+  for (const file of LENS_FILES) {
+    const brief = readFileSync(
+      new URL(`../lenses/${file}`, import.meta.url),
+      "utf8",
+    );
+    const out = buildLensPrompt({
+      brief,
+      pass: 2,
+      prior: { findings: [], changes: [], response: null },
+    });
+    assert.match(
+      out,
+      /Do not read `\.trio\/`/,
+      `${file} pass-2 brief missing the off-limits rule`,
+    );
+  }
+});
+
+test("a custom promoteTo replaces the default in the guard", () => {
+  const out = buildLensPrompt({
+    brief: "BRIEF",
+    pass: 1,
+    prior: null,
+    promoteTo: "Docs/CustomAudit",
+  });
+  assert.match(out, /Docs\/CustomAudit\//);
+  assert.doesNotMatch(out, new RegExp(DEFAULT_PROMOTE_TO));
 });
 

@@ -189,3 +189,106 @@ test("autoExit closes the server once verdict.json appears", async () => {
   writeFileSync(join(dir, "verdict.json"), JSON.stringify({ verdict: "clean" }));
   await closed;
 });
+
+// The bug this guards: server.close() only resolves once every existing
+// connection has ended, and an SSE response never ends on its own — a
+// browser tab left attached kept the poll interval and fs.watch watcher
+// alive right along with it, so auto-exit never actually exited. A plain
+// setTimeout "deadline" cannot prove this: a `reader.read()` left pending
+// against a socket that is never closed just hangs forever regardless of
+// any timer running elsewhere, so the actual deadline here is an
+// AbortController tied to the fetch itself, which is the only thing that
+// can unblock that pending read on the old, broken code — the reject on
+// timeout is what makes this fail loudly on old code instead of hanging
+// the test run.
+test("autoExit closes the server even with a client connected to /events", async () => {
+  const dir = tmp();
+  const { server, url } = await start({
+    runDirPath: dir,
+    port: 0,
+    autoExit: true,
+    pollMs: 20,
+    lingerMs: 20,
+  });
+
+  const controller = new AbortController();
+  const res = await fetch(`${url}/events`, { signal: controller.signal });
+  const reader = res.body.getReader();
+  // Keep a read pending against the stream, the way a browser tab holding
+  // the connection open would — this is exactly what the old code left
+  // dangling forever.
+  reader.read().catch(() => {});
+
+  const closed = new Promise((resolve, reject) => {
+    const guard = setTimeout(() => {
+      controller.abort();
+      reject(
+        new Error("server did not auto-exit with a client still connected"),
+      );
+    }, 3000);
+    server.on("close", () => {
+      clearTimeout(guard);
+      resolve();
+    });
+  });
+
+  writeFileSync(join(dir, "verdict.json"), JSON.stringify({ verdict: "clean" }));
+  await closed;
+  controller.abort();
+});
+
+// Every reconnection used to start over from byte offset zero, so the page
+// (view/index.html) replayed the whole backlog on top of what it had already
+// rendered. The server now hands back an SSE `id:` (a byte offset) and, on a
+// reconnect carrying `Last-Event-ID`, resumes reading from exactly there
+// instead of from the start.
+test("/events honours Last-Event-ID on reconnect and does not replay the backlog", async () => {
+  const dir = tmp();
+  seed(dir, "agent_message");
+  const { server, url } = await start({ runDirPath: dir, port: 0 });
+
+  const decoder = new TextDecoder();
+  const readUntil = async (reader, pred, ms) => {
+    let seen = "";
+    const deadline = Date.now() + ms;
+    while (!pred(seen) && Date.now() < deadline) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      seen += decoder.decode(value, { stream: true });
+    }
+    return seen;
+  };
+
+  const first = await fetch(`${url}/events`);
+  const reader1 = first.body.getReader();
+  const seen1 = await readUntil(
+    reader1,
+    (s) => s.includes("agent_message"),
+    5000,
+  );
+  await reader1.cancel();
+
+  const idLine = seen1.match(/^id: (\S+)\s*$/m);
+  assert.ok(idLine, "server did not send an id: line with the backlog");
+  const lastEventId = idLine[1];
+
+  seed(dir, "reasoning");
+
+  const second = await fetch(`${url}/events`, {
+    headers: { "Last-Event-ID": lastEventId },
+  });
+  const reader2 = second.body.getReader();
+  const seen2 = await readUntil(
+    reader2,
+    (s) => s.includes("reasoning"),
+    5000,
+  );
+  await reader2.cancel();
+  server.close();
+
+  assert.ok(
+    !seen2.includes("agent_message"),
+    "reconnect replayed an event already seen",
+  );
+  assert.ok(seen2.includes("reasoning"), "reconnect missed the new event");
+});

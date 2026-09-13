@@ -161,6 +161,32 @@ function renderScopeSection(scope) {
   );
 }
 
+// Matches config.mjs's artifacts.promoteTo default. buildLensPrompt has no
+// access to the operator's config (its caller in driver.mjs does not thread
+// one through), so this is the fallback when no promoteTo is passed in.
+export const DEFAULT_PROMOTE_TO = "Docs/Audit";
+
+// A repo-wide exploration is otherwise free to wander into Trio's own
+// bookkeeping: `.trio/` holds this run's (and every other run's) raw
+// findings, other lanes' lane output, and adjudicated verdicts; the promoted
+// directory holds prior audit reports written back into the repo. A lens
+// that reads either can anchor on a past verdict instead of judging the
+// code fresh, or silently re-report a finding it is about to raise anyway.
+// Whatever a lens needs from a prior pass is already in the brief above —
+// this instruction is unconditional, not "unless you have a reason to." It
+// lives here, in the shared builder, rather than duplicated per lens brief
+// or per Codex brief, so every lens and every pass carries it the same way.
+function renderNoArtifactsSection(promoteTo) {
+  return (
+    "## Off-limits\n\n" +
+    `Do not read \`.trio/\` or \`${promoteTo}/\` anywhere in this repository. ` +
+    "They hold Trio's own run data — earlier findings, other lanes' output, " +
+    "adjudicated verdicts, and promoted audit reports — not the codebase " +
+    "under review. Any prior findings, file changes, or replies you need " +
+    "are already supplied above, if this pass carries any."
+  );
+}
+
 // Composes a lens's pass-N prompt. pass 1 (or no prior pass) is the brief
 // plus any scope; pass 2+ also turns Codex's own pass-N-1 findings, Claude's
 // file changes since, and Claude's response.json into a conversation turn
@@ -170,14 +196,22 @@ function renderScopeSection(scope) {
 // refutations and declines, not just the previous one's. It goes last before
 // the instructions, closest to the ask, because it is the section that has to
 // survive a lens rewording an old claim into a new title.
-export function buildLensPrompt({ brief, pass, prior, scope, settled }) {
+export function buildLensPrompt({
+  brief,
+  pass,
+  prior,
+  scope,
+  settled,
+  promoteTo = DEFAULT_PROMOTE_TO,
+}) {
   const scoped = scope ? `${brief}\n\n${renderScopeSection(scope)}` : brief;
-  if (pass <= 1 || prior == null) return scoped;
+  const framed = `${scoped}\n\n${renderNoArtifactsSection(promoteTo)}`;
+  if (pass <= 1 || prior == null) return framed;
 
   const { findings = [], changes = [], response = null } = prior;
   const settledSection = renderSettledSection(settled);
   const sections = [
-    scoped,
+    framed,
     renderFindingsSection(findings, pass - 1),
     renderChangesSection(changes),
     renderReplySection(response, findings),

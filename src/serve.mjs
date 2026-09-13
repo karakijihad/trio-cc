@@ -19,8 +19,31 @@ function pluginVersion() {
   }
 }
 
+// Byte offset a client last confirmed seeing, from the standard
+// "Last-Event-ID" request header EventSource sends on an automatic
+// reconnect. Any value that isn't a clean non-negative integer is treated as
+// absent — readEventsFrom already recovers from an offset past EOF or before
+// it, so refusing to trust a mangled header here just avoids passing it a
+// value that means nothing, not a data-loss risk.
+function lastEventOffset(req) {
+  const raw = req.headers["last-event-id"];
+  if (raw == null) return 0;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 0 ? n : 0;
+}
+
 export function createServer({ runDirPath }) {
-  return httpServer((req, res) => {
+  // Every open /events connection, so a shutdown can force them closed
+  // instead of waiting on them: an SSE response never ends on its own, and
+  // its poll interval and fs.watch watcher keep running (and keep the
+  // process alive) for as long as the response stays open. server.close()
+  // only stops accepting new connections and resolves once every existing
+  // one has ended — with a browser tab left attached, that is never, which
+  // is what made auto-exit hang. Wrapping close() below is what breaks that:
+  // every caller of it, not just armAutoExit, gets the forced cleanup.
+  const sseClients = new Set();
+
+  const server = httpServer((req, res) => {
     if (req.url === "/" || req.url === "/index.html") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(readFileSync(PAGE, "utf8"));
@@ -38,10 +61,16 @@ export function createServer({ runDirPath }) {
         connection: "keep-alive",
       });
       res.flushHeaders();
-      let offset = 0;
+      let offset = lastEventOffset(req);
       const flush = () => {
         const { events, offset: next } = readEventsFrom(runDirPath, offset);
         offset = next;
+        if (!events.length) return;
+        // One id per flush, sent before its data blocks: per the SSE spec the
+        // last-set id is what a dispatched event's lastEventId carries, so
+        // every event in this batch resumes from the same, correct byte
+        // offset — the one just past all of them — on a later reconnect.
+        res.write(`id: ${next}\n`);
         for (const ev of events) res.write(`data: ${JSON.stringify(ev)}\n\n`);
       };
       flush();
@@ -52,15 +81,40 @@ export function createServer({ runDirPath }) {
         watcher = null; // no log yet; the poll below covers it
       }
       const poll = setInterval(flush, 1000);
+      const client = { res, poll, watcher };
+      sseClients.add(client);
       req.on("close", () => {
         clearInterval(poll);
         watcher?.close();
+        sseClients.delete(client);
       });
       return;
     }
     res.writeHead(404, { "content-type": "text/plain" });
     res.end("not found");
   });
+
+  const originalClose = server.close.bind(server);
+  server.close = (callback) => {
+    for (const client of sseClients) {
+      clearInterval(client.poll);
+      client.watcher?.close();
+      try {
+        client.res.end();
+      } catch {
+        /* already ending */
+      }
+      try {
+        client.res.socket?.destroy();
+      } catch {
+        /* already gone */
+      }
+    }
+    sseClients.clear();
+    return originalClose(callback);
+  };
+
+  return server;
 }
 
 // Polls for the run's verdict.json and closes the server lingerMs after it

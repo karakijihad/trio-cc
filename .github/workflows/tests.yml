@@ -27,7 +27,11 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        node: [22, 24]
+        # 18.18.0 is the floor package.json's engines field promises — the
+        # other two are what the author actually develops against. A green
+        # 22/24 run says nothing about whether the promised floor still
+        # works, and nothing else in this matrix checks it.
+        node: [22, 24, "18.18.0"]
 
     # The suite spawns a fake Codex per lens per pass, hundreds of times. It
     # runs in about two and a half minutes on Linux and considerably longer on
@@ -48,5 +52,20 @@ jobs:
       - name: Node and platform
         run: node --version && node -p "process.platform + ' ' + process.arch"
 
+      # package.json's own test script quotes its glob ("tests/**/*.test.mjs")
+      # so no shell ever expands it — node --test has to do that itself, and
+      # only started supporting glob arguments after Node 18. On 18.18.0 that
+      # quoted string is passed straight through as a literal, non-existent
+      # path and node --test finds nothing to run. `shell: bash` is what
+      # makes the glob below expand identically on both runner OSes — Actions
+      # provides Git Bash on windows-latest for exactly this — instead of
+      # relying on each platform's default shell (pwsh on Windows does not
+      # expand wildcards for a native command's arguments the way bash does).
+      - name: Tests (Node 18.18.0 — its test runner can't expand npm test's glob)
+        if: matrix.node == '18.18.0'
+        shell: bash
+        run: node --test tests/*.test.mjs
+
       - name: Tests
+        if: matrix.node != '18.18.0'
         run: npm test
