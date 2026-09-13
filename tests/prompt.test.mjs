@@ -7,6 +7,7 @@ import {
   readPassResponse,
   claudeChanges,
   buildLensPrompt,
+  MAX_CHANGES_BYTES,
 } from "../src/prompt.mjs";
 import { passDir } from "../src/paths.mjs";
 
@@ -329,5 +330,69 @@ test("a genuinely empty reply still says it listed no findings", () => {
   const out = replyFor({ findings: [] });
   assert.match(out, /listed no findings/);
   assert.doesNotMatch(out, /could not be read/);
+});
+
+// Nothing capped how many changed files' full diffs could be rendered into
+// one pass's brief — MAX_DIFF_LINES (diff.mjs) only ever bounded one file's
+// diff, never the section listing all of them.
+test("the changes section is capped, listing omitted files by name", () => {
+  const big = "x".repeat(20 * 1024); // 20 KiB — four of these clears 64 KiB
+  const changes = Array.from({ length: 6 }, (_, i) => ({
+    file: `file-${i}.rs`,
+    diff: big,
+  }));
+  const out = buildLensPrompt({
+    brief: "BRIEF",
+    pass: 2,
+    prior: { findings: [], changes, response: null },
+  });
+  assert.ok(
+    Buffer.byteLength(out, "utf8") < changes.length * big.length,
+    "the section must not carry every diff whole once it is over the cap",
+  );
+  assert.match(out, /more changed file\(s\) omitted/);
+  // The omitted files are named even though their diffs were dropped.
+  const lastFile = changes.at(-1).file;
+  assert.match(out, new RegExp(lastFile));
+});
+
+test("at least one changed file's diff survives the cap even if it alone exceeds it", () => {
+  const huge = "x".repeat(MAX_CHANGES_BYTES * 2);
+  const changes = [{ file: "huge.rs", diff: huge }];
+  const out = buildLensPrompt({
+    brief: "BRIEF",
+    pass: 2,
+    prior: { findings: [], changes, response: null },
+  });
+  assert.match(out, /huge\.rs/);
+  assert.doesNotMatch(out, /omitted/);
+});
+
+test("a changes section under the cap lists every file with no omission note", () => {
+  const changes = [
+    { file: "a.rs", diff: "small diff a" },
+    { file: "b.rs", diff: "small diff b" },
+  ];
+  const out = buildLensPrompt({
+    brief: "BRIEF",
+    pass: 2,
+    prior: { findings: [], changes, response: null },
+  });
+  assert.match(out, /a\.rs/);
+  assert.match(out, /b\.rs/);
+  assert.doesNotMatch(out, /omitted/);
+});
+
+// buildLensPrompt never referenced its `lens` argument, so passing it (or
+// not) must make no difference to what gets rendered.
+test("buildLensPrompt ignores an extra lens argument", () => {
+  const withLens = buildLensPrompt({
+    brief: "BRIEF",
+    lens: { name: "auditor" },
+    pass: 1,
+    prior: null,
+  });
+  const withoutLens = buildLensPrompt({ brief: "BRIEF", pass: 1, prior: null });
+  assert.equal(withLens, withoutLens);
 });
 

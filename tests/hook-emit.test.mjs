@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -14,10 +20,18 @@ import { activeMarker, trioDir, runDir } from "../src/paths.mjs";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "trio-hook-"));
 
-const activate = (root, runId = "r1") => {
+// `target`, when given, writes the run.json a real run always has by the
+// time any tool call fires — startRun writes it before claiming the marker.
+// Omitting it simulates the corrupt-run.json edge case on purpose.
+const activate = (root, runId = "r1", target) => {
   mkdirSync(trioDir(root), { recursive: true });
   writeFileSync(activeMarker(root), JSON.stringify({ run: runId, pass: 1 }));
-  return runDir(root, runId);
+  const dir = runDir(root, runId);
+  if (target) {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "run.json"), JSON.stringify({ target }));
+  }
+  return dir;
 };
 
 // An orphaned worker finishing late must release its own lock, not the lock
@@ -205,4 +219,204 @@ test("main swallows malformed stdin rather than throwing", () => {
   const root = tmp();
   activate(root);
   assert.doesNotThrow(() => main("not json at all", root));
+});
+
+// --- brief leak: only file changes inside the run's target ever reach the
+// recorded log (and, downstream, prompt.mjs's "What Claude changed" section).
+
+test("a file_change inside the run's target is recorded", () => {
+  const root = tmp();
+  const target = tmp();
+  const dir = activate(root, "r1", target);
+  main(
+    JSON.stringify({
+      hook_event_name: "PostToolUse",
+      tool_name: "Edit",
+      tool_input: {
+        file_path: join(target, "src", "a.js"),
+        old_string: "x",
+        new_string: "y",
+      },
+    }),
+    root,
+  );
+  assert.equal(
+    readEvents(dir).filter((e) => e.kind === "file_change").length,
+    1,
+  );
+});
+
+test("a file_change outside the run's target never reaches the log", () => {
+  const root = tmp();
+  const target = tmp();
+  const outside = tmp();
+  const dir = activate(root, "r1", target);
+  main(
+    JSON.stringify({
+      hook_event_name: "PostToolUse",
+      tool_name: "Write",
+      tool_input: {
+        file_path: join(outside, "scratchpad", "verdicts-1.json"),
+        content: "{}",
+      },
+    }),
+    root,
+  );
+  assert.deepEqual(
+    readEvents(dir).filter((e) => e.kind === "file_change"),
+    [],
+  );
+});
+
+// The common case is target === root, so the run's own .trio/ has to be
+// excluded even though it sits squarely inside the target by pure prefix —
+// this is the exact shape of the real leak: scratchpad/response.json paths
+// under .trio/runs/<id>/ reaching a later pass's brief.
+test("a file_change under the run's own .trio directory never reaches the log, even when it is inside the target", () => {
+  const root = tmp();
+  const dir = activate(root, "r1", root);
+  main(
+    JSON.stringify({
+      hook_event_name: "PostToolUse",
+      tool_name: "Write",
+      tool_input: {
+        file_path: join(dir, "scratchpad", "claude-findings-2.json"),
+        content: "{}",
+      },
+    }),
+    root,
+  );
+  main(
+    JSON.stringify({
+      hook_event_name: "PostToolUse",
+      tool_name: "Write",
+      tool_input: {
+        file_path: join(dir, "pass-1", "response.json"),
+        content: "{}",
+      },
+    }),
+    root,
+  );
+  assert.deepEqual(
+    readEvents(dir).filter((e) => e.kind === "file_change"),
+    [],
+  );
+});
+
+// Windows drive letters are case-insensitive and paths mix separators — a
+// target reported one way and an edit path reported another must still
+// compare equal.
+test("a file_change matches its target across path case and separator differences", () => {
+  const root = tmp();
+  const target = tmp();
+  const dir = activate(root, "r1", target.toUpperCase());
+  main(
+    JSON.stringify({
+      hook_event_name: "PostToolUse",
+      tool_name: "Edit",
+      tool_input: {
+        file_path: join(target, "src", "a.js").replace(/\\/g, "/"),
+        old_string: "x",
+        new_string: "y",
+      },
+    }),
+    root,
+  );
+  const events = readEvents(dir).filter((e) => e.kind === "file_change");
+  if (process.platform === "win32") {
+    assert.equal(events.length, 1);
+  }
+});
+
+test("a file_change is dropped when the run's target cannot be determined", () => {
+  const root = tmp();
+  const dir = activate(root); // no run.json written — target unknown
+  main(
+    JSON.stringify({
+      hook_event_name: "PostToolUse",
+      tool_name: "Edit",
+      tool_input: {
+        file_path: join(root, "src", "a.js"),
+        old_string: "x",
+        new_string: "y",
+      },
+    }),
+    root,
+  );
+  assert.deepEqual(
+    readEvents(dir).filter((e) => e.kind === "file_change"),
+    [],
+  );
+});
+
+// --- duplicate recording: PreToolUse and PostToolUse both firing hook-emit.mjs
+// for the same tool call recorded every non-Edit/Write tool call twice.
+
+test("hooks.json no longer registers hook-emit.mjs on PreToolUse", () => {
+  const raw = readFileSync(
+    new URL("../hooks/hooks.json", import.meta.url),
+    "utf8",
+  );
+  const hooks = JSON.parse(raw);
+  const preToolCommands = (hooks.hooks.PreToolUse ?? []).flatMap((m) =>
+    (m.hooks ?? []).map((h) => h.command),
+  );
+  assert.ok(
+    !preToolCommands.some((c) => c.includes("hook-emit.mjs")),
+    "PreToolUse must not run hook-emit.mjs — PostToolUse already records the same call",
+  );
+});
+
+test("one Bash tool call yields one recorded event under the fixed hook registration", () => {
+  const root = tmp();
+  const dir = activate(root);
+  // hooks.json now fires hook-emit.mjs on PostToolUse only for a live tool
+  // call, so a single call is exactly one main() invocation.
+  main(
+    JSON.stringify({
+      hook_event_name: "PostToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "npm test" },
+    }),
+    root,
+  );
+  assert.equal(
+    readEvents(dir).filter((e) => e.kind === "command_execution").length,
+    1,
+  );
+});
+
+test("PostToolUseFailure is still recorded once the PreToolUse duplicate is gone", () => {
+  const root = tmp();
+  const dir = activate(root);
+  main(
+    JSON.stringify({
+      hook_event_name: "PostToolUseFailure",
+      tool_name: "Bash",
+      error: "exit 1",
+    }),
+    root,
+  );
+  assert.equal(readEvents(dir).filter((e) => e.kind === "error").length, 1);
+});
+
+test("an Edit diff inside the target is still recorded once the PreToolUse duplicate is gone", () => {
+  const root = tmp();
+  const dir = activate(root, "r1", root);
+  main(
+    JSON.stringify({
+      hook_event_name: "PostToolUse",
+      tool_name: "Edit",
+      tool_input: {
+        file_path: join(root, "src", "a.js"),
+        old_string: "let y = 2;",
+        new_string: "let y = 3;",
+      },
+    }),
+    root,
+  );
+  assert.equal(
+    readEvents(dir).filter((e) => e.kind === "file_change").length,
+    1,
+  );
 });

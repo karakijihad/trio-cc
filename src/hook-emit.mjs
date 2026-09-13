@@ -1,8 +1,9 @@
 import { readFileSync, statSync } from "node:fs";
+import { join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { makeEvent, appendEvent, eventsFile } from "./bus.mjs";
 import { unifiedDiff } from "./diff.mjs";
-import { activeMarker, runDir } from "./paths.mjs";
+import { activeMarker, runDir, trioDir } from "./paths.mjs";
 
 export function laneOf(p) {
   if (!p.agent_type) return "claude:main";
@@ -99,6 +100,61 @@ const tapIsFull = (dir) => {
   }
 };
 
+// Windows paths are case-insensitive and drive-lettered, and tool_input
+// arrives with whatever separators the tool used — resolve() folds `/` and
+// `\` into the platform separator, and lower-casing on win32 makes `C:\Foo`
+// and `c:\foo` compare equal.
+function canonical(p) {
+  const abs = resolve(String(p ?? ""));
+  return process.platform === "win32" ? abs.toLowerCase() : abs;
+}
+
+function isWithin(parentDir, candidatePath) {
+  if (!parentDir || !candidatePath) return false;
+  const parent = canonical(parentDir);
+  const child = canonical(candidatePath);
+  return child === parent || child.startsWith(parent + sep);
+}
+
+// run.json is the run's own record of what it was pointed at (D-scope) — read
+// fresh per hook fire rather than cached, since a tap is a short-lived process
+// with nothing to cache across. Absence or a malformed file reads as "unknown
+// target": readTarget returns null, and inScope below fails closed on that
+// rather than guessing.
+function readTarget(dir) {
+  try {
+    const run = JSON.parse(readFileSync(join(dir, "run.json"), "utf8"));
+    return typeof run.target === "string" ? run.target : null;
+  } catch {
+    return null;
+  }
+}
+
+// A file_change event reaches Codex's next-pass brief verbatim
+// (prompt.mjs renderChangesSection, "What Claude changed since"). This tap
+// fires on every Edit/Write with no regard for what got edited, and that
+// included Claude's own bookkeeping — a run's scratchpad files, its own
+// pass's response.json, .trio/runs/**/*.json — none of which the audited
+// project contains and none of which a lens should ever read. A real run
+// (.trio/runs/2026-09-13T14-28-20) had Codex's pass 2 reading Claude's own
+// pass-2 findings this way, which is exactly the lane-independence break the
+// separate Claude/Codex lanes exist to prevent.
+//
+// This filter runs here, at capture, rather than at render in prompt.mjs.
+// Render-time filtering would be the better shape — it would keep this raw
+// event log (which render-html.mjs's viewer reads in full) complete, and
+// narrow only what a lens's brief receives. But the run's target only reaches
+// prompt.mjs's claudeChanges()/buildLensPrompt() through driver.mjs's
+// briefFor closure, which is outside this change's file list; filtering
+// there would need driver.mjs threading `target` into calls it does not
+// currently pass it to. Filtering at capture needs no such change: this tap
+// already resolves the run directory to check the tap ceiling, and run.json
+// lives right there.
+function inScope(root, target, filePath) {
+  if (isWithin(trioDir(root), filePath)) return false;
+  return isWithin(target, filePath);
+}
+
 export function main(rawStdin, root) {
   let marker;
   try {
@@ -112,10 +168,17 @@ export function main(rawStdin, root) {
   // break a tool call.
   if (!marker.run || tapIsFull(runDir(root, marker.run))) return;
   try {
+    const dir = runDir(root, marker.run);
     const fields = normalize(JSON.parse(rawStdin));
     if (!fields) return;
+    if (
+      fields.kind === "file_change" &&
+      !inScope(root, readTarget(dir), fields.payload.file)
+    ) {
+      return;
+    }
     appendEvent(
-      runDir(root, marker.run),
+      dir,
       makeEvent({ run: marker.run, pass: marker.pass ?? 0, ...fields }),
     );
   } catch {

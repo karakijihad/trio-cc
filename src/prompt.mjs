@@ -42,15 +42,45 @@ function renderFindingsSection(findings, prevPass) {
   return `${header}\n\n${lines.join("\n")}`;
 }
 
+// Nothing capped how many changed files could be rendered into a single
+// pass's brief, so a wave of large edits between passes could inflate a
+// prompt without bound — MAX_DIFF_LINES (diff.mjs) only ever bounded one
+// file's diff, never the section listing all of them. Past the cap the
+// remaining files are still named, just not diffed: a lens told nothing
+// happened to a file it will re-read anyway is worse than one told a file
+// changed but its diff was cut for space.
+export const MAX_CHANGES_BYTES = 64 * 1024;
+
 function renderChangesSection(changes) {
   const header = "## What Claude changed since";
   if (!changes.length) {
     return `${header}\n\nNo file changes were recorded since your last pass.`;
   }
-  const blocks = changes.map(
-    (c) => `${c.file}\n\`\`\`diff\n${c.diff}\n\`\`\``,
+  const blocks = [];
+  let used = 0;
+  let cut = changes.length;
+  for (let i = 0; i < changes.length; i++) {
+    const block = `${changes[i].file}\n\`\`\`diff\n${changes[i].diff}\n\`\`\``;
+    const size = Buffer.byteLength(block, "utf8") + 2; // joining "\n\n"
+    // Always keep at least one block, even an oversized one — an empty
+    // section past the cap would say nothing changed, which is a worse
+    // record than one whole diff plus a names-only tail.
+    if (blocks.length > 0 && used + size > MAX_CHANGES_BYTES) {
+      cut = i;
+      break;
+    }
+    blocks.push(block);
+    used += size;
+  }
+  const omitted = changes.slice(cut);
+  const body = blocks.join("\n\n");
+  if (!omitted.length) return `${header}\n\n${body}`;
+  const names = omitted.map((c) => c.file).join("\n");
+  return (
+    `${header}\n\n${body}\n\n` +
+    `... ${omitted.length} more changed file(s) omitted past the ` +
+    `${MAX_CHANGES_BYTES}-byte cap:\n${names}`
   );
-  return `${header}\n\n${blocks.join("\n\n")}`;
 }
 
 function renderReplySection(response, findings) {
@@ -140,14 +170,7 @@ function renderScopeSection(scope) {
 // refutations and declines, not just the previous one's. It goes last before
 // the instructions, closest to the ask, because it is the section that has to
 // survive a lens rewording an old claim into a new title.
-export function buildLensPrompt({
-  brief,
-  lens: _lens,
-  pass,
-  prior,
-  scope,
-  settled,
-}) {
+export function buildLensPrompt({ brief, pass, prior, scope, settled }) {
   const scoped = scope ? `${brief}\n\n${renderScopeSection(scope)}` : brief;
   if (pass <= 1 || prior == null) return scoped;
 
