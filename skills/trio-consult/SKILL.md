@@ -33,7 +33,10 @@ the Codex catalogue — say so and offer `/trio:model consult`.
 Show both answers under `## Claude` and `## Codex`, then a short section naming
 where they disagree and which you find better supported — with your reasoning.
 
-If Codex failed to answer, say so. Do not present one opinion as two.
+If Codex failed to answer, say so, and say why: the result carries `error`, and
+`codexUnavailable` when the account is out of usage or its credentials were
+refused. Report that reason as given — never guess one — and do not retry a
+`codexUnavailable`. Do not present one opinion as two.
 
 Where you disagree, say plainly that one of you is wrong and which evidence
 would settle it. That gap is the most useful output of a consult.

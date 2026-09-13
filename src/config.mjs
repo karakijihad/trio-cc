@@ -40,8 +40,9 @@ export const DEFAULT_CONFIG = Object.freeze({
     // What `trio consult` runs on. A null field falls back to the first
     // enabled lens's, which is what consult always did — but borrowing meant a
     // consult could not run heavier than an audit, and turning `auditor` off
-    // silently changed the consult model.
-    consult: { model: null, effort: null },
+    // silently changed the consult model. Effort ships `high`: a consult is one
+    // question worth thinking about, where a lens is one of five in a wave.
+    consult: { model: null, effort: "high" },
   },
   // The Claude side. Aliases rather than model ids, so they survive a release.
   // agentModel: the model for trio-lens and trio-reconciler subagents; null

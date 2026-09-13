@@ -1017,6 +1017,31 @@ switch (cmd) {
       const check = validateLens(caps, consult);
       if (!check.ok) process.stderr.write(`⚠ consult: ${check.error}\n`);
     }
+    // The same ping a run makes. preflight cannot see a spent account, so
+    // without this a consult launched, read the repo for minutes, and came
+    // back `failed: true` with the reason sitting unread in its event log.
+    const probe = ping({ target: root });
+    if (probe.ok === false) {
+      out(
+        JSON.stringify(
+          {
+            answer: "",
+            failed: true,
+            error: probe.failure.message,
+            codexUnavailable: {
+              available: false,
+              kind: probe.failure.kind,
+              message: probe.failure.message,
+              fix: probe.failure.fix,
+            },
+          },
+          null,
+          2,
+        ),
+      );
+      process.exitCode = 1;
+      break;
+    }
 
     const runId = `consult-${newRunId()}`;
     mkdirSync(runDir(root, runId), { recursive: true });
@@ -1046,7 +1071,21 @@ switch (cmd) {
       process.exitCode = 1;
       break;
     }
-    out(JSON.stringify({ runId, answer: r.answer, failed: r.failed }, null, 2));
+    // A failed consult says why, and exits non-zero so a caller cannot read
+    // an empty answer as one.
+    const result = { runId, answer: r.answer, failed: r.failed };
+    if (r.failed) {
+      result.error = r.error ?? r.failure?.message;
+      if (r.failure?.offer)
+        result.codexUnavailable = {
+          available: false,
+          kind: r.failure.kind,
+          message: r.failure.message,
+          fix: r.failure.fix,
+        };
+      process.exitCode = 1;
+    }
+    out(JSON.stringify(result, null, 2));
     break;
   }
 

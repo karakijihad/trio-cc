@@ -479,9 +479,11 @@ test("consult: invokes Codex with its own model and effort", () => {
   const res = run(["consult", "is this sound?"]);
   assert.equal(res.status, 0, res.stderr);
   assert.doesNotMatch(res.stderr, /consult: /);
+  // the last exec is the consult; the one before it is the ping
   const exec = readFileSync(touched, "utf8")
     .split("\n")
-    .find((l) => l.startsWith("exec") && !l.includes("--help"));
+    .filter((l) => l.startsWith("exec") && !l.includes("--help"))
+    .at(-1);
   assert.match(exec, /--model fake-model/);
   assert.match(exec, /model_reasoning_effort=high/);
 });
@@ -521,6 +523,37 @@ test("lens consult validates, saves, and reports consult's own model", () => {
   assert.equal(bad.status, 2);
   assert.match(bad.stdout, /unknown model: not-in-catalogue/);
   assert.deepEqual(consultOf(), { model: "fake-model", effort: "high" });
+});
+
+test("consult: a spent account is refused by the ping, with the reason", () => {
+  const { root } = consultProject({ model: null, effort: null });
+  const touched = join(root, "spent.log");
+  const pathDir = mkdtempSync(join(tmpdir(), "trio-bin-"));
+  const home = mkdtempSync(join(tmpdir(), "trio-home-"));
+  installFakeCodex(pathDir);
+  fakeCodexHome(home);
+  const res = spawnSync("node", [CLI, "consult", "is this sound?"], {
+    env: fakeEnv({
+      pathDir,
+      codexHome: home,
+      project: root,
+      extra: {
+        FAKE_CODEX_STDERR: "You've hit your usage limit.",
+        FAKE_CODEX_TOUCH: touched,
+      },
+    }),
+    encoding: "utf8",
+  });
+  assert.equal(res.status, 1, res.stdout + res.stderr);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.failed, true);
+  assert.equal(out.codexUnavailable.kind, "usage");
+  assert.match(out.error, /no usage left/);
+  // one exec — the ping — and never the consult itself
+  const execs = readFileSync(touched, "utf8")
+    .split("\n")
+    .filter((l) => l.startsWith("exec") && !l.includes("--help"));
+  assert.equal(execs.length, 1);
 });
 
 test("consult: refuses a malformed config instead of crashing", () => {

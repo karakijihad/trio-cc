@@ -403,5 +403,5 @@ test("modelsReport tolerates null caps (probe never succeeded)", () => {
 
 test("modelsReport says what consult runs on", () => {
   const r = modelsReport(null, DEFAULT_CONFIG);
-  assert.deepEqual(r.consult, { model: null, effort: "medium" });
+  assert.deepEqual(r.consult, { model: null, effort: "high" });
 });

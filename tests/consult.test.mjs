@@ -118,3 +118,22 @@ test("askCodex reports a failure rather than throwing", async () => {
   assert.equal(r.answer, "");
   assert.equal(r.failed, true);
 });
+
+// The reason was in the log all along; a consult has to read it.
+test("askCodex says why Codex failed, from its error events", async () => {
+  const r = await askCodex({
+    question: "q",
+    target: "/repo",
+    model: "m",
+    effort: "high",
+    runDirPath: tmp(),
+    run: "c1",
+    spawnFn: fakeSpawn(
+      '{"type":"error","message":"You\'ve hit your usage limit. Try again at 9:28 PM."}\n',
+      1,
+    ),
+  });
+  assert.equal(r.failed, true);
+  assert.equal(r.failure.kind, "usage");
+  assert.match(r.error, /no usage left/);
+});

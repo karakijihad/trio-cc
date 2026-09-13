@@ -8,6 +8,7 @@ import {
   DEFAULT_TIMEOUT_MS,
 } from "./codex-lane.mjs";
 import { codexCommand } from "./paths.mjs";
+import { classifyFailure } from "./failure.mjs";
 
 const PREAMBLE =
   "Answer the question below on its own merits. Read whatever code you need; change nothing. Be concrete and say where you are uncertain.\n\n";
@@ -53,6 +54,18 @@ export async function askCodex({
 
   let threadId = null;
   const messages = [];
+
+  // As in runLens: the cause of a failure is in the error events or on
+  // stderr, never in the messages, and an unread stderr pipe can fill.
+  const DIAGNOSTIC_CAP = 16_384;
+  let diagnostics = "";
+  const note = (text) => {
+    if (diagnostics.length >= DIAGNOSTIC_CAP) return;
+    diagnostics += String(text ?? "").slice(0, DIAGNOSTIC_CAP - diagnostics.length);
+  };
+  proc.stderr?.on?.("data", (chunk) => note(`\n${chunk}`));
+  proc.stderr?.on?.("error", () => {});
+
   const rl = createInterface({ input: proc.stdout, crlfDelay: Infinity });
   rl.on("line", (line) => {
     if (!line.trim()) return;
@@ -66,6 +79,7 @@ export async function askCodex({
     const mapped = mapEvent(ev);
     if (!mapped) return;
     if (mapped.kind === "agent_message") messages.push(mapped.payload.text);
+    if (mapped.kind === "error") note(`\n${mapped.payload.error}`);
     appendEvent(
       runDirPath,
       makeEvent({
@@ -96,6 +110,17 @@ export async function askCodex({
       failed: true,
       error: `codex timed out after ${Math.round(timeoutMs / 60_000)}m and was stopped`,
     };
-  if (launchError || code !== 0) return { answer: "", threadId, failed: true };
+  if (launchError || code !== 0) {
+    const failure = classifyFailure(
+      `${launchError?.message ?? ""}\n${diagnostics}`,
+    );
+    return {
+      answer: "",
+      threadId,
+      failed: true,
+      error: `codex exited ${code}: ${failure.message}`,
+      failure,
+    };
+  }
   return { answer: messages.join("\n\n").trim(), threadId, failed: false };
 }

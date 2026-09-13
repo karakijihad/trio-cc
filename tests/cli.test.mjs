@@ -279,7 +279,7 @@ test("lens consult is addressable, but has no on/off", () => {
   const root = project();
   const q = trio(root, ["lens", "consult"]);
   assert.equal(q.status, 0);
-  assert.match(q.stdout, /^consult {2}codex default {2}medium/);
+  assert.match(q.stdout, /^consult {2}codex default {2}high/);
   for (const flip of ["on", "off"]) {
     const r = trio(root, ["lens", "consult", flip]);
     assert.equal(r.status, 2);

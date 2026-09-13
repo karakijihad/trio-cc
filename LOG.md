@@ -8,6 +8,7 @@ What went wrong, and what was done about it. One line each, newest first.
 
 - **Trio shipped a model slug that would expire.** All five lenses pinned `gpt-5.6-terra`, so every project that never edited its config would one day start every run on a model OpenAI had retired. Lenses now ship `model: null` (the Codex CLI decides); a slug someone pins and later loses is flagged at run start with an offer to re-pick.
 - **Consult ran on whichever lens happened to be first.** It borrowed the first enabled lens's model, so it could not run heavier than an audit, and switching `auditor` off silently changed it. `codex.consult` is its own setting now, with the old borrowing as the fallback.
+- **A consult on a spent account read the repo, then reported only `failed: true`, and exited 0.** The ping that guards a run never ran for a consult, and askCodex discarded the error event naming the usage limit. Consult now pings first, classifies a failure the way a lens does, returns the reason, and exits 1; its effort ships `high`.
 - **A solo audit could be reviewed by a weaker model than the one that wrote the code** — `trio-lens` and `trio-reconciler` hardcode Sonnet. `claude.agentModel` overrides both, and `claude.consultModel` picks the Claude half of a consult.
 
 ## 2026-08-18 — the last pass, and what happens when Codex is out

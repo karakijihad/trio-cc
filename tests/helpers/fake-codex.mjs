@@ -23,6 +23,13 @@ if (process.env.FAKE_CODEX_TOUCH) {
   );
 }
 
+// Simulates an account Codex refuses: every real exec fails with this text on
+// stderr, the way a spent quota or bad credentials arrive.
+if (process.env.FAKE_CODEX_STDERR && args[0] === "exec" && !args.includes("--help")) {
+  process.stderr.write(process.env.FAKE_CODEX_STDERR + "\\n");
+  process.exit(1);
+}
+
 if (args[0] === "--version") {
   process.stdout.write("codex-cli ${VERSION}\\n");
   process.exit(0);

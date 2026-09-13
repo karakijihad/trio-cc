@@ -163,7 +163,7 @@ test("setConfigValue does not mutate the input", () => {
 // never touched its config.
 test("lenses ship unpinned and the Claude side ships unset", () => {
   for (const l of DEFAULT_CONFIG.codex.lenses) assert.equal(l.model, null);
-  assert.deepEqual(DEFAULT_CONFIG.codex.consult, { model: null, effort: null });
+  assert.deepEqual(DEFAULT_CONFIG.codex.consult, { model: null, effort: "high" });
   assert.deepEqual(DEFAULT_CONFIG.claude, {
     agentModel: null,
     consultModel: null,

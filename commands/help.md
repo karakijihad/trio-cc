@@ -130,7 +130,7 @@ it thinks."
 | `codex.parallel`                | `5`                    | Lenses run at once. Wall-clock only, not cost. |
 | `codex.timeoutMinutes`          | `15`                   | How long one lens may run before it is stopped and marked degraded. |
 | `codex.lenses[]`                | 5 entries, all `on`    | `{name, model, effort, on}` per lens; `model` ships `null` (Codex CLI default). |
-| `codex.consult`                 | `{model: null, effort: null}` | What `trio consult` runs on; a null field borrows the first enabled lens's (the first lens's if all are off). |
+| `codex.consult`                 | `{model: null, effort: "high"}` | What `trio consult` runs on; a null field borrows the first enabled lens's (the first lens's if all are off). |
 | `claude.agentModel`             | `null`                 | `sonnet`/`opus`/`haiku`/`fable` for trio-lens and trio-reconciler subagents; null keeps Sonnet. |
 | `claude.consultModel`           | `null`                 | Alias the Claude half of a consult is answered on; null answers in session. |
 | `view.mode`                     | `window`               | `window` opens a browser · `pane` prints the viewer URL to open yourself · `off`. |
