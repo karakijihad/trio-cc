@@ -325,7 +325,6 @@ Every key in `.trio/config.json`, with its default:
 | `view.port`                     | `4319`                 | Local port the viewer binds.                                                                                                                                           |
 | `view.autoOpen`                 | `true`                 | Whether `window` mode opens the browser automatically.                                                                                                                 |
 | `converge.blockOn`              | `["critical","major"]` | Severities that must have zero open findings before a run can converge.                                                                                                |
-| `converge.requireNoNewFindings` | `true`                 | A brand-new finding blocks convergence only when it is still live after adjudication and at a `blockOn` severity. A new `info` or `minor` no longer keeps a run from ending `clean`. |
 | `artifacts.promoteTo`           | `Docs/Audit`           | Where finished audits are promoted on completion, if the directory exists.                                                                                             |
 | `artifacts.offerToCreate`       | `true`                 | Whether a finished run offers to create `artifacts.promoteTo` when it is missing. Declining the offer sets this false; nothing asks again.                             |
 

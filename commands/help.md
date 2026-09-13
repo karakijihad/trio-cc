@@ -36,7 +36,7 @@ name (`auditor`, `security`, `tester`, `simplifier`, `consistency`), the
 fallback (`solo`, `ping`, `codex_unavailable`), or a
 config key (`enabled`, `maxIterations`, `codex.parallel`, `artifacts.offerToCreate`,
 `codex.lenses`, `view.mode`, `view.port`, `view.autoOpen`,
-`converge.blockOn`, `converge.requireNoNewFindings`, `converge.offerExtension`,
+`converge.blockOn`, `converge.offerExtension`,
 `artifacts.promoteTo`). If the topic doesn't match anything below, say so and
 name the closest match.
 
@@ -66,7 +66,10 @@ name the closest match.
   overstated), `escalate` (worse than reported, or composes with another
   finding into one bigger defect), `duplicate` with `of: <id>` (the same
   defect another lens reported; it never blocks, and its lens is credited on
-  the survivor). Codex being confident is not evidence. Applying a verdict
+  the survivor). `downgrade` means the severity was overstated and nothing
+  else: a real finding outside the change under audit is `confirm` with
+  `outOfScope: true`, keeps its severity, does not block, and is reported
+  under "Outside this change". Codex being confident is not evidence. Applying a verdict
   twice, as extending a run does, changes nothing further: severity always
   shifts from what the lens reported. Its ruling is submitted through
   `trio verdicts <runId> <pass>`, which refuses the whole submission and
@@ -78,7 +81,10 @@ name the closest match.
   what the change broke.
 - **Convergence** — the loop stops clean when nothing live is at a
   `blockOn` severity (`critical`/`major` by default). A new `info` or `minor`
-  finding no longer holds a run open.
+  finding no longer holds a run open. An earlier refutation excuses only the
+  same finding (same id), never a new claim on the same line. Fixes applied
+  after the final pass are reported as `fixedUnverified` — not re-audited, so
+  they still count until a pass checks them.
 - **Verdict** — how a run ended: `clean` (converged), `ceiling_reached` (hit
   the pass limit with findings open — never reported as success), `failed`
   (something broke), `cancelled` (`/trio:cancel`). A crashed or unparseable
@@ -142,7 +148,6 @@ it thinks," and `trio-solo` when Codex cannot be reached.
 | `view.port`                     | `4319`                 | Viewer's local port.                           |
 | `view.autoOpen`                 | `true`                 | Auto-open the browser in `window` mode.        |
 | `converge.blockOn`              | `["critical","major"]` | Severities that must be all-clear to converge. |
-| `converge.requireNoNewFindings` | `true`                 | A new finding blocks only when live and at a `blockOn` severity. |
 | `converge.offerExtension`       | `true`                 | Offer one more pass when a run stops at the ceiling with blocking findings open. |
 | `artifacts.offerToCreate`       | `true`                 | Offer to create the promote directory once.    |
 | `artifacts.promoteTo`           | `Docs/Audit`           | Where finished audits are promoted.            |
