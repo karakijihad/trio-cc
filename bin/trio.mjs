@@ -82,6 +82,21 @@ const run = (bin, args) => {
 };
 const out = (s) => process.stdout.write(s.endsWith("\n") ? s : s + "\n");
 
+// The one "can Codex be used right now" check, shared by run and consult.
+// preflight sees installed and logged in; only a real call sees a spent quota.
+// Returns the codexUnavailable block when Codex refused for a reason that will
+// not clear, and null otherwise — anything the ping cannot read proceeds.
+const unavailable = (failure) => ({
+  available: false,
+  kind: failure.kind,
+  message: failure.message,
+  fix: failure.fix,
+});
+const codexRefusal = (target) => {
+  const probe = ping({ target });
+  return probe.ok === false ? unavailable(probe.failure) : null;
+};
+
 const gatherState = ({ force = false } = {}) => {
   const config = loadConfig(root);
   const { caps, pre, cached, probedAt } = probeState({ root, run, force });
@@ -802,19 +817,14 @@ switch (cmd) {
     // proceeds — the lens wave is the authority, and a probe that could veto
     // every audit in a project on evidence it did not understand would be a
     // worse failure than the one it prevents.
-    const probe = ping({ target });
-    if (probe.ok === false) {
+    const refused = codexRefusal(target);
+    if (refused) {
       out(
         JSON.stringify(
           {
             status: "refused",
             reason: "codex_unavailable",
-            codexUnavailable: {
-              available: false,
-              kind: probe.failure.kind,
-              message: probe.failure.message,
-              fix: probe.failure.fix,
-            },
+            codexUnavailable: refused,
           },
           null,
           2,
@@ -1017,23 +1027,17 @@ switch (cmd) {
       const check = validateLens(caps, consult);
       if (!check.ok) process.stderr.write(`⚠ consult: ${check.error}\n`);
     }
-    // The same ping a run makes. preflight cannot see a spent account, so
-    // without this a consult launched, read the repo for minutes, and came
-    // back `failed: true` with the reason sitting unread in its event log.
-    const probe = ping({ target: root });
-    if (probe.ok === false) {
+    // Without this a consult on a spent account launched, read the repo for
+    // minutes, and came back `failed: true` with the reason unread in its log.
+    const refused = codexRefusal(root);
+    if (refused) {
       out(
         JSON.stringify(
           {
             answer: "",
             failed: true,
-            error: probe.failure.message,
-            codexUnavailable: {
-              available: false,
-              kind: probe.failure.kind,
-              message: probe.failure.message,
-              fix: probe.failure.fix,
-            },
+            error: refused.message,
+            codexUnavailable: refused,
           },
           null,
           2,
@@ -1076,13 +1080,7 @@ switch (cmd) {
     const result = { runId, answer: r.answer, failed: r.failed };
     if (r.failed) {
       result.error = r.error ?? r.failure?.message;
-      if (r.failure?.offer)
-        result.codexUnavailable = {
-          available: false,
-          kind: r.failure.kind,
-          message: r.failure.message,
-          fix: r.failure.fix,
-        };
+      if (r.failure?.offer) result.codexUnavailable = unavailable(r.failure);
       process.exitCode = 1;
     }
     out(JSON.stringify(result, null, 2));
