@@ -328,7 +328,7 @@ Every key in `.trio/config.json`, with its default:
 | `view.port`                     | `4319`                 | Local port the viewer binds.                                                                                                                                           |
 | `view.autoOpen`                 | `true`                 | Whether `window` mode opens the browser automatically.                                                                                                                 |
 | `converge.blockOn`              | `["critical","major"]` | Severities that must have zero open findings before a run can converge.                                                                                                |
-| `artifacts.promoteTo`           | `Docs/Audit`           | Where finished audits are promoted on completion, if the directory exists.                                                                                             |
+| `artifacts.promoteTo`           | `Docs/Audit`           | Where finished audits are promoted on completion, if the directory exists. Must be a relative path inside the project, on one line, without backticks — it is joined onto the project root and named in every lens brief, so anything else is refused. |
 | `artifacts.offerToCreate`       | `true`                 | Whether a finished run offers to create `artifacts.promoteTo` when it is missing. Declining the offer sets this false; nothing asks again.                             |
 
 Config lives at `.trio/config.json` in the project root — change it with

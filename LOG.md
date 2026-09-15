@@ -4,6 +4,15 @@ What went wrong, and what was done about it. One line each, newest first.
 
 ---
 
+## 2026-09-15 — auditing the release that fixed the review
+
+- **The viewer's own resume fix could skip events.** One SSE `id` per flushed batch meant a client that dropped after the first event already held the batch's end, and reconnected past events it never received. Each event carries its own byte offset now; the test that shipped green seeded a single event, which cannot tell the two apart.
+- **The 64 KB changes cap wasn't one.** It always kept the first diff whole, and diff.mjs bounds line count, not line length; the omitted-names tail and a long file name were unbounded too.
+- **`artifacts.promoteTo` went into every lens brief verbatim and onto the filesystem unchecked.** A repository-writable config could smuggle instructions into Codex's prompt or point promotion outside the project. Only a single-line relative path inside the project is accepted.
+- **The capture scope check compared lexical paths**, so a symlink inside the target pointing into `.trio/` counted as inside the target. Real paths now.
+- **A hand-written `duplicate` verdict with no real survivor hid its finding.** `trio verdicts` refused it, but a verdicts.json nobody validated was applied as written. It is ignored now and the finding stays unreviewed.
+- **The atomic verdict write needed hard links**, which FAT/exFAT and some network folders lack; it falls back to an exclusive create.
+
 ## 2026-09-13 — what an independent review of Trio found
 
 - **A new claim on a line an earlier finding was refuted at stopped blocking, unreviewed.** A settled refutation was matched by id or location, so it excused a different defect that happened to sit on the same line. Only the same finding (same id) is excused now.

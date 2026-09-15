@@ -150,4 +150,4 @@ it thinks," and `trio-solo` when Codex cannot be reached.
 | `converge.blockOn`              | `["critical","major"]` | Severities that must be all-clear to converge. |
 | `converge.offerExtension`       | `true`                 | Offer one more pass when a run stops at the ceiling with blocking findings open. |
 | `artifacts.offerToCreate`       | `true`                 | Offer to create the promote directory once.    |
-| `artifacts.promoteTo`           | `Docs/Audit`           | Where finished audits are promoted.            |
+| `artifacts.promoteTo`           | `Docs/Audit`           | Where finished audits are promoted. A relative path inside the project; anything else is refused. |
