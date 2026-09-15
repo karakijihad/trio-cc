@@ -73,7 +73,11 @@ function renderChangesSection(changes) {
       const head = Buffer.from(changes[i].diff, "utf8")
         .subarray(0, room)
         .toString("utf8");
-      const name = String(changes[i].file).slice(0, 512);
+      // Cut by bytes, within the 256 reserved above: 512 characters of a
+      // non-ASCII path is up to ~1.5 KB, past what the reserve covers.
+      const name = Buffer.from(String(changes[i].file), "utf8")
+        .subarray(0, 160)
+        .toString("utf8");
       block = `${name}\n\`\`\`diff\n${head}\n... diff truncated at the ${MAX_CHANGES_BYTES}-byte cap\n\`\`\``;
       size = Buffer.byteLength(block, "utf8") + 2;
     }
