@@ -262,7 +262,15 @@ export function promoteRun({ root, config, runId, create = false }) {
   const passes = collectPasses(root, runId);
   if (!passes.length) return { ok: false, error: `run ${runId} has no passes` };
 
-  const promoted = promote({ root, config, runId, passes, verdict });
+  // promote() re-checks the codex/claude leaf directories and throws when one
+  // is a link outside the project; the pre-check above only sees the base.
+  // A refusal is an answer, not a crash — same as finalize treats it.
+  let promoted;
+  try {
+    promoted = promote({ root, config, runId, passes, verdict });
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
   return promoted
     ? { ok: true, created: !target.exists, promoted }
     : { ok: false, error: "promotion produced nothing" };
@@ -490,6 +498,7 @@ function finalize({ root, runId, config, verdict, fixedUnverified = null }) {
     );
 
     let promoted = null;
+    let promoteError = null;
     try {
       if (audited)
         promoted = promote({
@@ -501,6 +510,7 @@ function finalize({ root, runId, config, verdict, fixedUnverified = null }) {
           fixedUnverified,
         });
     } catch (err) {
+      promoteError = err.message;
       appendEvent(
         runDir(root, runId),
         makeEvent({
@@ -536,7 +546,18 @@ function finalize({ root, runId, config, verdict, fixedUnverified = null }) {
       ...(promoted
         ? {}
         : {
-            promotion: audited
+            // A promotion that threw was refused — most often a path resolving
+            // outside the project — and offering to create the directory for
+            // it would ask the operator for an action that cannot succeed.
+            promotion: promoteError
+              ? {
+                  skipped: true,
+                  refused: true,
+                  path: config.artifacts.promoteTo,
+                  error: promoteError,
+                  offer: false,
+                }
+              : audited
               ? {
                   skipped: true,
                   path: config.artifacts.promoteTo,

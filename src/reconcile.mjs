@@ -282,7 +282,11 @@ export function applyVerdicts(findings, verdicts, { onInvalid } = {}) {
   for (const v of verdicts ?? []) {
     const verdict = canonicalVerdict(v?.verdict);
     if (!verdict) {
-      rejected.push({ id: v?.id ?? null, verdict: v?.verdict ?? null });
+      rejected.push({
+        id: v?.id ?? null,
+        verdict: v?.verdict ?? null,
+        reason: "unrecognised verdict",
+      });
       continue;
     }
     byId.set(v.id, { ...v, verdict });
@@ -307,7 +311,11 @@ export function applyVerdicts(findings, verdicts, { onInvalid } = {}) {
       duplicateIds.has(of)
     ) {
       byId.delete(id);
-      rejected.push({ id, verdict: "duplicate" });
+      rejected.push({
+        id,
+        verdict: "duplicate",
+        reason: `"of" must name another, non-duplicate finding in this pass`,
+      });
     }
   }
   if (rejected.length) onInvalid?.(rejected);

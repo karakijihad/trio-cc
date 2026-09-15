@@ -338,6 +338,9 @@ test("artifacts.promoteTo is refused when it could carry prompt instructions", (
     "Docs/../../outside",
     "/etc/trio",
     "C:\\Users\\someone",
+    // a leading backslash is not absolute to POSIX isAbsolute, and the two
+    // copies of this rule once disagreed about it
+    "\\evil",
   ]) {
     const errs = configErrors({
       ...DEFAULT_CONFIG,

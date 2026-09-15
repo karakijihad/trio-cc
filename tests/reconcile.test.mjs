@@ -25,6 +25,8 @@ test("applyVerdicts ignores a duplicate without a valid survivor", () => {
     });
     assert.equal(out[0].verdict, "unreviewed", JSON.stringify(bad));
     assert.equal(rejected.length, 1, JSON.stringify(bad));
+    // The reason travels with the rejection, so the event can say what to fix.
+    assert.match(rejected[0].reason, /"of"/, JSON.stringify(bad));
   }
   const chained = applyVerdicts(findings, [
     { id: "a", verdict: "duplicate", of: "b" },
@@ -234,8 +236,8 @@ test("every rejected verdict is reported, not just the first", () => {
     { onInvalid: (r) => seen.push(...r) },
   );
   assert.deepEqual(seen, [
-    { id: "a1", verdict: "maybe" },
-    { id: "a3", verdict: "OUT_OF_SCOPE" },
+    { id: "a1", verdict: "maybe", reason: "unrecognised verdict" },
+    { id: "a3", verdict: "OUT_OF_SCOPE", reason: "unrecognised verdict" },
   ]);
 });
 

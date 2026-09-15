@@ -5,10 +5,10 @@ import {
   existsSync,
   realpathSync,
 } from "node:fs";
-import { join, dirname, isAbsolute, sep } from "node:path";
+import { join, dirname, sep } from "node:path";
 import { renderDisagreementTable } from "./reconcile.mjs";
 import { isLive } from "./findings.mjs";
-import { isSingleLinePath } from "./config.mjs";
+import { isRelativeInsidePath } from "./config.mjs";
 
 const SEV_ORDER = ["critical", "major", "minor", "info"];
 const dateOf = (now) => now.toISOString().slice(0, 10);
@@ -294,12 +294,7 @@ export function promoteTarget(root, config) {
 // the nearest existing ancestor, so a symlink or junction anywhere along the
 // way cannot carry the write outside.
 export function promotionDir(root, rel) {
-  if (
-    !isSingleLinePath(rel) ||
-    isAbsolute(rel) ||
-    /^[a-zA-Z]:/.test(rel) ||
-    rel.split(/[\\/]/).includes("..")
-  )
+  if (!isRelativeInsidePath(rel))
     return {
       error: `artifacts.promoteTo must be a relative path inside the project, got: ${JSON.stringify(rel)}`,
     };

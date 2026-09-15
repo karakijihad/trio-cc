@@ -280,6 +280,12 @@ When `promotion.offer` is true, report the verdict first, then ask once with
 When `promotion.offer` is false the operator has already declined. Say
 nothing about it — one line noting the raw run path is enough.
 
+When `promotion.refused` is true, nothing was offered and nothing should be:
+promotion was refused, and `promotion.error` says why — most often
+`artifacts.promoteTo` resolves outside the project, directly or through a
+link. Report the error as given and do not offer `--create`; creating a
+directory cannot fix a path Trio refuses to write to.
+
 Both sides are promoted: `codex/YYYY-MM-DD/audit-N.md` is Codex's findings as
 reported, and `claude/YYYY-MM-DD/audit-N.md` is your adjudication — the
 verdict per finding, the disagreement table, and what stayed open.

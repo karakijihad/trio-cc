@@ -825,6 +825,50 @@ test("run: promotes both audits when the promote directory exists", () => {
   assert.match(readFileSync(r.promoted.codexPath, "utf8"), /## Findings/);
 });
 
+// A lexically valid promoteTo can still lead outside through a directory
+// link; the lexical CLI tests never reach promoteRun or promote() for that.
+// Junctions need no admin on Windows; the test skips where the OS refuses.
+const linkOutside = async (t, linkPath) => {
+  const { symlinkSync } = await import("node:fs");
+  const outside = mkdtempSync(join(tmpdir(), "trio-outside-"));
+  try {
+    symlinkSync(outside, linkPath, "junction");
+  } catch (err) {
+    t.skip(`cannot create a directory link here: ${err.code}`);
+    return null;
+  }
+  return outside;
+};
+
+test("promote refuses, without crashing, a promotion directory that links outside", async (t) => {
+  const { root, cli } = project({ findings: FINDING });
+  const r = settle(cli, JSON.parse(cli(["run", "--lenses", "auditor", "--max", "1"]).stdout));
+  mkdirSync(join(root, "Docs", "Audit"), { recursive: true });
+  const outside = await linkOutside(t, join(root, "Docs", "Audit", "codex"));
+  if (!outside) return;
+
+  const p = cli(["promote", r.runId]);
+  assert.equal(p.status, 1, p.stdout + p.stderr);
+  assert.match(p.stdout, /outside the project/);
+  assert.doesNotMatch(p.stderr, /\n\s+at /, "a refusal must not be a stack trace");
+  assert.deepEqual(readdirSync(outside), []);
+});
+
+test("run: a promotion refused for containment is reported as refused, with no offer", async (t) => {
+  const { root, cli } = project({ findings: FINDING });
+  mkdirSync(join(root, "Docs"), { recursive: true });
+  const outside = await linkOutside(t, join(root, "Docs", "Audit"));
+  if (!outside) return;
+
+  const r = settle(cli, JSON.parse(cli(["run", "--lenses", "auditor", "--max", "1"]).stdout));
+  assert.equal(r.status, "finished");
+  assert.equal(r.promoted, null);
+  assert.equal(r.promotion.refused, true);
+  assert.equal(r.promotion.offer, false);
+  assert.match(r.promotion.error, /outside the project/);
+  assert.deepEqual(readdirSync(outside), []);
+});
+
 // Hitting the ceiling with blockers open is two situations wearing one word:
 // still converging, or thrashing. The counts are what tell them apart, so
 // they travel with the offer.

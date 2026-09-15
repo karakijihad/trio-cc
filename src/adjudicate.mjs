@@ -83,7 +83,10 @@ export function applyAdjudication({ root, config, runId, pass, record }) {
   if (rejected.length) {
     const total = parsed.verdicts.length;
     const named = rejected
-      .map((r) => `${r.id ?? "(no id)"}=${r.verdict ?? "(none)"}`)
+      .map(
+        (r) =>
+          `${r.id ?? "(no id)"}=${r.verdict ?? "(none)"}${r.reason ? ` (${r.reason})` : ""}`,
+      )
       .join(", ");
     appendEvent(
       runDir(root, runId),

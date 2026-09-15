@@ -122,6 +122,18 @@ export function isSingleLinePath(s) {
   return true;
 }
 
+// The one lexical rule for a promotion path: single-line, not absolute (no
+// leading slash or backslash, no drive prefix, on every OS), no `..` segment.
+// configErrors and promote.mjs's promotionDir both call this, so the two can
+// never disagree about the same value; promotionDir adds the real-path check.
+export function isRelativeInsidePath(s) {
+  return (
+    isSingleLinePath(s) &&
+    !/^([a-zA-Z]:|[\\/])/.test(s) &&
+    !s.split(/[\\/]/).includes("..")
+  );
+}
+
 // A config.json edited by hand bypasses setConfigValue entirely, and its
 // values reach real command lines — view.port is interpolated into the URL
 // handed to the OS browser launcher. Every caller that acts on config checks
@@ -190,10 +202,7 @@ export function configErrors(cfg) {
     );
   // Promotion joins it onto the project root and writes there, so a
   // repository-writable config must not be able to point it outside.
-  else if (
-    /^([a-zA-Z]:|[\\/])/.test(promoteTo) ||
-    promoteTo.split(/[\\/]/).includes("..")
-  )
+  else if (!isRelativeInsidePath(promoteTo))
     errors.push(
       `artifacts.promoteTo must be a relative path inside the project, got: ${JSON.stringify(promoteTo)}`,
     );

@@ -106,11 +106,12 @@ test("one event names every rejected verdict and how many survived", () => {
   assert.equal(errs.length, 1);
   assert.equal(errs[0].payload.applied, 1);
   assert.deepEqual(errs[0].payload.rejected, [
-    { id: "a1", verdict: "OUT_OF_SCOPE" },
-    { id: "a3", verdict: "maybe" },
+    { id: "a1", verdict: "OUT_OF_SCOPE", reason: "unrecognised verdict" },
+    { id: "a3", verdict: "maybe", reason: "unrecognised verdict" },
   ]);
   assert.match(errs[0].payload.error, /rejected 2 of 3/);
-  assert.match(errs[0].payload.error, /a1=OUT_OF_SCOPE/);
+  // Each entry says why it was rejected, not only which verdict it carried.
+  assert.match(errs[0].payload.error, /a1=OUT_OF_SCOPE \(unrecognised verdict\)/);
   assert.match(errs[0].payload.error, /a3=maybe/);
   assert.match(errs[0].payload.error, /stay unreviewed/);
 });
