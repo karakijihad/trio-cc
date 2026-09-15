@@ -14,6 +14,9 @@ What went wrong, and what was done about it. One line each, newest first.
 - **The atomic verdict write needed hard links**, which FAT/exFAT and some network folders lack; it falls back to an exclusive create.
 - **Promotion could still leave the project** — through a directory link inside it, or from a run's stored `run.json`, which finalize reads without ever passing through config validation. One containment check now sits inside promotion itself, on real paths, so every caller gets it.
 - **The "single line" check let U+2028 and friends through**, and its regex had been written into the source as raw control characters by an escape that decoded on the way in. It is a code-point check now, with nothing raw in the file.
+- **The containment fix could crash `trio promote`.** The new leaf check inside promotion threw for a linked `codex/` or `claude/` directory, and the command had no catch, so a correct refusal arrived as a stack trace. It refuses with a message now. Found by a solo audit — Claude lenses, no Codex.
+- **A refused promotion was reported as a missing directory**, which invited `--create` for a path that could never be written. It is reported as refused, with the reason and no offer.
+- **The promotion-path rule existed twice, and the copies disagreed** about a leading backslash on POSIX. One predicate now serves both.
 
 ## 2026-09-13 — what an independent review of Trio found
 
