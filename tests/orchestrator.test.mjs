@@ -357,6 +357,37 @@ test("runPass alone executes one pass", async () => {
   assert.equal(lensJson.lens, "auditor");
 });
 
+// FAT/exFAT and some network folders have no hard links; linkSync fails with
+// something other than EEXIST, and the verdict must still be written once.
+test("finalizeRun writes the verdict where hard links are unsupported", () => {
+  const root = mkdtempSync(join(tmpdir(), "trio-nolink-"));
+  const noLinks = () => {
+    const err = new Error("operation not supported");
+    err.code = "ENOTSUP";
+    throw err;
+  };
+  const first = finalizeRun({
+    root,
+    runId: "r1",
+    verdict: "clean",
+    passCount: 2,
+    link: noLinks,
+  });
+  assert.equal(first.verdict, "clean");
+  const stored = JSON.parse(
+    readFileSync(join(runDir(root, "r1"), "verdict.json"), "utf8"),
+  );
+  assert.equal(stored.verdict, "clean");
+  const second = finalizeRun({
+    root,
+    runId: "r1",
+    verdict: "failed",
+    passCount: 2,
+    link: noLinks,
+  });
+  assert.equal(second.verdict, "clean", "first verdict must still win");
+});
+
 test("finalizeRun writes verdict.json and emits run_finished", () => {
   const root = tmp();
   const result = finalizeRun({

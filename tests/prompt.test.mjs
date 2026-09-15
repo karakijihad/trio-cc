@@ -36,6 +36,13 @@ test("an oversized first diff is cut to the changes cap", () => {
   assert.ok(Buffer.byteLength(brief) < MAX_CHANGES_BYTES + 16_384);
 });
 
+test("an oversized first block with a huge file name still fits the cap", () => {
+  const brief = pass2([
+    { file: "n".repeat(200_000), diff: "+" + "x".repeat(200_000) },
+  ]);
+  assert.ok(Buffer.byteLength(brief) < MAX_CHANGES_BYTES + 16_384);
+});
+
 test("the omitted-files list is bounded too", () => {
   const changes = [
     { file: "big.js", diff: "+" + "y".repeat(MAX_CHANGES_BYTES) },

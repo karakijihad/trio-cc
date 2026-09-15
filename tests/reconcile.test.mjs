@@ -6,6 +6,37 @@ import {
   VERDICTS,
 } from "../src/reconcile.mjs";
 
+// A hand-written verdicts.json never passes through `trio verdicts`, and a
+// duplicate makes its finding stop counting — so one with no real survivor
+// must leave the finding unreviewed, not hide it.
+test("applyVerdicts ignores a duplicate without a valid survivor", () => {
+  const findings = [
+    { id: "a", severity: "major", lens: "auditor" },
+    { id: "b", severity: "major", lens: "tester" },
+  ];
+  for (const bad of [
+    { id: "a", verdict: "duplicate" },
+    { id: "a", verdict: "duplicate", of: "a" },
+    { id: "a", verdict: "duplicate", of: "nope" },
+  ]) {
+    const rejected = [];
+    const out = applyVerdicts(findings, [bad], {
+      onInvalid: (r) => rejected.push(...r),
+    });
+    assert.equal(out[0].verdict, "unreviewed", JSON.stringify(bad));
+    assert.equal(rejected.length, 1, JSON.stringify(bad));
+  }
+  const chained = applyVerdicts(findings, [
+    { id: "a", verdict: "duplicate", of: "b" },
+    { id: "b", verdict: "duplicate", of: "a" },
+  ]);
+  assert.ok(chained.every((f) => f.verdict === "unreviewed"));
+  const valid = applyVerdicts(findings, [
+    { id: "a", verdict: "duplicate", of: "b", basis: "same defect" },
+  ]);
+  assert.equal(valid[0].verdict, "duplicate");
+});
+
 const f = (id, over = {}) => ({
   id,
   severity: "major",
@@ -354,13 +385,16 @@ test("folding a duplicate's lens twice does not repeat it", () => {
   assert.equal(twice.find((x) => x.id === "a1").lens, "auditor, tester");
 });
 
-test("a duplicate naming an unknown survivor still applies without crashing", () => {
+// It used to apply, which let a verdicts.json nobody validated hide a live
+// finding behind a survivor that does not exist. It is ignored now, without
+// crashing, and the finding stays unreviewed.
+test("a duplicate naming an unknown survivor is ignored without crashing", () => {
   const out = applyVerdicts(
     [f("a1")],
     [{ id: "a1", verdict: "duplicate", of: "zzzz", basis: "same as zzzz" }],
   );
-  assert.equal(out[0].verdict, "duplicate");
-  assert.equal(out[0].of, "zzzz");
+  assert.equal(out[0].verdict, "unreviewed");
+  assert.equal(out[0].of, undefined);
 });
 
 // `outOfScope` says a confirmed/escalated finding is real, at the severity

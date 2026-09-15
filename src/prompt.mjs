@@ -73,7 +73,8 @@ function renderChangesSection(changes) {
       const head = Buffer.from(changes[i].diff, "utf8")
         .subarray(0, room)
         .toString("utf8");
-      block = `${changes[i].file}\n\`\`\`diff\n${head}\n... diff truncated at the ${MAX_CHANGES_BYTES}-byte cap\n\`\`\``;
+      const name = String(changes[i].file).slice(0, 512);
+      block = `${name}\n\`\`\`diff\n${head}\n... diff truncated at the ${MAX_CHANGES_BYTES}-byte cap\n\`\`\``;
       size = Buffer.byteLength(block, "utf8") + 2;
     }
     if (blocks.length > 0 && used + size > MAX_CHANGES_BYTES) {

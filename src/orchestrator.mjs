@@ -217,7 +217,8 @@ function readVerdict(dir) {
 // already complete — `linkSync` either succeeds for exactly one writer or
 // fails with `EEXIST` for every other one, and whichever it is, an existing
 // destination is always readable.
-export function finalizeRun({ root, runId, verdict, passCount }) {
+// `link` is injectable so the no-hard-links fallback below can be tested.
+export function finalizeRun({ root, runId, verdict, passCount, link = linkSync }) {
   const dir = runDir(root, runId);
   mkdirSync(dir, { recursive: true });
   const path = join(dir, "verdict.json");
@@ -229,7 +230,7 @@ export function finalizeRun({ root, runId, verdict, passCount }) {
 
   writeFileSync(tmp, JSON.stringify(payload, null, 2) + "\n");
   try {
-    linkSync(tmp, path);
+    link(tmp, path);
   } catch (err) {
     if (err.code === "EEXIST")
       return readVerdict(dir) ?? { verdict: "unknown", passes: passCount, runId };

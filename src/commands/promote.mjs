@@ -1,4 +1,4 @@
-import { loadConfig } from "../config.mjs";
+import { loadConfig, configErrors } from "../config.mjs";
 import { promoteRun } from "../driver.mjs";
 import { isRunId } from "../paths.mjs";
 
@@ -7,6 +7,14 @@ import { isRunId } from "../paths.mjs";
 // refuses rather than creating directories in someone's project.
 export default function promoteCommand({ root, rest, out, activeRun, latestFinishedRun }) {
   const config = loadConfig(root);
+  // Promotion writes under artifacts.promoteTo, so an invalid config —
+  // including a path pointing outside the project — is refused first.
+  const bad = configErrors(config);
+  if (bad.length) {
+    out(`Refusing to promote — .trio/config.json is invalid:\n  ${bad.join("\n  ")}`);
+    process.exitCode = 2;
+    return;
+  }
   const runId =
     rest.find((a) => !a.startsWith("--")) ??
     activeRun() ??

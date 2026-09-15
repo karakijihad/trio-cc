@@ -287,6 +287,29 @@ export function applyVerdicts(findings, verdicts, { onInvalid } = {}) {
     }
     byId.set(v.id, { ...v, verdict });
   }
+  // A duplicate stops a finding counting as live, so it is only honoured when
+  // it names a survivor that exists in this pass and is not itself a
+  // duplicate. `trio verdicts` already refuses the rest; this is the read
+  // side, for a verdicts.json nobody validated.
+  const findingIds = new Set(findings.map((f) => f.id));
+  // Judged against the verdicts as submitted, not as this loop removes them:
+  // otherwise the second of two duplicates naming each other would survive.
+  const duplicateIds = new Set(
+    [...byId].filter(([, v]) => v.verdict === "duplicate").map(([id]) => id),
+  );
+  for (const [id, v] of byId) {
+    if (v.verdict !== "duplicate") continue;
+    const of = typeof v.of === "string" ? v.of.trim() : "";
+    if (
+      !of ||
+      of === id ||
+      !findingIds.has(of) ||
+      duplicateIds.has(of)
+    ) {
+      byId.delete(id);
+      rejected.push({ id, verdict: "duplicate" });
+    }
+  }
   if (rejected.length) onInvalid?.(rejected);
 
   const updated = findings.map((f) => {
