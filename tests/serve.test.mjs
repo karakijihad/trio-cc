@@ -292,3 +292,54 @@ test("/events honours Last-Event-ID on reconnect and does not replay the backlog
   );
   assert.ok(seen2.includes("reasoning"), "reconnect missed the new event");
 });
+
+// One id for a whole flushed batch made every event in it resume from the
+// batch's end, so a client that dropped after the first event of a backlog
+// reconnected past the second without ever seeing it.
+// A real timeout: on the broken code the second read never resolves, and a
+// Date.now() check between reads cannot interrupt a read that is pending.
+test("/events resumes after the last event the client actually received", { timeout: 15_000 }, async () => {
+  const dir = tmp();
+  seed(dir, "agent_message");
+  seed(dir, "reasoning");
+  const { server, url } = await start({ runDirPath: dir, port: 0 });
+
+  const decoder = new TextDecoder();
+  const first = await fetch(`${url}/events`);
+  const reader1 = first.body.getReader();
+  let seen1 = "";
+  const deadline = Date.now() + 5000;
+  while (!seen1.includes("reasoning") && Date.now() < deadline) {
+    const { value, done } = await reader1.read();
+    if (done) break;
+    seen1 += decoder.decode(value, { stream: true });
+  }
+  await reader1.cancel();
+
+  // The id a client holds after dispatching only the first event.
+  const blocks = seen1.split("\n\n").filter((b) => b.includes("data:"));
+  assert.equal(blocks.length, 2, "backlog should arrive as two events");
+  const firstId = blocks[0].match(/^id: (\S+)$/m)?.[1];
+  assert.ok(firstId, "the first event carried no id");
+
+  const second = await fetch(`${url}/events`, {
+    headers: { "Last-Event-ID": firstId },
+  });
+  const reader2 = second.body.getReader();
+  let seen2 = "";
+  const deadline2 = Date.now() + 5000;
+  while (!seen2.includes("reasoning") && Date.now() < deadline2) {
+    const { value, done } = await reader2.read();
+    if (done) break;
+    seen2 += decoder.decode(value, { stream: true });
+  }
+  await reader2.cancel();
+  server.close();
+
+  assert.ok(!seen2.includes("agent_message"), "reconnect replayed the first event");
+  assert.equal(
+    seen2.split("reasoning").length - 1,
+    1,
+    "the unseen second event must arrive exactly once",
+  );
+});

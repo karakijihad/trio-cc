@@ -306,7 +306,7 @@ test("a file_change under the run's own .trio directory never reaches the log, e
 // Windows drive letters are case-insensitive and paths mix separators — a
 // target reported one way and an edit path reported another must still
 // compare equal.
-test("a file_change matches its target across path case and separator differences", () => {
+test("a file_change matches its target across path case and separator differences", { skip: process.platform !== "win32" && "paths are case-sensitive off Windows" }, () => {
   const root = tmp();
   const target = tmp();
   const dir = activate(root, "r1", target.toUpperCase());
@@ -323,9 +323,36 @@ test("a file_change matches its target across path case and separator difference
     root,
   );
   const events = readEvents(dir).filter((e) => e.kind === "file_change");
-  if (process.platform === "win32") {
-    assert.equal(events.length, 1);
+  assert.equal(events.length, 1);
+});
+
+// A symlink inside the target that points into .trio/ is inside the target
+// only lexically. Creating one needs privileges on Windows, so the test skips
+// itself where the OS refuses.
+test("a file_change through a symlink into .trio/ is dropped", async (t) => {
+  const { symlinkSync, mkdirSync: mk, writeFileSync: wf } = await import("node:fs");
+  const root = tmp();
+  const dir = activate(root, "r1", root);
+  mk(join(root, ".trio"), { recursive: true });
+  wf(join(root, ".trio", "secret.json"), "{}");
+  try {
+    symlinkSync(join(root, ".trio", "secret.json"), join(root, "link.json"));
+  } catch (err) {
+    t.skip(`cannot create a symlink here: ${err.code}`);
+    return;
   }
+  main(
+    JSON.stringify({
+      hook_event_name: "PostToolUse",
+      tool_name: "Write",
+      tool_input: { file_path: join(root, "link.json"), content: "{\"x\":1}" },
+    }),
+    root,
+  );
+  assert.deepEqual(
+    readEvents(dir).filter((e) => e.kind === "file_change"),
+    [],
+  );
 });
 
 test("a file_change is dropped when the run's target cannot be determined", () => {

@@ -63,15 +63,15 @@ export function createServer({ runDirPath }) {
       res.flushHeaders();
       let offset = lastEventOffset(req);
       const flush = () => {
-        const { events, offset: next } = readEventsFrom(runDirPath, offset);
+        const { events, ends, offset: next } = readEventsFrom(runDirPath, offset);
         offset = next;
-        if (!events.length) return;
-        // One id per flush, sent before its data blocks: per the SSE spec the
-        // last-set id is what a dispatched event's lastEventId carries, so
-        // every event in this batch resumes from the same, correct byte
-        // offset — the one just past all of them — on a later reconnect.
-        res.write(`id: ${next}\n`);
-        for (const ev of events) res.write(`data: ${JSON.stringify(ev)}\n\n`);
+        // One id per event, the byte offset just past that event's line. A
+        // single id for the whole batch made every event in it carry the
+        // batch's end, so a client that dropped after the first event resumed
+        // past the ones it never received.
+        events.forEach((ev, i) =>
+          res.write(`id: ${ends[i]}\ndata: ${JSON.stringify(ev)}\n\n`),
+        );
       };
       flush();
       let watcher;

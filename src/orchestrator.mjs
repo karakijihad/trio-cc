@@ -231,8 +231,20 @@ export function finalizeRun({ root, runId, verdict, passCount }) {
   try {
     linkSync(tmp, path);
   } catch (err) {
-    if (err.code !== "EEXIST") throw err;
-    return readVerdict(dir) ?? { verdict: "unknown", passes: passCount, runId };
+    if (err.code === "EEXIST")
+      return readVerdict(dir) ?? { verdict: "unknown", passes: passCount, runId };
+    // No hard links on this filesystem (FAT/exFAT, some network and synced
+    // folders). An exclusive create still lets exactly one writer win; a
+    // loser can only misread a half-written file as `unknown`, which beats
+    // crashing the run at its last step with no verdict at all.
+    try {
+      writeFileSync(path, JSON.stringify(payload, null, 2) + "\n", {
+        flag: "wx",
+      });
+    } catch (err2) {
+      if (err2.code !== "EEXIST") throw err2;
+      return readVerdict(dir) ?? { verdict: "unknown", passes: passCount, runId };
+    }
   } finally {
     try {
       unlinkSync(tmp);

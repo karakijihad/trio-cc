@@ -86,14 +86,21 @@ export function readEventsFrom(dir, offset = 0) {
 
   const complete = text.slice(0, lastNewline);
   const consumed = Buffer.byteLength(text.slice(0, lastNewline + 1), "utf8");
+  // `ends[i]` is the byte offset just past events[i]'s line. A stream that
+  // tags each event with one shared batch offset lets a client that dropped
+  // mid-batch resume past events it never received; per-event ends do not.
   const events = [];
+  const ends = [];
+  let pos = offset;
   for (const line of complete.split("\n")) {
+    pos += Buffer.byteLength(line, "utf8") + 1;
     if (!line.trim()) continue;
     try {
       events.push(JSON.parse(line));
+      ends.push(pos);
     } catch {
       /* skip malformed */
     }
   }
-  return { events, offset: offset + consumed };
+  return { events, ends, offset: offset + consumed };
 }

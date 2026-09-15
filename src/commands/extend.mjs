@@ -84,7 +84,7 @@ export default async function extendCommand({ root, rest, out, run, latestFinish
   if (r.status === "worker_busy") {
     const h = r.holder ?? {};
     out(
-      `Another Trio process is already working this run: pid ${h.pid} (run ${h.run ?? "unnamed"}${Number.isSafeInteger(h.pass) ? `, pass ${h.pass}` : ""}).\n  Wait for it to finish, or /trio:cancel to end it.`,
+      `Another Trio process is already working this run: pid ${h.pid} (run ${h.run ?? "unnamed"}${Number.isSafeInteger(h.pass) ? `, pass ${h.pass}` : ""}).\n  Wait for it to finish, or /trio:cancel to end it. If no Trio process is running, the lock is stale: delete .trio/worker.lock.`,
     );
     process.exitCode = 3;
     return;

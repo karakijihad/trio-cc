@@ -50,6 +50,9 @@ function renderFindingsSection(findings, prevPass) {
 // happened to a file it will re-read anyway is worse than one told a file
 // changed but its diff was cut for space.
 export const MAX_CHANGES_BYTES = 64 * 1024;
+// The names-only tail is bounded too: thousands of omitted paths would
+// otherwise rebuild the size the cap exists to prevent.
+export const MAX_OMITTED_NAMES_BYTES = 4 * 1024;
 
 function renderChangesSection(changes) {
   const header = "## What Claude changed since";
@@ -60,11 +63,19 @@ function renderChangesSection(changes) {
   let used = 0;
   let cut = changes.length;
   for (let i = 0; i < changes.length; i++) {
-    const block = `${changes[i].file}\n\`\`\`diff\n${changes[i].diff}\n\`\`\``;
-    const size = Buffer.byteLength(block, "utf8") + 2; // joining "\n\n"
-    // Always keep at least one block, even an oversized one — an empty
-    // section past the cap would say nothing changed, which is a worse
-    // record than one whole diff plus a names-only tail.
+    let block = `${changes[i].file}\n\`\`\`diff\n${changes[i].diff}\n\`\`\``;
+    let size = Buffer.byteLength(block, "utf8") + 2; // joining "\n\n"
+    // Always keep at least one block — an empty section past the cap would
+    // say nothing changed. But cut that one to the cap: diff.mjs bounds line
+    // count, not line length, so a single edited line can be any size.
+    if (blocks.length === 0 && size > MAX_CHANGES_BYTES) {
+      const room = MAX_CHANGES_BYTES - 256;
+      const head = Buffer.from(changes[i].diff, "utf8")
+        .subarray(0, room)
+        .toString("utf8");
+      block = `${changes[i].file}\n\`\`\`diff\n${head}\n... diff truncated at the ${MAX_CHANGES_BYTES}-byte cap\n\`\`\``;
+      size = Buffer.byteLength(block, "utf8") + 2;
+    }
     if (blocks.length > 0 && used + size > MAX_CHANGES_BYTES) {
       cut = i;
       break;
@@ -75,7 +86,17 @@ function renderChangesSection(changes) {
   const omitted = changes.slice(cut);
   const body = blocks.join("\n\n");
   if (!omitted.length) return `${header}\n\n${body}`;
-  const names = omitted.map((c) => c.file).join("\n");
+  const shown = [];
+  let nameBytes = 0;
+  for (const c of omitted) {
+    const b = Buffer.byteLength(String(c.file), "utf8") + 1;
+    if (nameBytes + b > MAX_OMITTED_NAMES_BYTES) break;
+    shown.push(c.file);
+    nameBytes += b;
+  }
+  const unnamed = omitted.length - shown.length;
+  const names =
+    shown.join("\n") + (unnamed ? `\n... and ${unnamed} more` : "");
   return (
     `${header}\n\n${body}\n\n` +
     `... ${omitted.length} more changed file(s) omitted past the ` +
@@ -176,10 +197,19 @@ export const DEFAULT_PROMOTE_TO = "Docs/Audit";
 // this instruction is unconditional, not "unless you have a reason to." It
 // lives here, in the shared builder, rather than duplicated per lens brief
 // or per Codex brief, so every lens and every pass carries it the same way.
+// promoteTo comes from .trio/config.json, which the audited repository can
+// write, and it lands inside a model prompt. Only a single-line value with no
+// backticks is used; anything else — a newline smuggling instructions, a
+// backtick breaking out of the code span — names the default instead.
+export const PROMPT_SAFE_PATH = /^[^ -`]{1,200}$/;
+
 function renderNoArtifactsSection(promoteTo) {
+  const dir = PROMPT_SAFE_PATH.test(String(promoteTo ?? ""))
+    ? promoteTo
+    : DEFAULT_PROMOTE_TO;
   return (
     "## Off-limits\n\n" +
-    `Do not read \`.trio/\` or \`${promoteTo}/\` anywhere in this repository. ` +
+    `Do not read \`.trio/\` or \`${dir}/\` anywhere in this repository. ` +
     "They hold Trio's own run data — earlier findings, other lanes' output, " +
     "adjudicated verdicts, and promoted audit reports — not the codebase " +
     "under review. Any prior findings, file changes, or replies you need " +

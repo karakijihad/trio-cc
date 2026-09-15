@@ -42,8 +42,9 @@ you: "add feature X"
             └─ ceiling reached → open findings reported plainly, never as success
 ```
 
-Two passes by default. Convergence means no open Critical or Major **and** no
-findings that were not there last pass.
+Two passes by default. Convergence means no live Critical or Major finding —
+refuted, duplicate and out-of-scope findings don't count, and a new Minor or
+Info doesn't hold a run open.
 
 Five lenses ship, all enabled: auditor, security, tester, simplifier,
 consistency (drift between what things claim and what they do). Omit
@@ -139,9 +140,10 @@ it composes with another finding into one bigger defect; severity rises one
 step). Codex sounding confident is not evidence — the reconciler has to show
 its work too: a `refute` cites what disproves the finding, and a `confirm`
 states the failure path — the input or state, then what breaks. If it can't
-write that path, the verdict is `downgrade`, not `confirm`. `downgrade` is
-also how a finding that is real but warrants no change gets filed; there is
-no fifth verdict.
+write that path, the verdict is `downgrade`, not `confirm`. A finding that is
+real but outside the change under audit is not a downgrade: it is `confirm`
+(or `escalate`) with `outOfScope: true`, keeps its severity, doesn't block,
+and is reported under "Outside this change".
 
 Confirmed findings also carry **bounds** — where the defect stops. Where else
 the pattern occurs and, as importantly, where it demonstrably does not. That
@@ -174,9 +176,10 @@ sees its own prior findings for that lens, a diff of what Claude actually
 changed since, and which findings Claude declined and why. It then agrees,
 pushes back, or reports what the change broke.
 
-**Convergence** — the loop stops clean when nothing open is `critical` or
-`major`, **and** no finding that appeared this pass is new. Both conditions
-have to hold.
+**Convergence** — the loop stops clean when nothing live is at a `blockOn`
+severity (`critical` or `major` by default). Refuted, duplicate and
+out-of-scope findings don't count, and a new `info` or `minor` finding doesn't
+hold a run open.
 
 **Verdict** — how a run ended: `clean` (converged), `ceiling_reached` (hit the
 pass limit with findings still open — reported plainly, never as success),

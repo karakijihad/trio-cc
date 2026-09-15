@@ -1,5 +1,5 @@
-import { readFileSync, statSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { readFileSync, statSync, realpathSync } from "node:fs";
+import { join, resolve, sep, dirname, basename } from "node:path";
 import { pathToFileURL } from "node:url";
 import { makeEvent, appendEvent, eventsFile } from "./bus.mjs";
 import { unifiedDiff } from "./diff.mjs";
@@ -150,9 +150,32 @@ function readTarget(dir) {
 // currently pass it to. Filtering at capture needs no such change: this tap
 // already resolves the run directory to check the tap ceiling, and run.json
 // lives right there.
+//
+// Compared as real paths, not lexical ones: a symlink inside the target that
+// points into `.trio/` resolves lexically inside the target and would pass.
+// A path that does not exist yet resolves through its nearest existing
+// ancestor, so a brand-new file is still judged by where it will really live.
+function real(p) {
+  let head = resolve(String(p ?? ""));
+  const tail = [];
+  for (;;) {
+    try {
+      return join(realpathSync.native(head), ...tail);
+    } catch {
+      const up = dirname(head);
+      if (up === head) return null;
+      tail.unshift(basename(head));
+      head = up;
+    }
+  }
+}
+
 function inScope(root, target, filePath) {
-  if (isWithin(trioDir(root), filePath)) return false;
-  return isWithin(target, filePath);
+  const file = real(filePath);
+  const realTarget = target && real(target);
+  if (!file || !realTarget) return false;
+  if (isWithin(real(trioDir(root)) ?? trioDir(root), file)) return false;
+  return isWithin(realTarget, file);
 }
 
 export function main(rawStdin, root) {
