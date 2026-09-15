@@ -1,7 +1,14 @@
-import { readdirSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import {
+  readdirSync,
+  mkdirSync,
+  writeFileSync,
+  existsSync,
+  realpathSync,
+} from "node:fs";
+import { join, dirname, isAbsolute, sep } from "node:path";
 import { renderDisagreementTable } from "./reconcile.mjs";
 import { isLive } from "./findings.mjs";
+import { isSingleLinePath } from "./config.mjs";
 
 const SEV_ORDER = ["critical", "major", "minor", "info"];
 const dateOf = (now) => now.toISOString().slice(0, 10);
@@ -280,6 +287,43 @@ export function promoteTarget(root, config) {
   return { path, absolute: join(root, path), exists: existsSync(join(root, path)) };
 }
 
+// Where promotion may write: `rel` under the project root, and nowhere else.
+// Every caller goes through this — `trio promote`, and the finalize that runs
+// from run.json's stored config and never passes through configErrors. The
+// lexical check refuses absolute and `..` paths; the real-path check resolves
+// the nearest existing ancestor, so a symlink or junction anywhere along the
+// way cannot carry the write outside.
+export function promotionDir(root, rel) {
+  if (
+    !isSingleLinePath(rel) ||
+    isAbsolute(rel) ||
+    /^[a-zA-Z]:/.test(rel) ||
+    rel.split(/[\\/]/).includes("..")
+  )
+    return {
+      error: `artifacts.promoteTo must be a relative path inside the project, got: ${JSON.stringify(rel)}`,
+    };
+  const absolute = join(root, rel);
+  let existing = absolute;
+  while (!existsSync(existing)) {
+    const up = dirname(existing);
+    if (up === existing) break;
+    existing = up;
+  }
+  let realRoot;
+  let realExisting;
+  try {
+    realRoot = realpathSync.native(root);
+    realExisting = realpathSync.native(existing);
+  } catch {
+    return { error: `artifacts.promoteTo cannot be resolved inside the project: ${rel}` };
+  }
+  const prefix = realRoot.endsWith(sep) ? realRoot : realRoot + sep;
+  return realExisting === realRoot || realExisting.startsWith(prefix)
+    ? { absolute }
+    : { error: `artifacts.promoteTo resolves outside the project: ${rel}` };
+}
+
 export function promote({
   root,
   config,
@@ -289,12 +333,21 @@ export function promote({
   fixedUnverified = null,
   now = new Date(),
 }) {
-  const base = join(root, config.artifacts.promoteTo);
+  const rel = config.artifacts.promoteTo;
+  const checked = promotionDir(root, rel);
+  if (checked.error) throw new Error(checked.error);
+  const base = checked.absolute;
   if (!existsSync(base)) return null;
 
   const date = dateOf(now);
   const codexDir = join(base, "codex", date);
   const claudeDir = join(base, "claude", date);
+  // Re-checked on the leaf directories too: a `codex` or `claude` entry
+  // already inside the promotion directory can itself be a link outward.
+  for (const sub of ["codex", "claude"]) {
+    const inside = promotionDir(root, join(rel, sub, date));
+    if (inside.error) throw new Error(inside.error);
+  }
   mkdirSync(codexDir, { recursive: true });
   mkdirSync(claudeDir, { recursive: true });
 

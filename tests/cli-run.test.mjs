@@ -777,6 +777,24 @@ test("promote without --create refuses rather than creating the directory", () =
   assert.equal(existsSync(join(root, "Docs")), false);
 });
 
+// .trio/config.json is repository-writable and promotion writes where it
+// points, so a path leaving the project is refused before anything is made.
+test("promote --create refuses a promoteTo outside the project and creates nothing", () => {
+  const { root, cli } = project({ findings: FINDING });
+  const r = settle(cli, JSON.parse(cli(["run", "--lenses", "auditor", "--max", "1"]).stdout));
+  const outsideName = `trio-escape-${r.runId}`;
+  const configFile = join(root, ".trio", "config.json");
+  for (const promoteTo of [`../${outsideName}`, join(root, "..", outsideName)]) {
+    const cfg = JSON.parse(readFileSync(configFile, "utf8"));
+    cfg.artifacts = { ...cfg.artifacts, promoteTo };
+    writeFileSync(configFile, JSON.stringify(cfg));
+    const p = cli(["promote", r.runId, "--create"]);
+    assert.equal(p.status, 2, `${promoteTo}: ${p.stdout}`);
+    assert.match(p.stdout, /artifacts\.promoteTo/);
+    assert.equal(existsSync(join(root, "..", outsideName)), false);
+  }
+});
+
 test("promote defaults to the most recent finished run", () => {
   const { root, cli } = project();
   const first = JSON.parse(cli(["run", "--lenses", "auditor"]).stdout);

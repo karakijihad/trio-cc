@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { passDir } from "./paths.mjs";
 import { renderSettledSection } from "./settled.mjs";
 import { scrub } from "./scrub.mjs";
+import { isSingleLinePath } from "./config.mjs";
 
 // Claude's reply to a pass's reconciled findings (D17), written by the
 // trio-audit skill before the next pass starts. Absence is never an error —
@@ -206,10 +207,9 @@ export const DEFAULT_PROMOTE_TO = "Docs/Audit";
 // write, and it lands inside a model prompt. Only a single-line value with no
 // backticks is used; anything else — a newline smuggling instructions, a
 // backtick breaking out of the code span — names the default instead.
-export const PROMPT_SAFE_PATH = /^[^ -`]{1,200}$/;
 
 function renderNoArtifactsSection(promoteTo) {
-  const dir = PROMPT_SAFE_PATH.test(String(promoteTo ?? ""))
+  const dir = isSingleLinePath(promoteTo)
     ? promoteTo
     : DEFAULT_PROMOTE_TO;
   return (

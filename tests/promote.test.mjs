@@ -12,6 +12,7 @@ import { join } from "node:path";
 import {
   nextAuditNumber,
   promote,
+  promotionDir,
   renderReconciliation,
 } from "../src/promote.mjs";
 import { runPass } from "../src/orchestrator.mjs";
@@ -19,6 +20,36 @@ import { DEFAULT_CONFIG } from "../src/config.mjs";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "trio-promote-"));
 const NOW = new Date("2026-07-29T14:03:00Z");
+
+// Promotion writes where .trio/config.json (or a run's stored run.json) says,
+// and both are repository-writable: a path leaving the project, lexically or
+// through a directory link inside it, must never be written.
+test("promotion refuses a destination outside the project, lexically or through a link", async (t) => {
+  const root = tmp();
+  for (const bad of ["../x", "a/../../x", "/etc/trio", "C:\\trio"])
+    assert.ok(promotionDir(root, bad).error, bad);
+  assert.ok(promotionDir(root, "Docs/Audit").absolute);
+
+  const outside = tmp();
+  mkdirSync(join(root, "Docs"), { recursive: true });
+  const { symlinkSync } = await import("node:fs");
+  try {
+    symlinkSync(outside, join(root, "Docs", "Audit"), "junction");
+  } catch (err) {
+    t.skip(`cannot create a directory link here: ${err.code}`);
+    return;
+  }
+  assert.match(promotionDir(root, "Docs/Audit").error, /outside the project/);
+  const config = {
+    ...DEFAULT_CONFIG,
+    artifacts: { ...DEFAULT_CONFIG.artifacts, promoteTo: "Docs/Audit" },
+  };
+  assert.throws(
+    () => promote({ root, config, runId: "r1", passes: [PASS], verdict: "clean", now: NOW }),
+    /outside the project/,
+  );
+  assert.equal(existsSync(join(outside, "codex")), false);
+});
 
 const PASS = {
   pass: 1,

@@ -386,6 +386,13 @@ test("finalizeRun writes the verdict where hard links are unsupported", () => {
     link: noLinks,
   });
   assert.equal(second.verdict, "clean", "first verdict must still win");
+  // The fallback path must still end the run in the event log, exactly once:
+  // the losing second call returns before emitting anything.
+  const finished = readEvents(runDir(root, "r1")).filter(
+    (e) => e.kind === "run_finished",
+  );
+  assert.equal(finished.length, 1);
+  assert.equal(finished[0].payload.verdict, "clean");
 });
 
 test("finalizeRun writes verdict.json and emits run_finished", () => {

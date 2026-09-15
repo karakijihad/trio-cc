@@ -17,7 +17,7 @@ import {
 import { validateFindings, isLive } from "./findings.mjs";
 import { buildSettled } from "./settled.mjs";
 import { codexUnavailable } from "./failure.mjs";
-import { promote, promoteTarget } from "./promote.mjs";
+import { promote, promoteTarget, promotionDir } from "./promote.mjs";
 import { readEvents, makeEvent, appendEvent } from "./bus.mjs";
 import { runDir, passDir, activeMarker, trioDir, isRunId } from "./paths.mjs";
 import {
@@ -247,6 +247,11 @@ export function promoteRun({ root, config, runId, create = false }) {
   } catch {
     return { ok: false, error: `no finished run at ${runId}` };
   }
+
+  // Before the directory is created, not only before writing into it: a
+  // promoteTo leaving the project must not get as far as a mkdir.
+  const allowed = promotionDir(root, config.artifacts.promoteTo);
+  if (allowed.error) return { ok: false, error: allowed.error };
 
   const target = promoteTarget(root, config);
   if (!target.exists) {
