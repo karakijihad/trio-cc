@@ -12,6 +12,8 @@ What went wrong, and what was done about it. One line each, newest first.
 - **The capture scope check compared lexical paths**, so a symlink inside the target pointing into `.trio/` counted as inside the target. Real paths now.
 - **A hand-written `duplicate` verdict with no real survivor hid its finding.** `trio verdicts` refused it, but a verdicts.json nobody validated was applied as written. It is ignored now and the finding stays unreviewed.
 - **The atomic verdict write needed hard links**, which FAT/exFAT and some network folders lack; it falls back to an exclusive create.
+- **Promotion could still leave the project** — through a directory link inside it, or from a run's stored `run.json`, which finalize reads without ever passing through config validation. One containment check now sits inside promotion itself, on real paths, so every caller gets it.
+- **The "single line" check let U+2028 and friends through**, and its regex had been written into the source as raw control characters by an escape that decoded on the way in. It is a code-point check now, with nothing raw in the file.
 
 ## 2026-09-13 — what an independent review of Trio found
 
