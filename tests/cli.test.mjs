@@ -656,6 +656,180 @@ test("consult with no question prints usage and exits 2", () => {
   // Usage is checked before the preflight probe, so this is deterministic
   // whether or not a Codex install exists on the machine running the suite.
   assert.equal(r.status, 2);
-  assert.match(r.stdout, /usage: trio consult <question>/);
+  assert.match(
+    r.stdout,
+    /usage: trio consult \[--model NAME\] \[--effort LEVEL\] \[--\] <question>/,
+  );
   assert.equal(existsSync(join(root, ".trio", "runs")), false);
+});
+
+// An unrecognised --model is a typo worth catching before Codex is spawned at
+// all, not just before the question is asked — a wrong slug still probes the
+// catalogue, but the run this refuses would otherwise burn a second exec.
+test("consult refuses an unresolvable --model before Codex answers anything", () => {
+  const root = project();
+  const touched = join(root, "codex-was-invoked.log");
+  const r = spawnSync(
+    "node",
+    [CLI, "consult", "--model", "nonexistent", "is", "this", "ok?"],
+    {
+      env: fakeEnv({
+        pathDir: fakePathDir,
+        codexHome: fakeHomeDir,
+        project: root,
+        extra: { FAKE_CODEX_TOUCH: touched },
+      }),
+      encoding: "utf8",
+    },
+  );
+  assert.equal(r.status, 2);
+  assert.match(r.stdout, /unknown model: nonexistent/);
+  // The probe itself execs `codex --version`, `login status` and
+  // `exec --help` — none of those is a real question reaching Codex, which
+  // is what this guard exists to prevent from happening on a typo.
+  const execs = existsSync(touched)
+    ? readFileSync(touched, "utf8")
+        .split("\n")
+        .filter((l) => l.startsWith("exec") && !l.includes("--help"))
+    : [];
+  assert.deepEqual(execs, []);
+});
+
+// A model named on the command line is resolved against the live catalogue
+// before it ever reaches Codex — this proves the resolved slug is what's
+// spawned, not the substring the operator typed.
+test("consult resolves a partial --model and passes the resolved slug to Codex", () => {
+  const root = project();
+  const touched = join(root, "codex-was-invoked.log");
+  const r = spawnSync(
+    "node",
+    [CLI, "consult", "--model", "fake", "is", "this", "ok?"],
+    {
+      env: fakeEnv({
+        pathDir: fakePathDir,
+        codexHome: fakeHomeDir,
+        project: root,
+        extra: { FAKE_CODEX_TOUCH: touched },
+      }),
+      encoding: "utf8",
+    },
+  );
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(JSON.parse(r.stdout).model, "fake-model");
+  const exec = readFileSync(touched, "utf8")
+    .split("\n")
+    .filter((l) => l.startsWith("exec") && !l.includes("--help"))
+    .at(-1);
+  assert.match(exec, /--model fake-model/);
+});
+
+// The override is named on the command line and nowhere else: it must not
+// leak into the file the next, un-overridden consult reads.
+test("an inline --model/--effort override never touches .trio/config.json", () => {
+  const root = project();
+  trio(root, ["on"]);
+  const configPath = join(root, ".trio", "config.json");
+  const before = readFileSync(configPath, "utf8");
+  const r = trio(root, [
+    "consult",
+    "--model",
+    "fake-model",
+    "--effort",
+    "low",
+    "is",
+    "this",
+    "ok?",
+  ]);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(readFileSync(configPath, "utf8"), before);
+});
+
+// A leading dash is still a mistyped flag, not part of the question — this
+// is the direction the narrower guard (below) must not have given up.
+test("consult still refuses a leading dash as a mistyped flag", () => {
+  const r = trio(project(), ["consult", "-h", "is", "this", "ok?"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stdout, /unrecognised flag: -h/);
+});
+
+// A short-dash token elsewhere in the question is a value, not a flag: only a
+// long flag anywhere, or any dash in the leading position, is refused. This
+// is the case that almost shipped as a refusal: "-1" is part of the
+// question, and the unknown-model error below is proof it got there.
+test("consult lets a short dash inside the question through to the model check", () => {
+  const r = trio(project(), [
+    "consult",
+    "--model",
+    "nope",
+    "-1",
+    "is",
+    "a",
+    "valid",
+    "index?",
+  ]);
+  assert.equal(r.status, 2);
+  assert.doesNotMatch(r.stdout, /unrecognised flag/);
+  assert.match(r.stdout, /unknown model: nope/);
+});
+
+// The defect a solo audit found: `--model` mid-question swallowed the next
+// word as a model name and dropped it from the question, silently. A bare
+// `--` ends flag parsing, so everything after it — dashes and all — reaches
+// Codex exactly as typed, with no override applied.
+test("a question after -- keeps every word, --model-looking ones included", () => {
+  const root = project();
+  const briefLog = join(root, "brief.log");
+  const r = spawnSync(
+    "node",
+    [
+      CLI,
+      "consult",
+      "--",
+      "explain",
+      "what",
+      "--model",
+      "does",
+      "in",
+      "trio",
+    ],
+    {
+      env: fakeEnv({
+        pathDir: fakePathDir,
+        codexHome: fakeHomeDir,
+        project: root,
+        extra: { FAKE_CODEX_BRIEF_LOG: briefLog },
+      }),
+      encoding: "utf8",
+    },
+  );
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const brief = readFileSync(briefLog, "utf8");
+  assert.match(brief, /explain what --model does in trio/);
+  // No override was named, so the pair Codex ran on is whatever is configured
+  // — never a model called "does".
+  assert.notEqual(JSON.parse(r.stdout).model, "does");
+});
+
+// `--model astra --model nope` used to take the first silently. It is now a
+// refusal, caught before Codex is even probed — not just before the question
+// is asked.
+test("a repeated flag is refused before Codex is spawned at all", () => {
+  const root = project();
+  const touched = join(root, "codex-was-invoked.log");
+  const r = spawnSync(
+    "node",
+    [CLI, "consult", "--model", "astra", "--model", "nope", "is", "this", "ok?"],
+    {
+      env: fakeEnv({
+        pathDir: fakePathDir,
+        codexHome: fakeHomeDir,
+        project: root,
+        extra: { FAKE_CODEX_TOUCH: touched },
+      }),
+      encoding: "utf8",
+    },
+  );
+  assert.equal(r.status, 2);
+  assert.match(r.stdout, /--model given twice/);
+  assert.equal(existsSync(touched), false, "Codex must not be invoked at all");
 });

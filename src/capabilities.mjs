@@ -97,6 +97,29 @@ export function validateLens(caps, lens) {
   return { ok: true };
 }
 
+// A model named inline on a consult is typed from memory, not picked off a
+// list: "astra" for gpt-6-astra. Matched against the live catalogue rather
+// than a table kept here, so it keeps working as OpenAI renames things. An
+// exact slug wins outright — a full slug can never be the ambiguous one —
+// and a prefix of two models is refused rather than guessed, because the
+// wrong guess is spent credit.
+export function resolveModel(models, name) {
+  const list = models ?? [];
+  const want = String(name ?? "").trim().toLowerCase();
+  const known = list.map((m) => m.slug).join(", ");
+  if (!want) return { ok: false, error: `--model needs a value. known: ${known}` };
+  const exact = list.find((m) => m.slug.toLowerCase() === want);
+  if (exact) return { ok: true, slug: exact.slug };
+  const hits = list.filter((m) => m.slug.toLowerCase().includes(want));
+  if (hits.length === 1) return { ok: true, slug: hits[0].slug };
+  if (hits.length > 1)
+    return {
+      ok: false,
+      error: `ambiguous model: "${name}" matches ${hits.map((m) => m.slug).join(", ")}`,
+    };
+  return { ok: false, error: `unknown model: ${name}. known: ${known}` };
+}
+
 // Pure projection for `trio models` / `/trio:model` / `/trio:lenses`: the
 // live model catalogue plus which lens currently uses which model.
 export function modelsReport(caps, config) {

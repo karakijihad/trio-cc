@@ -5,12 +5,16 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   RUN_FLAGS,
+  CONSULT_FLAGS,
   asksForHelp,
   unknownFlags,
   valuelessFlags,
   lensSelection,
   parseLensArgs,
   flagValue,
+  consultQuestion,
+  consultArgs,
+  repeatedFlags,
 } from "../src/cli-args.mjs";
 
 test("asksForHelp recognises both spellings, anywhere", () => {
@@ -95,6 +99,92 @@ test("parseLensArgs does not lose a value that follows on/off", () => {
   assert.deepEqual(
     parseLensArgs(["off", "model", "m1", "effort", "low"]).changes,
     { on: false, model: "m1", effort: "low" },
+  );
+});
+
+// A model can be named before the question or after it — the operator
+// reaches for --model wherever they happen to be typing.
+test("consultQuestion takes the flag and its value out, wherever it stands", () => {
+  assert.equal(
+    consultQuestion(["--model", "astra", "is", "x", "ok?"]),
+    "is x ok?",
+  );
+  assert.equal(
+    consultQuestion(["is", "x", "ok?", "--model", "astra"]),
+    "is x ok?",
+  );
+});
+
+test("consultQuestion takes out both flags at once", () => {
+  assert.equal(
+    consultQuestion(["--model", "astra", "--effort", "high", "is", "x", "ok?"]),
+    "is x ok?",
+  );
+});
+
+test("consultQuestion with no flags is the whole argv, joined", () => {
+  assert.equal(consultQuestion(["is", "x", "ok?"]), "is x ok?");
+});
+
+// No question at all — just a flag and its value — is the empty string, not
+// undefined or a stray space, so the caller's `!question` check catches it.
+test("consultQuestion is empty when only a flag and its value were given", () => {
+  assert.equal(consultQuestion(["--model", "astra"]), "");
+});
+
+// A bare `--` ends flag parsing: everything before it is flags, everything
+// after is question text verbatim, and the separator itself is dropped.
+test("consultArgs splits at the first bare --", () => {
+  assert.deepEqual(consultArgs(["--model", "astra", "--", "is", "x", "ok?"]), {
+    flags: ["--model", "astra"],
+    tail: ["is", "x", "ok?"],
+  });
+});
+
+test("consultArgs with no -- at all puts everything in flags", () => {
+  assert.deepEqual(consultArgs(["--model", "astra", "is", "x", "ok?"]), {
+    flags: ["--model", "astra", "is", "x", "ok?"],
+    tail: [],
+  });
+});
+
+// Only the first `--` matters: a question that itself contains `--` is
+// still free text once flag parsing has ended.
+test("consultArgs stops at the first of several --", () => {
+  assert.deepEqual(consultArgs(["--", "explain", "--", "this"]), {
+    flags: [],
+    tail: ["explain", "--", "this"],
+  });
+});
+
+test("consultArgs with nothing after -- has an empty tail", () => {
+  assert.deepEqual(consultArgs(["--model", "astra", "--"]), {
+    flags: ["--model", "astra"],
+    tail: [],
+  });
+});
+
+// `--model a --model b` took the first silently. A flag given twice is now a
+// refusal, in the style of parseLensArgs's own "given twice" check.
+test("repeatedFlags catches a flag given twice", () => {
+  assert.deepEqual(
+    repeatedFlags(["--model", "astra", "--model", "nope"], CONSULT_FLAGS),
+    ["--model"],
+  );
+  assert.deepEqual(
+    repeatedFlags(["--model", "astra", "--effort", "high"], CONSULT_FLAGS),
+    [],
+  );
+  assert.deepEqual(repeatedFlags([], CONSULT_FLAGS), []);
+});
+
+// Each flag's value is stepped over, so a value that happens to equal a flag
+// name is not mistaken for a repeat of that flag — valuelessFlags is what
+// refuses a value-less flag, this only catches the flag token itself twice.
+test("repeatedFlags does not mistake a value equal to a flag name for a repeat", () => {
+  assert.deepEqual(
+    repeatedFlags(["--model", "--model", "is", "x", "ok?"], CONSULT_FLAGS),
+    [],
   );
 });
 

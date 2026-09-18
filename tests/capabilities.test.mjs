@@ -8,6 +8,7 @@ import {
   parseFlags,
   checkDrift,
   validateLens,
+  resolveModel,
   probe,
   saveCapabilities,
   loadCapabilities,
@@ -166,6 +167,60 @@ test("validateLens rejects an unknown model", () => {
     validateLens(caps, { model: "gpt-9", effort: "low" }).error,
     /unknown model/i,
   );
+});
+
+// Synthetic, not CACHE: the fake catalogue every CLI test runs against
+// (tests/helpers/fake-codex.mjs) holds a single model, so the ambiguous case
+// can only be exercised against a made-up list with two slugs that share a
+// substring.
+const MODELS = [
+  { slug: "gpt-5.6-sol" },
+  { slug: "gpt-5.6-sol-mini" },
+  { slug: "gpt-5.6-luna" },
+];
+
+test("resolveModel matches an exact slug outright, even when it is also a prefix of another", () => {
+  assert.deepEqual(resolveModel(MODELS, "gpt-5.6-sol"), {
+    ok: true,
+    slug: "gpt-5.6-sol",
+  });
+});
+
+test("resolveModel is case-insensitive", () => {
+  assert.deepEqual(resolveModel(MODELS, "GPT-5.6-LUNA"), {
+    ok: true,
+    slug: "gpt-5.6-luna",
+  });
+});
+
+test("resolveModel resolves a substring that names exactly one model", () => {
+  assert.deepEqual(resolveModel(MODELS, "luna"), {
+    ok: true,
+    slug: "gpt-5.6-luna",
+  });
+});
+
+// The case this exists to refuse rather than guess: "sol" is a substring of
+// two different slugs, and the wrong guess is spent credit.
+test("resolveModel refuses a substring that names more than one model", () => {
+  const r = resolveModel(MODELS, "sol");
+  assert.equal(r.ok, false);
+  assert.match(r.error, /ambiguous model: "sol" matches gpt-5\.6-sol, gpt-5\.6-sol-mini/);
+});
+
+test("resolveModel reports an unknown name and lists what it does know", () => {
+  const r = resolveModel(MODELS, "astra");
+  assert.equal(r.ok, false);
+  assert.match(r.error, /unknown model: astra\. known: /);
+  assert.match(r.error, /gpt-5\.6-luna/);
+});
+
+test("resolveModel refuses an empty or blank name instead of matching anything", () => {
+  for (const name of ["", "   ", undefined, null]) {
+    const r = resolveModel(MODELS, name);
+    assert.equal(r.ok, false, JSON.stringify(name));
+    assert.match(r.error, /--model needs a value\. known: /);
+  }
 });
 
 test("checkDrift reports that it could not compare versions, without failing", () => {

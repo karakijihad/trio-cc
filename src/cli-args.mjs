@@ -17,7 +17,10 @@ export const USAGE = `trio — Codex as a read-only second reviewer.
                                     is wrong
   trio extend [runId]               one more pass on a ceiling-reached run
   trio cancel                       cancel the active run
-  trio consult <question>           ask Codex one question
+  trio consult [--model NAME] [--effort LEVEL] <question>
+                                    ask Codex one question; --model takes any
+                                    part of a slug ("astra") and holds for
+                                    this call only
   trio config get | set <key> <value>
   trio lens <name> [on|off] [model <slug>] [effort <level>]
   trio models [--json]              Codex models and which lens uses each
@@ -51,6 +54,53 @@ export const RUN_FLAGS = new Set([
 // unknown-flag guard exists to prevent.
 export const CONTINUE_FLAGS = new Set(["--claude-findings"]);
 export const EXTEND_FLAGS = new Set(["--claude-findings"]);
+
+// Named on the command line, both hold for one consult and are never saved:
+// the configured pair is what the next consult runs on. A consult takes no
+// other flag, so anything else is a typo — and a typo that reached Codex
+// would be spent credit on a question with a stray word in it.
+export const CONSULT_FLAGS = new Set(["--model", "--effort"]);
+
+export const CONSULT_USAGE =
+  "usage: trio consult [--model NAME] [--effort LEVEL] [--] <question>";
+
+// A bare `--` ends flag parsing: everything after it is question text,
+// dashes and all. Without it there is no way to ask about `--model` itself —
+// the word after it would be read as the model and lost from the question,
+// and a question is free text, so no guard can tell the two apart.
+export const consultArgs = (args) => {
+  const at = args.indexOf("--");
+  return at === -1
+    ? { flags: args, tail: [] }
+    : { flags: args.slice(0, at), tail: args.slice(at + 1) };
+};
+
+// `--model a --model b` took the first and said nothing, which is how an
+// operator correcting a typo pays for the model they meant to replace. Each
+// flag's value is stepped over, so a value that is itself a flag name is not
+// a repeat — valuelessFlags is what refuses that one.
+export const repeatedFlags = (args, known) => {
+  const seen = new Set();
+  const twice = new Set();
+  for (let i = 0; i < args.length; i++) {
+    if (!known.has(args[i])) continue;
+    if (seen.has(args[i])) twice.add(args[i]);
+    seen.add(args[i]);
+    i++;
+  }
+  return [...twice];
+};
+
+// The question is whatever is left once the flags and their values are taken
+// out, so a model can be named before the question or after it.
+export const consultQuestion = (args) => {
+  const words = [];
+  for (let i = 0; i < args.length; i++) {
+    if (CONSULT_FLAGS.has(args[i])) i++;
+    else words.push(args[i]);
+  }
+  return words.join(" ").trim();
+};
 
 export const LENS_USAGE =
   "usage: trio lens <name> [on|off] [model <slug>] [effort <level>]";

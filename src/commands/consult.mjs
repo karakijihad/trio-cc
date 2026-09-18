@@ -1,16 +1,47 @@
 import { mkdirSync } from "node:fs";
 import { loadConfig, configErrors } from "../config.mjs";
-import { validateLens } from "../capabilities.mjs";
+import { validateLens, resolveModel } from "../capabilities.mjs";
+import {
+  CONSULT_FLAGS,
+  CONSULT_USAGE,
+  consultArgs,
+  consultQuestion,
+  flagValue,
+  repeatedFlags,
+  unknownFlags,
+  valuelessFlags,
+} from "../cli-args.mjs";
 import { runDir } from "../paths.mjs";
 import { newRunId } from "../orchestrator.mjs";
 
 // `trio consult <question>`
 export default async function consultCommand({ root, rest, out, gatherState, codexRefusal, unavailable }) {
-  // Usage before probing, for the same reason as `run`. A leading dash is a
-  // mistyped flag, not a question — asking Codex "--help" costs real money.
-  const question = rest.join(" ");
-  if (!question || rest[0].startsWith("-")) {
-    out("usage: trio consult <question>");
+  // Usage before probing, for the same reason as `run`. An unrecognised dash
+  // is a mistyped flag, not part of the question — asking Codex "--help"
+  // costs real money, and so does a question with a dropped flag in it.
+  // Only a long flag is refused wherever it stands: a question can carry a
+  // "-1" and that is not a typo, but a "--model" swallowed into one asks the
+  // wrong model a question the operator paid for. A leading dash of any
+  // shape stays a mistyped flag, which is what this guard caught before.
+  const { flags, tail } = consultArgs(rest);
+  const badFlags = unknownFlags(flags, CONSULT_FLAGS).filter(
+    (f) => f.startsWith("--") || f === flags[0],
+  );
+  const emptyFlags = valuelessFlags(flags, CONSULT_FLAGS);
+  const twice = repeatedFlags(flags, CONSULT_FLAGS);
+  if (badFlags.length || emptyFlags.length || twice.length) {
+    const why = badFlags.length
+      ? `unrecognised flag: ${badFlags.join(", ")}`
+      : emptyFlags.length
+        ? `${emptyFlags.join(", ")} needs a value`
+        : `${twice.join(", ")} given twice`;
+    out(`${why}\n${CONSULT_USAGE}`);
+    process.exitCode = 2;
+    return;
+  }
+  const question = [consultQuestion(flags), ...tail].join(" ").trim();
+  if (!question) {
+    out(CONSULT_USAGE);
     process.exitCode = 2;
     return;
   }
@@ -34,9 +65,35 @@ export default async function consultCommand({ root, rest, out, gatherState, cod
     process.exitCode = 1;
     return;
   }
-  // Same warning, same stream, as a run's lens check: stdout is the JSON.
+  // A model or effort named on the command line holds for this call alone:
+  // nothing is written, so the next consult is back on the configured pair.
+  // Resolving a part of a slug needs the catalogue; without one the name goes
+  // through as typed, which is what an unprobed Codex would do with it anyway.
+  const chosen = { ...consult };
+  const modelArg = flagValue(flags, "--model");
+  const effortArg = flagValue(flags, "--effort");
+  if (effortArg) chosen.effort = effortArg;
+  if (modelArg) chosen.model = modelArg;
+  if (modelArg && (caps?.models ?? []).length) {
+    const picked = resolveModel(caps.models, modelArg);
+    if (!picked.ok) {
+      out(picked.error);
+      process.exitCode = 2;
+      return;
+    }
+    chosen.model = picked.slug;
+  }
   if ((caps?.models ?? []).length) {
-    const check = validateLens(caps, consult);
+    const check = validateLens(caps, chosen);
+    // A configured pair that has drifted out of the catalogue is a warning
+    // the operator cannot act on mid-question, on the same stream as a run's
+    // lens check since stdout is the JSON. A pair named in this very command
+    // is a typo, and refusing a typo before it is spent costs nothing.
+    if (!check.ok && (modelArg || effortArg)) {
+      out(check.error);
+      process.exitCode = 2;
+      return;
+    }
     if (!check.ok) process.stderr.write(`⚠ consult: ${check.error}\n`);
   }
   // Without this a consult on a spent account launched, read the repo for
@@ -67,8 +124,8 @@ export default async function consultCommand({ root, rest, out, gatherState, cod
     r = await askCodex({
       question,
       target: root,
-      model: consult.model,
-      effort: consult.effort,
+      model: chosen.model,
+      effort: chosen.effort,
       runDirPath: runDir(root, runId),
       run: runId,
       timeoutMs: config.codex.timeoutMinutes * 60_000,
@@ -79,7 +136,14 @@ export default async function consultCommand({ root, rest, out, gatherState, cod
     // broken since it was probed.
     out(
       JSON.stringify(
-        { runId, answer: "", failed: true, error: err.message },
+        {
+          runId,
+          model: chosen.model,
+          effort: chosen.effort,
+          answer: "",
+          failed: true,
+          error: err.message,
+        },
         null,
         2,
       ),
@@ -89,7 +153,13 @@ export default async function consultCommand({ root, rest, out, gatherState, cod
   }
   // A failed consult says why, and exits non-zero so a caller cannot read
   // an empty answer as one.
-  const result = { runId, answer: r.answer, failed: r.failed };
+  const result = {
+    runId,
+    model: chosen.model,
+    effort: chosen.effort,
+    answer: r.answer,
+    failed: r.failed,
+  };
   if (r.failed) {
     result.error = r.error ?? r.failure?.message;
     if (r.failure?.offer) result.codexUnavailable = unavailable(r.failure);

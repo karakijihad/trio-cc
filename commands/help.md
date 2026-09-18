@@ -104,8 +104,19 @@ name the closest match.
   effort, read live from Codex's own catalogue — a new model appears without
   a Trio update. Lenses ship unpinned (`codex default`); a pinned slug that
   leaves the catalogue is flagged at run start. Consult has its own pair,
-  borrowed from the first enabled lens until set. On the Claude side,
-  `claude.agentModel` and `claude.consultModel` take aliases.
+  borrowed from the first enabled lens until set. `trio consult [--model NAME]
+  [--effort LEVEL] [--] <question>` overrides that pair for one call only —
+  `NAME` matches part of a slug against the live catalogue, an exact slug
+  wins, an ambiguous or unknown one is refused by name before Codex runs
+  whenever that catalogue already has models in it; with none cached yet (a
+  fresh Codex install) the value is passed through as typed, same as a first
+  `trio run` on a pinned lens model. An invalid model/effort pair is refused
+  rather than sent, and either flag given twice is refused too (`--model
+  given twice`) rather than quietly taking the first. `--` ends flag parsing
+  — everything after it is question text, dashes and all, so a question that
+  mentions `--model` reaches Codex whole. Nothing is written; the next
+  consult is back on `codex.consult`. On the Claude side, `claude.agentModel`
+  and `claude.consultModel` take aliases.
 - **Preflight and the drift guard** — before a run, Trio checks Codex is
   installed, logged in, and still accepts the flags Trio depends on. It
   refuses to start with a clear message rather than failing mid-run.
@@ -117,7 +128,7 @@ name the closest match.
 | `/trio`                                                                | Control panel: install/auth state, Codex version, drift, loop settings, every lens, view mode, artifact paths.        |
 | `/trio:on` / `/trio:off`                                               | Enable/disable Trio for this project. `off` stays loaded but dormant — Claude names what it would have sent to Codex. |
 | `/trio:loop [--max N] [--target PATH] [--lenses a,b\|all] [--scope TEXT]` | Run the audit loop. Omit `--lenses` for all five; `--scope` names what the lenses concentrate on.                    |
-| `/trio:consult <question>`                                             | Ask Claude and Codex the same question independently; compare, disagreements named.                                   |
+| `/trio:consult [--model NAME] [--effort LEVEL] [--] <question>`        | Ask Claude and Codex the same question independently; compare, disagreements named. The flags run this one call on a different pair than `codex.consult`, without changing it. |
 | `/trio:cancel`                                                         | Stop the active run: cancellation token, run process stopped, `cancelled` recorded.                                   |
 | `/trio:lenses [preset\|list]`                                          | Interactive picker for which lenses run — preset or custom, this run or saved.                                        |
 | `/trio:model [lens\|consult] [model] [effort]`                         | Interactive picker for a lens's (or consult's) model and reasoning effort, from the live catalogue.                   |
@@ -141,7 +152,7 @@ it thinks," and `trio-solo` when Codex cannot be reached.
 | `codex.parallel`                | `5`                    | Lenses run at once. Wall-clock only, not cost. |
 | `codex.timeoutMinutes`          | `15`                   | How long one lens may run before it is stopped and marked degraded. |
 | `codex.lenses[]`                | 5 entries, all `on`    | `{name, model, effort, on}` per lens; `model` ships `null` (Codex CLI default). |
-| `codex.consult`                 | `{model: null, effort: "high"}` | What `trio consult` runs on; a null field borrows the first enabled lens's (the first lens's if all are off). |
+| `codex.consult`                 | `{model: null, effort: "high"}` | What `trio consult` runs on; a null field borrows the first enabled lens's (the first lens's if all are off). `--model`/`--effort` on the command override this for one call, unsaved. |
 | `claude.agentModel`             | `null`                 | `sonnet`/`opus`/`haiku`/`fable` for trio-lens and trio-reconciler subagents; null keeps Sonnet. |
 | `claude.consultModel`           | `null`                 | Alias the Claude half of a consult is answered on; null answers in session. |
 | `view.mode`                     | `window`               | `window` opens a browser · `pane` prints the viewer URL to open yourself · `off`. |

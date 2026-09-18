@@ -4,6 +4,15 @@ What went wrong, and what was done about it. One line each, newest first.
 
 ---
 
+## 2026-09-18 — naming the model at the call
+
+- **A consult could only run on the model its project had configured.** Changing it meant `/trio:model consult` first, which then stuck. `trio consult` takes `--model NAME` (any part of a slug, resolved against the live catalogue) and `--effort LEVEL` for one call, saving neither.
+- **The Claude half of a consult reported `model = null` and nobody could see why.** `claude.consultModel` is per project and ships null, so a value set in one repo says nothing about the next. The answer's JSON now carries the `model` and `effort` that produced it, and the skill names them in the headings.
+- **The first cut of the flag guard would have refused a question containing `-1`.** Only a long flag is refused wherever it stands; a leading dash of any shape is still a mistyped flag.
+- **A question containing the literal `--model` lost the word after it.** `consult explain what --model does in trio` read `does` as the model and dropped it; a question is free text, so no guard can tell a flag from a word about one. A bare `--` now ends flag parsing. Found by the auditor lens in a solo audit.
+- **A flag given twice applied the first and said nothing**, so correcting a typo by retyping `--model` spent the consult on the model being replaced. Refused now, as `trio lens` has always refused it.
+- **The refusal was documented as unconditional and is not.** With no model catalogue yet — a Codex install that has never written one — the name goes through unresolved, the same way `trio run` passes a pinned lens model through rather than blocking a first run. The claim carries the condition now.
+
 ## 2026-09-15 — auditing the release that fixed the review
 
 - **The viewer's own resume fix could skip events.** One SSE `id` per flushed batch meant a client that dropped after the first event already held the batch's end, and reconnected past events it never received. Each event carries its own byte offset now; the test that shipped green seeded a single event, which cannot tell the two apart.
