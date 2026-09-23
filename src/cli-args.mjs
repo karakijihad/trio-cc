@@ -23,7 +23,7 @@ export const USAGE = `trio — Codex as a read-only second reviewer.
                                     this call only
   trio config get | set <key> <value>
   trio lens <name> [on|off] [model <slug>] [effort <level>]
-  trio models [--json]              Codex models and which lens uses each
+  trio models [--json] [--apply]    Codex models, which lens uses each, and swaps to apply
   trio promote [runId] [--create]   copy a finished run into artifacts.promoteTo
   trio serve [runId] [--auto-exit]  start the viewer
   trio render [runId]               write a static HTML report

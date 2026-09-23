@@ -35,7 +35,8 @@ somebody has to spend time disproving it.
 `{"findings":[]}` is a real answer and an honest one. Reaching it without
 having read the code is not — it is a shrug wearing an audit's clothes.
 
-Severity: `critical` (breaks the system), `major` (significant risk or
+Severity: `critical` (breaks the system, or silently corrupts its state or
+bypasses a safety invariant while looking fine), `major` (significant risk or
 instability), `minor` (improvement, not blocking), `info` (note).
 
 ## How to end

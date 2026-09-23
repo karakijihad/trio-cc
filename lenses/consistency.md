@@ -9,6 +9,10 @@ the code does not honour.
 
 Do not modify anything.
 
+State the condition under which the drift actually bites — one branch, one
+flag, one caller — rather than its worst case. An accurate mechanism with an
+overstated consequence is a wrong finding.
+
 Report only what you can point at. If you cannot cite the file and line that
 proves a finding, leave it out — a false finding costs more than a missed one,
 because someone has to disprove it. Finding nothing is a good answer.

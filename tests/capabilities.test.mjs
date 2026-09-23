@@ -15,6 +15,9 @@ import {
   isFresh,
   probeState,
   modelsReport,
+  parseCodexDefault,
+  modelProposals,
+  applyProposals,
   REQUIRED_FLAGS,
 } from "../src/capabilities.mjs";
 import { DEFAULT_CONFIG } from "../src/config.mjs";
@@ -507,4 +510,111 @@ test("modelsReport tolerates null caps (probe never succeeded)", () => {
 test("modelsReport says what consult runs on", () => {
   const r = modelsReport(null, DEFAULT_CONFIG);
   assert.deepEqual(r.consult, { model: null, effort: "high" });
+});
+
+test("parseModelsCache carries a retiring model's upgrade", () => {
+  const [m] = parseModelsCache({
+    models: [
+      {
+        slug: "old",
+        supported_reasoning_levels: [],
+        upgrade: { model: "new", retirement_at: "2026-10-14T19:00:00Z" },
+      },
+    ],
+  });
+  assert.equal(m.upgrade, "new");
+  assert.equal(m.retiresAt, "2026-10-14T19:00:00Z");
+});
+
+test("parseCodexDefault reads only top-level keys", () => {
+  assert.deepEqual(
+    parseCodexDefault('model = "a"\nmodel_reasoning_effort = "high"\n[profiles.x]\nmodel = "b"\n'),
+    { model: "a", effort: "high" },
+  );
+  assert.deepEqual(parseCodexDefault('[x]\nmodel = "b"\n'), {
+    model: null,
+    effort: null,
+  });
+});
+
+const PCAPS = {
+  defaultModel: "new",
+  defaultEffort: "high",
+  models: [
+    { slug: "top", efforts: ["low", "medium"], defaultEffort: "low" },
+    { slug: "new", efforts: ["medium", "high"], defaultEffort: "medium" },
+    {
+      slug: "old",
+      efforts: ["xhigh"],
+      defaultEffort: "xhigh",
+      upgrade: "top",
+      retiresAt: "2026-10-14T19:00:00Z",
+    },
+  ],
+};
+const pconfig = (lenses, consult = { model: "new", effort: "high" }) => ({
+  codex: { lenses, consult },
+});
+
+test("modelProposals: unpinned goes to Codex's default, keeping effort", () => {
+  const [p] = modelProposals(
+    PCAPS,
+    pconfig([{ name: "auditor", model: null, effort: "medium" }]),
+  );
+  assert.deepEqual(p, {
+    name: "auditor",
+    from: null,
+    to: "new",
+    effort: "medium",
+    why: "unpinned",
+  });
+});
+
+test("modelProposals: retiring goes to its upgrade, effort falls back", () => {
+  const [p] = modelProposals(
+    PCAPS,
+    pconfig([{ name: "auditor", model: "old", effort: "xhigh" }]),
+  );
+  assert.equal(p.to, "top");
+  assert.equal(p.effort, "low");
+  assert.equal(p.why, "retires 2026-10-14");
+});
+
+test("modelProposals: a vanished model and an unpinned consult are both proposed", () => {
+  const ps = modelProposals(
+    PCAPS,
+    pconfig([{ name: "auditor", model: "gone", effort: "medium" }], {
+      model: null,
+      effort: "high",
+    }),
+  );
+  assert.deepEqual(
+    ps.map((p) => [p.name, p.to, p.why]),
+    [
+      ["auditor", "new", "not in the Codex catalogue"],
+      ["consult", "new", "unpinned"],
+    ],
+  );
+});
+
+test("modelProposals: current pins and an empty catalogue propose nothing", () => {
+  const cfg = pconfig([{ name: "auditor", model: "top", effort: "low" }]);
+  assert.deepEqual(modelProposals(PCAPS, cfg), []);
+  assert.deepEqual(modelProposals({ models: [] }, pconfig([])), []);
+});
+
+test("applyProposals writes model and effort into lens and consult", () => {
+  const cfg = pconfig([{ name: "auditor", model: null, effort: "medium", on: true }], {
+    model: null,
+    effort: "high",
+  });
+  const next = applyProposals(cfg, modelProposals(PCAPS, cfg));
+  assert.deepEqual(next.codex.lenses[0], {
+    name: "auditor",
+    model: "new",
+    effort: "medium",
+    on: true,
+  });
+  assert.deepEqual(next.codex.consult, { model: "new", effort: "high" });
+  assert.equal(cfg.codex.lenses[0].model, null, "input is not mutated");
 });

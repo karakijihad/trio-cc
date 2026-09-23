@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { main } from "../src/session-context.mjs";
-import { trioDir, configPath } from "../src/paths.mjs";
+import { trioDir, configPath, capabilitiesPath } from "../src/paths.mjs";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "trio-session-"));
 
@@ -32,4 +32,25 @@ test("an unreadable config gets nothing", () => {
   const root = tmp();
   configure(root, "{not json");
   assert.equal(main(root), null);
+});
+
+test("an unpinned project is offered the models capabilities name", () => {
+  const root = tmp();
+  mkdirSync(trioDir(root), { recursive: true });
+  writeFileSync(
+    capabilitiesPath(root),
+    JSON.stringify({
+      defaultModel: "m1",
+      models: [{ slug: "m1", efforts: ["medium", "high"], defaultEffort: "medium" }],
+    }),
+  );
+  const text = main(root);
+  assert.match(text, /Trio model check/);
+  assert.match(text, /auditor {2}codex default → m1 · medium {2}\(unpinned\)/);
+  assert.match(text, /consult {2}codex default → m1 · high/);
+  assert.match(text, /models --apply/);
+});
+
+test("no cached capabilities means no model check", () => {
+  assert.doesNotMatch(main(tmp()), /model check/);
 });

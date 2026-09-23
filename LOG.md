@@ -4,6 +4,14 @@ What went wrong, and what was done about it. One line each, newest first.
 
 ---
 
+## 2026-09-23 — models that go stale, runs that pile up
+
+- **A retiring Codex model was invisible until a run failed on it.** Codex's model cache names a replacement and a date (`gpt-5.5 → gpt-5.6-sol, retires 2026-10-14`); Trio dropped both. The probe keeps them now, and SessionStart lists every lens and consult that is unpinned, gone or retiring with its replacement, for `trio models --apply`.
+- **An unpinned consult said `null` until Codex had already answered.** The CLI's default lives in `~/.codex/config.toml`, which Trio never read; the probe records it, and it is what an unpinned slot is offered.
+- **`.trio/runs` only grew.** Runs untouched for `artifacts.archiveAfterDays` (7) move to `.trio/archive/<week>/` at session start. Age is the run directory's mtime; the active run never moves.
+- **Six of seven escalated auditor findings were `major → critical` by hand**, every one a silently bypassed lock, cancel path or validation gate. The rubric's "breaks the system" never covered that; it does now. The auditor and consistency briefs both claimed "wiring", which is where 6 of 9 cross-lens agreements came from, so it belongs to consistency alone.
+- **A scoped lens reported untouched lines in scoped files as new.** Three downgrades in one run were pre-existing defects; the scope brief now asks for those to be labelled as such.
+
 ## 2026-09-18 — naming the model at the call
 
 - **A consult could only run on the model its project had configured.** Changing it meant `/trio:model consult` first, which then stuck. `trio consult` takes `--model NAME` (any part of a slug, resolved against the live catalogue) and `--effort LEVEL` for one call, saving neither.

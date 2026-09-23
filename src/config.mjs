@@ -63,8 +63,10 @@ export const DEFAULT_CONFIG = Object.freeze({
   // offerToCreate: promotion needs artifacts.promoteTo to exist, and Trio does
   // not create directory trees in a project uninvited. When it is missing, a
   // finished run says so and Claude offers to create it once; answering no
-  // sets this false and the offer never comes back.
-  artifacts: { promoteTo: "Docs/Audit", offerToCreate: true },
+  // sets this false and the offer never comes back. archiveAfterDays: at
+  // session start, runs untouched this long move to .trio/archive/<week>/;
+  // null keeps every run in .trio/runs.
+  artifacts: { promoteTo: "Docs/Audit", offerToCreate: true, archiveAfterDays: 7 },
 });
 
 // Only modes with a production handler are offered. Raw runs always live under
@@ -83,6 +85,7 @@ const NULLABLE = new Set([
   "codex.consult.effort",
   "claude.agentModel",
   "claude.consultModel",
+  "artifacts.archiveAfterDays",
 ]);
 
 const POSITIVE_INTEGERS = new Set([
@@ -90,6 +93,7 @@ const POSITIVE_INTEGERS = new Set([
   "codex.parallel",
   "codex.timeoutMinutes",
   "view.port",
+  "artifacts.archiveAfterDays",
 ]);
 
 const MAX_PORT = 65535;
@@ -146,6 +150,7 @@ export function configErrors(cfg) {
     ];
   for (const key of POSITIVE_INTEGERS) {
     const v = at(cfg, key);
+    if (v === null && NULLABLE.has(key)) continue;
     if (!Number.isSafeInteger(v) || v < 1)
       errors.push(
         `${key} must be a positive whole number, got: ${JSON.stringify(v)}`,

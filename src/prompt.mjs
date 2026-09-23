@@ -184,7 +184,9 @@ function renderScopeSection(scope) {
     `Concentrate on: ${scope}\n\n` +
     "Read whatever else you need to judge these correctly — callers, tests, " +
     "config. Report defects outside this scope only when they are why " +
-    "something in it is wrong."
+    "something in it is wrong. A defect inside it that the change neither " +
+    "introduces nor worsens is real but predates this work: say so in its " +
+    "evidence rather than reporting it as new."
   );
 }
 

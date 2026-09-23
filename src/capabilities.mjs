@@ -24,7 +24,74 @@ export function parseModelsCache(cache) {
       displayName: m.display_name ?? m.slug,
       defaultEffort: m.default_reasoning_level ?? "medium",
       efforts: (m.supported_reasoning_levels ?? []).map((l) => l.effort),
+      // OpenAI marks a model on its way out with the one that replaces it.
+      upgrade: m.upgrade?.model ?? null,
+      retiresAt: m.upgrade?.retirement_at ?? null,
     }));
+}
+
+// The model Codex runs when none is passed: the top-level `model` key of its
+// config.toml. Read line by line rather than parsed — only the keys before
+// the first [table] are top level, and that is all this needs.
+export function parseCodexDefault(toml) {
+  const top = String(toml ?? "").split(/^\s*\[/m)[0];
+  const key = (k) =>
+    (top.match(new RegExp(`^[ \\t]*${k}[ \\t]*=[ \\t]*"([^"]+)"`, "m")) ?? [])[1] ?? null;
+  return { model: key("model"), effort: key("model_reasoning_effort") };
+}
+
+// Every slot that runs Codex — the lenses and consult — whose model should be
+// swapped: unpinned (so nobody can say which model answered), gone from the
+// catalogue, or marked for retirement. The replacement is the retiring
+// model's named upgrade, else Codex's own default, else the catalogue's first
+// entry. Effort is kept where the new model supports it. Nothing is written
+// here; `trio models --apply` is what applies these.
+export function modelProposals(caps, config) {
+  const models = caps?.models ?? [];
+  if (!models.length) return [];
+  const find = (slug) => models.find((m) => m.slug === slug);
+  const fallback = find(caps.defaultModel) ?? models[0];
+  const slots = [
+    ...(config.codex?.lenses ?? []).map((l) => ({ name: l.name, ...l })),
+    { name: "consult", ...config.codex?.consult },
+  ];
+  const out = [];
+  for (const { name, model, effort } of slots) {
+    const current = model ? find(model) : null;
+    let why;
+    let to = fallback;
+    if (!model) why = "unpinned";
+    else if (!current) why = "not in the Codex catalogue";
+    else if (current.upgrade) {
+      why = `retires ${current.retiresAt?.slice(0, 10) ?? "soon"}`;
+      to = find(current.upgrade) ?? fallback;
+    } else continue;
+    if (to.slug === model) continue;
+    const want = effort ?? caps.defaultEffort;
+    out.push({
+      name,
+      from: model ?? null,
+      to: to.slug,
+      effort: to.efforts.includes(want) ? want : to.defaultEffort,
+      why,
+    });
+  }
+  return out;
+}
+
+// Writes the proposals into a config copy. Returns the new config.
+export function applyProposals(config, proposals) {
+  const next = JSON.parse(JSON.stringify(config));
+  for (const p of proposals) {
+    const slot =
+      p.name === "consult"
+        ? next.codex.consult
+        : next.codex.lenses.find((l) => l.name === p.name);
+    if (!slot) continue;
+    slot.model = p.to;
+    slot.effort = p.effort;
+  }
+  return next;
 }
 
 export function parseFlags(helpText) {
@@ -171,10 +238,21 @@ export function probe({ run, cliVersion }) {
     /* absent */
   }
 
+  let codexDefault = { model: null, effort: null };
+  try {
+    codexDefault = parseCodexDefault(
+      readFileSync(join(codexHome(), "config.toml"), "utf8"),
+    );
+  } catch {
+    /* absent */
+  }
+
   const help = run("codex", ["exec", "--help"]);
 
   return {
     cliVersion,
+    defaultModel: codexDefault.model,
+    defaultEffort: codexDefault.effort,
     cacheClientVersion: cache.client_version ?? null,
     models: parseModelsCache(cache),
     flags: parseFlags(help.stdout),

@@ -56,7 +56,8 @@ name the closest match.
   a separate Codex process — running all five costs five times one. Briefs
   live in `lenses/*.md`; a project can override any in `.trio/lenses/`.
 - **Finding** — one reported defect: severity, file, line, evidence, impact,
-  correction. Severities: `critical` (breaks the system), `major`
+  correction. Severities: `critical` (breaks the system, or
+  silently bypasses a safety invariant), `major`
   (significant risk), `minor` (improvement), `info` (note). Only `critical`
   and `major` block convergence by default.
 - **Pass** — one full round: selected lenses audit, findings come back,
@@ -151,7 +152,7 @@ it thinks," and `trio-solo` when Codex cannot be reached.
 | `maxIterations`                 | `2`                    | Pass ceiling.                                  |
 | `codex.parallel`                | `5`                    | Lenses run at once. Wall-clock only, not cost. |
 | `codex.timeoutMinutes`          | `15`                   | How long one lens may run before it is stopped and marked degraded. |
-| `codex.lenses[]`                | 5 entries, all `on`    | `{name, model, effort, on}` per lens; `model` ships `null` (Codex CLI default). |
+| `codex.lenses[]`                | 5 entries, all `on`    | `{name, model, effort, on}` per lens; `model` ships `null` (Codex CLI default). Unpinned, vanished or retiring models are proposed at session start; `trio models --apply` swaps them. |
 | `codex.consult`                 | `{model: null, effort: "high"}` | What `trio consult` runs on; a null field borrows the first enabled lens's (the first lens's if all are off). `--model`/`--effort` on the command override this for one call, unsaved. |
 | `claude.agentModel`             | `null`                 | `sonnet`/`opus`/`haiku`/`fable` for trio-lens and trio-reconciler subagents; null keeps Sonnet. |
 | `claude.consultModel`           | `null`                 | Alias the Claude half of a consult is answered on; null answers in session. |
@@ -162,3 +163,4 @@ it thinks," and `trio-solo` when Codex cannot be reached.
 | `converge.offerExtension`       | `true`                 | Offer one more pass when a run stops at the ceiling with blocking findings open. |
 | `artifacts.offerToCreate`       | `true`                 | Offer to create the promote directory once.    |
 | `artifacts.promoteTo`           | `Docs/Audit`           | Where finished audits are promoted. A relative path inside the project; anything else is refused. |
+| `artifacts.archiveAfterDays`    | `7`                    | Runs untouched this long move to `.trio/archive/<week>/` at session start; `null` = never. |
