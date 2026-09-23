@@ -244,24 +244,29 @@ export function renderReconciliation({
           .join("\n")
       : "_None._",
     "",
-    // Only rendered when the pass itself was never adjudicated — see
-    // isOpenFinding above. `last.unadjudicated` is set once, by
-    // applyAdjudication (src/adjudicate.mjs), the one time it finds live
-    // findings and no verdicts.json for this pass; it is not recomputed here,
-    // so this section and the exclusion from Open findings above can never
-    // disagree about which pass they mean.
-    ...(last.unadjudicated
+    // Every pass that advanced unadjudicated, not only the last: an earlier
+    // pass pushed on with --unadjudicated and a later one adjudicated
+    // normally would otherwise vanish from the report. `unadjudicated` is set
+    // once per pass by applyAdjudication (src/adjudicate.mjs) and not
+    // recomputed here; only the last pass's findings are also kept out of
+    // Open findings above, since earlier passes' findings were re-audited.
+    ...(passes.some((p) => p.unadjudicated)
       ? [
           "## Never adjudicated",
           "",
-          `${last.findings.filter((f) => f.verdict === UNREVIEWED).length} findings were never adjudicated — ` +
-            `pass ${last.pass} advanced with no pass-${last.pass}/verdicts.json, so nothing below has been checked against the code.`,
-          "",
-          last.findings
-            .filter((f) => f.verdict === UNREVIEWED)
-            .map((f) => `- **${f.severity}** \`${f.file}\` — ${f.title} (\`${f.id}\`)`)
-            .join("\n"),
-          "",
+          ...passes
+            .filter((p) => p.unadjudicated)
+            .flatMap((p) => {
+              const unchecked = p.findings.filter((f) => f.verdict === UNREVIEWED);
+              return [
+                `Pass ${p.pass} advanced with no pass-${p.pass}/verdicts.json: ${unchecked.length} findings were never checked against the code.`,
+                "",
+                unchecked
+                  .map((f) => `- **${f.severity}** \`${f.file}\` — ${f.title} (\`${f.id}\`)`)
+                  .join("\n"),
+                "",
+              ];
+            }),
         ]
       : []),
     ...(last.findings.some((f) => f.verdict === "duplicate")

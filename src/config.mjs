@@ -170,6 +170,17 @@ export function configErrors(cfg) {
     );
   else if (lenses.some((l) => !l || typeof l.name !== "string" || !l.name))
     errors.push("every entry in codex.lenses needs a name");
+  // Names are how a lens is addressed — by `trio lens`, --lenses and
+  // `trio models --apply` — so two lenses sharing one, or one named like the
+  // consult slot, would have a change land on the wrong entry.
+  else {
+    const names = lenses.map((l) => l.name);
+    const twice = names.filter((n, i) => names.indexOf(n) !== i);
+    if (twice.length)
+      errors.push(`codex.lenses names must be unique, repeated: ${[...new Set(twice)].join(", ")}`);
+    if (names.includes("consult"))
+      errors.push('"consult" is reserved for codex.consult and cannot name a lens');
+  }
 
   // `"consult": null` survives merge the same way and would crash consult.
   const consult = at(cfg, "codex.consult");

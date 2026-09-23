@@ -371,3 +371,14 @@ test("codexHome honours CODEX_HOME", () => {
   if (prev === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = prev;
 });
+
+test("lens names must be unique and cannot be consult", () => {
+  const base = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
+  const dup = JSON.parse(JSON.stringify(base));
+  dup.codex.lenses[1].name = "auditor";
+  assert.ok(configErrors(dup).some((e) => /unique, repeated: auditor/.test(e)));
+  const reserved = JSON.parse(JSON.stringify(base));
+  reserved.codex.lenses[0].name = "consult";
+  assert.ok(configErrors(reserved).some((e) => /"consult" is reserved/.test(e)));
+  assert.deepEqual(configErrors(base), []);
+});

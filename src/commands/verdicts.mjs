@@ -4,6 +4,7 @@ import { passDir, isRunId } from "../paths.mjs";
 import { readMarker } from "../marker.mjs";
 import { parseVerdictsInput, validateVerdicts } from "../reconcile.mjs";
 import { flagValue } from "../cli-args.mjs";
+import { isLive } from "../findings.mjs";
 
 // The write boundary for adjudication. verdicts.json used to be written by
 // hand from a subagent's reply — and a reply that came back as prose, with
@@ -86,6 +87,15 @@ export default function verdictsCommand({ root, rest, out, activeRun }) {
   for (const r of checked.renamed)
     process.stderr.write(`  normalized ${r.id}: ${r.from} → ${r.to}\n`);
   for (const w of checked.warnings) process.stderr.write(`  ⚠ ${w}\n`);
+  // A partial set is written — it is still adjudication — but `continue` and
+  // `extend` refuse a pass whose live findings are not all covered, so say
+  // which now rather than at that refusal.
+  const judged = new Set(checked.verdicts.map((v) => v.id));
+  const missing = findings.filter((f) => isLive(f) && !judged.has(f.id));
+  if (missing.length)
+    process.stderr.write(
+      `  ⚠ ${missing.length} live finding(s) still have no verdict: ${missing.map((f) => f.id).join(", ")} — continue will refuse until they do\n`,
+    );
   out(
     `Accepted ${checked.verdicts.length} verdict(s) for ${runId} pass ${pass}.`,
   );

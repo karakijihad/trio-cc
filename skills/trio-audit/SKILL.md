@@ -48,8 +48,8 @@ not retry in a tight loop, and do not take it as license to cancel someone
 else's audit.
 
 `continue` and `extend` also exit **2** and touch nothing when the pass they
-would advance past has live findings and no `pass-N/verdicts.json` — nobody
-has adjudicated it. This is not optional to work around: dispatch the
+would advance past has live findings without a verdict in
+`pass-N/verdicts.json` — none at all, or a file that leaves some out. This is not optional to work around: dispatch the
 `trio-reconciler` agent and write its reply with
 `trio verdicts <runId> <pass>` as step 2a below already describes, then retry.
 Only pass `--unadjudicated` when the operator explicitly wants to advance

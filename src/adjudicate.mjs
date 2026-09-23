@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { diffPasses, isConverged, isLive } from "./findings.mjs";
+import { diffPasses, isConverged, isLive, UNREVIEWED } from "./findings.mjs";
 import { applyVerdicts, VERDICTS } from "./reconcile.mjs";
 import { makeEvent, appendEvent } from "./bus.mjs";
 import { runDir, passDir } from "./paths.mjs";
@@ -137,10 +137,36 @@ export function applyAdjudication({ root, config, runId, pass, record }) {
     );
   }
 
+  // A verdicts file that leaves live findings out — reachable only past the
+  // gate with --unadjudicated — is a partly unadjudicated pass, and gets the
+  // same mark a missing file does so the report lists what nobody judged.
+  const unjudged = findings.filter((f) => isLive(f) && f.verdict === UNREVIEWED);
+  const partial = unjudged.length > 0 && !record.unadjudicated;
+  if (partial)
+    appendEvent(
+      runDir(root, runId),
+      makeEvent({
+        run: runId,
+        pass,
+        lane: "trio",
+        actor: "trio",
+        kind: "warning",
+        payload: {
+          warning: `pass ${pass} verdicts.json left ${unjudged.length} live finding(s) without a verdict`,
+          live: unjudged.length,
+        },
+      }),
+    );
+
   const prevFindings =
     pass > 1 ? readReconcile(root, runId, pass - 1).findings : [];
   const diff = diffPasses(prevFindings, findings);
-  const updated = scrubDeep({ ...record, findings, diff });
+  const updated = scrubDeep({
+    ...record,
+    findings,
+    diff,
+    ...(partial ? { unadjudicated: true } : {}),
+  });
   writeFileSync(
     join(passDir(root, runId, pass), "reconcile.json"),
     JSON.stringify(updated, null, 2) + "\n",

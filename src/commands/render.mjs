@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { runDir, isRunId } from "../paths.mjs";
+import { archivedHint } from "../archive.mjs";
 
 // `trio render [runId]` — the id is advertised as optional, and with no
 // active run this used to throw ENOENT as a raw stack trace.
@@ -19,7 +20,7 @@ export default async function renderCommand({ root, rest, out, activeRun, latest
     return;
   }
   if (!existsSync(runDir(root, runId))) {
-    out(`No such run: ${runId}`);
+    out(`No such run: ${runId}.${archivedHint(root, runId)}`);
     process.exitCode = 1;
     return;
   }

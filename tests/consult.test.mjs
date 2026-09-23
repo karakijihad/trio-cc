@@ -201,3 +201,26 @@ test("trio consult marks run.json failed when Codex exits non-zero", () => {
   assert.equal(json.failed, true);
   assert.match(json.finishedAt, /^\d{4}-\d{2}-\d{2}T/);
 });
+
+test("two consults minted in the same second get separate directories", async () => {
+  const { claimConsultDir } = await import("../src/commands/consult.mjs");
+  const { mkdtempSync, existsSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { runDir } = await import("../src/paths.mjs");
+  const root = mkdtempSync(join(tmpdir(), "trio-consult-id-"));
+  const base = "consult-2026-09-23T20-20-24";
+  const a = claimConsultDir(root, base);
+  const b = claimConsultDir(root, base);
+  assert.equal(a, base);
+  assert.equal(b, `${base}-2`);
+  assert.ok(existsSync(runDir(root, a)) && existsSync(runDir(root, b)));
+});
+
+test("trio consult ignores .trio/ in a git checkout before persisting the question", () => {
+  const { root, cli } = consultProject();
+  mkdirSync(join(root, ".git"));
+  const res = cli(["consult", "is this sound?"]);
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(readFileSync(join(root, ".gitignore"), "utf8"), /^\.trio\/$/m);
+});

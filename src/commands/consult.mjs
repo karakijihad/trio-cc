@@ -13,7 +13,7 @@ import {
   unknownFlags,
   valuelessFlags,
 } from "../cli-args.mjs";
-import { runDir } from "../paths.mjs";
+import { runDir, runsDir } from "../paths.mjs";
 import { newRunId } from "../orchestrator.mjs";
 
 // Resolved relative to this module, not cwd — `trio` runs from whatever
@@ -61,8 +61,25 @@ function finishRunJson(path, failed) {
   }
 }
 
+// Run ids have second precision, and two consults in one second (two
+// sessions, or one asking twice) would share a directory and overwrite each
+// other's run.json. The non-recursive mkdir is the claim: EEXIST means taken,
+// so try the next suffix — the same -N shape uniqueRunId gives an audit run.
+export function claimConsultDir(root, base) {
+  mkdirSync(runsDir(root), { recursive: true });
+  for (let n = 1; ; n++) {
+    const id = n === 1 ? base : `${base}-${n}`;
+    try {
+      mkdirSync(runDir(root, id));
+      return id;
+    } catch (err) {
+      if (err.code !== "EEXIST") throw err;
+    }
+  }
+}
+
 // `trio consult <question>`
-export default async function consultCommand({ root, rest, out, gatherState, codexRefusal, unavailable }) {
+export default async function consultCommand({ root, rest, out, gatherState, codexRefusal, unavailable, ensureGitignore }) {
   // Usage before probing, for the same reason as `run`. An unrecognised dash
   // is a mistyped flag, not part of the question — asking Codex "--help"
   // costs real money, and so does a question with a dropped flag in it.
@@ -163,8 +180,10 @@ export default async function consultCommand({ root, rest, out, gatherState, cod
     return;
   }
 
-  const runId = `consult-${newRunId()}`;
-  mkdirSync(runDir(root, runId), { recursive: true });
+  // run.json below keeps the question verbatim, and a question can carry
+  // anything the operator pasted — so .trio/ is ignored first, as run does.
+  ensureGitignore?.();
+  const runId = claimConsultDir(root, `consult-${newRunId()}`);
   const runJsonPath = join(runDir(root, runId), "run.json");
   writeStartedRunJson(runJsonPath, {
     runId,

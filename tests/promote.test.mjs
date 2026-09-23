@@ -698,7 +698,7 @@ test("an unadjudicated pass's findings are named in their own section, not Open 
     "an unadjudicated finding must not also read as an open finding",
   );
   assert.match(out, /## Never adjudicated/);
-  assert.match(out, /2 findings were never adjudicated/);
+  assert.match(out, /Pass 3 advanced with no pass-3\/verdicts\.json: 2 findings were never checked/);
   assert.match(out, /never looked at/);
   assert.match(out, /also never looked at/);
   const openBlock = out.split("## Open findings")[1].split("## Never adjudicated")[0];
@@ -750,4 +750,18 @@ test("no fixedUnverified line when nothing was fixed after the last pass", () =>
     passes: [PASS],
   });
   assert.doesNotMatch(out, /not re-audited/);
+});
+
+test("an earlier pass advanced unadjudicated is still reported after a later adjudicated pass", () => {
+  const earlier = { ...unadjudicatedPass(), pass: 1 };
+  const later = { ...unadjudicatedPass(), pass: 2, unadjudicated: false, findings: [] };
+  const out = renderReconciliation({
+    runId: "r1",
+    date: "2026-08-05",
+    verdict: "ceiling_reached",
+    passes: [earlier, later],
+  });
+  assert.match(out, /## Never adjudicated/);
+  assert.match(out, /Pass 1 advanced with no pass-1\/verdicts.json: 2 findings/);
+  assert.match(out, /never looked at/);
 });

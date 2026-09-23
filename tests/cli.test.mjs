@@ -833,3 +833,56 @@ test("a repeated flag is refused before Codex is spawned at all", () => {
   assert.match(r.stdout, /--model given twice/);
   assert.equal(existsSync(touched), false, "Codex must not be invoked at all");
 });
+
+// A fresh cached probe, so `models` reads this catalogue instead of the fake
+// Codex's — the cached path never spawns anything.
+const withCaps = (root) => {
+  mkdirSync(join(root, ".trio"), { recursive: true });
+  writeFileSync(
+    join(root, ".trio", "capabilities.json"),
+    JSON.stringify({
+      cliVersion: "1.0.0",
+      cacheClientVersion: "1.0.0",
+      defaultModel: "m1",
+      models: [{ slug: "m1", displayName: "M1", defaultEffort: "medium", efforts: ["medium", "high"] }],
+      flags: [],
+      authMode: "chatgpt",
+      probedAt: new Date().toISOString(),
+      preflight: { state: "ready", message: "", fix: "" },
+    }),
+  );
+};
+
+test("models --apply --json writes the proposals and answers in JSON", () => {
+  const root = project();
+  withCaps(root);
+  const r = trio(root, ["models", "--apply", "--json"]);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const out = JSON.parse(r.stdout);
+  assert.deepEqual(
+    out.applied.map((p) => [p.name, p.to]),
+    ["auditor", "security", "tester", "simplifier", "consistency", "consult"].map((n) => [n, "m1"]),
+  );
+  const cfg = JSON.parse(readFileSync(join(root, ".trio", "config.json"), "utf8"));
+  assert.equal(cfg.codex.consult.model, "m1");
+  const again = JSON.parse(trio(root, ["models", "--apply", "--json"]).stdout);
+  assert.deepEqual(again.applied, []);
+});
+
+test("models refuses an unknown argument before touching the config", () => {
+  const root = project();
+  withCaps(root);
+  const r = trio(root, ["models", "--apply", "--typo"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stdout, /unknown argument: --typo/);
+  assert.equal(existsSync(join(root, ".trio", "config.json")), false);
+});
+
+test("render points at the archive when the run was archived", () => {
+  const root = project();
+  const dir = join(root, ".trio", "archive", "2026-W01", "2026-01-01T00-00-00");
+  mkdirSync(dir, { recursive: true });
+  const r = trio(root, ["render", "2026-01-01T00-00-00"]);
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /No such run: 2026-01-01T00-00-00\. It was archived to .*2026-W01/);
+});

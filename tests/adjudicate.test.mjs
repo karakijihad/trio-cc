@@ -277,3 +277,20 @@ test("applying to an already-marked unadjudicated pass is idempotent", () => {
   assert.equal(second.record.unadjudicated, true);
   assert.equal(warnings(root, runId).length, 1, "no second warning on the same mark");
 });
+
+test("a verdicts.json that leaves a live finding out marks the pass unadjudicated", () => {
+  const { root, runId } = setupUnadjudicated();
+  writeFileSync(
+    join(passDir(root, runId, 1), "verdicts.json"),
+    JSON.stringify({ verdicts: [{ id: "a1", verdict: "confirm", basis: "x" }] }),
+  );
+  const { record: updated } = applyAdjudication({
+    root,
+    config: config(),
+    runId,
+    pass: 1,
+    record: record([finding("a1"), finding("a2")]),
+  });
+  assert.equal(updated.unadjudicated, true);
+  assert.match(warnings(root, runId)[0].payload.warning, /left 1 live finding/);
+});

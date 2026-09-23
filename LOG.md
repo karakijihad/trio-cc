@@ -4,6 +4,17 @@ What went wrong, and what was done about it. One line each, newest first.
 
 ---
 
+## 2026-09-23 — auditing the release before it shipped
+
+A three-lens Codex audit (auditor, security, consistency) over three passes; 13 findings confirmed, 12 fixed, one out of scope.
+
+- **The adjudication gate checked that verdicts.json existed, not what it said.** `{"verdicts": []}`, or an entry with no recognised verdict, let a pass through unjudged. The gate now needs a real verdict for every live finding; a partial file is marked unadjudicated if forced past, and `trio verdicts` warns which findings it left out.
+- **The archive hook could be pointed outside the project.** A link at `.trio/archive` redirected where runs went, and a link at `.trio/runs` made it move whatever that pointed at. Both ends are held to real paths inside `.trio/`.
+- **Model proposals put project-local text into SessionStart context verbatim.** A lens name or cached slug with a newline could carry instructions; anything that is not a plain token is dropped. Lens names must now be unique and cannot be `consult`, which `--apply` addresses by name.
+- **An archived run read as one that never existed.** `extend`, `promote`, `serve` and `render` now say where it went.
+- **Smaller:** `models --apply` refuses unknown arguments and honours `--json`; two consults in one second no longer share a directory; consult ignores `.trio/` before writing the question to disk; the promoted report lists every unadjudicated pass, not only the last.
+- **Not fixed here:** run directories are written by plain join everywhere, so a linked `.trio/runs` still redirects where a run or consult writes. That predates this release and belongs to the shared path helpers.
+
 ## 2026-09-23 — what 145 audits of another project showed
 
 - **A quarter of runs advanced past a pass nobody adjudicated.** 38 of 145, and 10 reached `ceiling_reached` never adjudicated once; the promoted report filed their unreviewed findings under Open beside confirmed ones. `continue` and `extend` refuse that now unless told `--unadjudicated`, which is recorded, and the report lists those findings on their own.

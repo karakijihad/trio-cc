@@ -46,8 +46,18 @@ export function parseCodexDefault(toml) {
 // model's named upgrade, else Codex's own default, else the catalogue's first
 // entry. Effort is kept where the new model supports it. Nothing is written
 // here; `trio models --apply` is what applies these.
+//
+// Every value here ends up in SessionStart context Claude reads as guidance,
+// and both sources are project-local files anyone with the checkout can
+// edit — so a name, slug or effort that is not a plain token drops out
+// rather than carrying a newline and an instruction into that text.
+const TOKEN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/;
+const isToken = (v) => typeof v === "string" && TOKEN.test(v);
+
 export function modelProposals(caps, config) {
-  const models = caps?.models ?? [];
+  const models = (caps?.models ?? []).filter(
+    (m) => isToken(m?.slug) && (m.efforts ?? []).every(isToken) && isToken(m.defaultEffort),
+  );
   if (!models.length) return [];
   const find = (slug) => models.find((m) => m.slug === slug);
   const fallback = find(caps.defaultModel) ?? models[0];
@@ -57,17 +67,20 @@ export function modelProposals(caps, config) {
   ];
   const out = [];
   for (const { name, model, effort } of slots) {
+    if (!isToken(name) || (model != null && !isToken(model))) continue;
+    if (effort != null && !isToken(effort)) continue;
     const current = model ? find(model) : null;
     let why;
     let to = fallback;
     if (!model) why = "unpinned";
     else if (!current) why = "not in the Codex catalogue";
     else if (current.upgrade) {
-      why = `retires ${current.retiresAt?.slice(0, 10) ?? "soon"}`;
+      const date = String(current.retiresAt ?? "").slice(0, 10);
+      why = `retires ${/^\d{4}-\d{2}-\d{2}$/.test(date) ? date : "soon"}`;
       to = find(current.upgrade) ?? fallback;
     } else continue;
     if (to.slug === model) continue;
-    const want = effort ?? caps.defaultEffort;
+    const want = effort ?? (isToken(caps.defaultEffort) ? caps.defaultEffort : null);
     out.push({
       name,
       from: model ?? null,

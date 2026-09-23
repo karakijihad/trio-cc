@@ -1687,3 +1687,34 @@ test("continueRun: a codexRefusal that reports available proceeds as before, and
   assert.equal(r.verdict, "clean");
   assert.equal(call, 2, "pass 2's lens actually ran once the check passed");
 });
+
+test("adjudicationGate: an empty verdicts.json is not adjudication", async () => {
+  const { adjudicationGate } = await import("../src/driver.mjs");
+  const root = tmp();
+  const started = await startRun({
+    root,
+    config: cfg({ maxIterations: 2 }),
+    target: "/repo",
+    runLensFn: okLens([finding("leak")]),
+  });
+  writeFileSync(join(passDir(root, started.runId, 1), "verdicts.json"), JSON.stringify({ verdicts: [] }));
+  const gate = adjudicationGate({ root, runId: started.runId, pass: 1 });
+  assert.ok(gate);
+  assert.equal(gate.live, 1);
+});
+
+test("adjudicationGate: an entry with no recognised verdict is not coverage", async () => {
+  const { adjudicationGate } = await import("../src/driver.mjs");
+  const root = tmp();
+  const started = await startRun({
+    root,
+    config: cfg({ maxIterations: 2 }),
+    target: "/repo",
+    runLensFn: okLens([finding("leak")]),
+  });
+  const id = findingId("a.rs", "leak");
+  for (const entry of [{ id }, { id, verdict: "LGTM" }]) {
+    writeFileSync(join(passDir(root, started.runId, 1), "verdicts.json"), JSON.stringify({ verdicts: [entry] }));
+    assert.ok(adjudicationGate({ root, runId: started.runId, pass: 1 }), JSON.stringify(entry));
+  }
+});

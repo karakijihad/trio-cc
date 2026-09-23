@@ -13,6 +13,7 @@ import {
   readReconcile,
   collectPasses,
   applyAdjudication,
+  readVerdictsFile,
 } from "./adjudicate.mjs";
 import { validateFindings, isLive } from "./findings.mjs";
 import { buildSettled } from "./settled.mjs";
@@ -20,6 +21,8 @@ import { codexUnavailable } from "./failure.mjs";
 import { promote, promoteTarget, promotionDir } from "./promote.mjs";
 import { readEvents, makeEvent, appendEvent } from "./bus.mjs";
 import { runDir, passDir, activeMarker, trioDir, isRunId } from "./paths.mjs";
+import { archivedHint } from "./archive.mjs";
+import { VERDICTS } from "./reconcile.mjs";
 import {
   readMarker,
   writeMarker,
@@ -289,15 +292,26 @@ export function adjudicationGate({ root, runId, pass, unadjudicated = false }) {
   } catch {
     return null;
   }
-  if (existsSync(join(passDir(root, runId, pass), "verdicts.json"))) return null;
+  // Coverage, not existence: `{"verdicts": []}` is a file, and every finding
+  // it leaves out stays unreviewed exactly as if there were none.
   const live = (record.findings ?? []).filter(isLive);
-  if (!live.length) return null;
+  // Only a recognised verdict counts: a hand-placed `{id}`, or one with an
+  // invented verdict, is an entry and not a judgement.
+  const judged = new Set(
+    (readVerdictsFile(root, runId, pass)?.verdicts ?? [])
+      .filter((v) => VERDICTS.includes(v?.verdict))
+      .map((v) => v.id),
+  );
+  const unjudged = live.filter((f) => !judged.has(f.id));
+  if (!unjudged.length) return null;
+  const what = judged.size
+    ? `pass-${pass}/verdicts.json leaves ${unjudged.length} of ${live.length} live finding(s) without a verdict`
+    : `${live.length} live finding(s) and no usable pass-${pass}/verdicts.json`;
   return {
     pass,
-    live: live.length,
+    live: unjudged.length,
     error:
-      `Pass ${pass} of ${runId} has ${live.length} live finding(s) and no ` +
-      `pass-${pass}/verdicts.json — nobody has adjudicated it. Dispatch the ` +
+      `Pass ${pass} of ${runId} has ${what} — nobody has adjudicated them. Dispatch the ` +
       `trio-reconciler agent with its findings and write the reply with ` +
       `\`trio verdicts ${runId} ${pass}\`, or pass --unadjudicated to advance anyway.`,
   };
@@ -339,7 +353,10 @@ export function promoteRun({ root, config, runId, create = false }) {
   try {
     verdict = JSON.parse(readFileSync(verdictPath, "utf8")).verdict;
   } catch {
-    return { ok: false, error: `no finished run at ${runId}` };
+    return {
+      ok: false,
+      error: `no finished run at ${runId}.${archivedHint(root, runId)}`,
+    };
   }
 
   // Before the directory is created, not only before writing into it: a
@@ -491,7 +508,10 @@ export function reopenRun({
   try {
     verdict = JSON.parse(readFileSync(verdictPath, "utf8"));
   } catch {
-    return { ok: false, error: `No finished run to extend: ${runId}` };
+    return {
+      ok: false,
+      error: `No finished run to extend: ${runId}.${archivedHint(root, runId)}`,
+    };
   }
   if (verdict.verdict !== "ceiling_reached")
     return {
