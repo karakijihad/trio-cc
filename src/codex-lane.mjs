@@ -1,5 +1,7 @@
 import { spawn as nodeSpawn } from "node:child_process";
 import { createInterface } from "node:readline";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { makeEvent, appendEvent } from "./bus.mjs";
 import { extractFindings } from "./findings.mjs";
 import { classifyFailure } from "./failure.mjs";
@@ -55,6 +57,14 @@ export function mapEvent(ev) {
   if (item.type === "reasoning")
     return { kind: "reasoning", payload: { text: item.text ?? "" } };
   if (item.type === "command_execution") {
+    // `item.started` carries the command and nothing else — no output, no
+    // exit code — because the command has not finished. Mapping it anyway
+    // doubled the event count for no benefit: nothing downstream (the
+    // static or live viewer, the hook emitter) distinguishes an in-progress
+    // command from a completed one, they just render whatever arrives. A
+    // 904 MB sample of real runs was 97% events.jsonl, and this was most of
+    // that.
+    if (ev.type !== "item.completed") return null;
     const output = item.aggregated_output ?? "";
     const truncated = output.length > OUTPUT_CAP;
     return {
@@ -267,6 +277,38 @@ export async function runLens({
   }
 
   if (code !== 0) {
+    // `trio cancel` kills the whole worker tree (see commands/cancel.mjs),
+    // so a cancelled lens's Codex child dies the exact same way any other
+    // non-zero exit would: no error event, nothing useful on stderr.
+    // classifyFailure had no pattern to match and called it "unknown" — 14
+    // of 29 "unknown" failures on record were runs the operator ended on
+    // purpose, not a Codex fault nobody had seen before. The token is
+    // checked before classification, and before the retry, because neither
+    // means anything once the run itself has been called off.
+    if (existsSync(join(runDirPath, "cancelled"))) {
+      appendEvent(
+        runDirPath,
+        makeEvent({
+          run,
+          pass,
+          lane,
+          actor: "codex",
+          kind: "error",
+          payload: {
+            error: `codex exited ${code}: stopped by trio cancel`,
+            kind: "cancelled",
+          },
+        }),
+      );
+      return {
+        lens: lens.name,
+        status: "cancelled",
+        findings: [],
+        threadId,
+        raw,
+      };
+    }
+
     const failure = classifyFailure(diagnostics);
 
     // A transient fault is worth one more attempt and nothing more. The

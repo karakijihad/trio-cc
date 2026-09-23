@@ -46,6 +46,18 @@ const setup = (verdicts) => {
 
 const errors = (root, runId) =>
   readEvents(runDir(root, runId)).filter((e) => e.kind === "error");
+const warnings = (root, runId) =>
+  readEvents(runDir(root, runId)).filter((e) => e.kind === "warning");
+
+// No verdicts.json at all — the case D-adjudication-gate exists for: a pass
+// advanced (by --unadjudicated, or by a direct driver call ahead of any CLI
+// gate) with nothing written for the reconciler to have applied.
+const setupUnadjudicated = () => {
+  const root = mkdtempSync(join(tmpdir(), "trio-adj-noverdicts-"));
+  const runId = "r1";
+  mkdirSync(passDir(root, runId, 1), { recursive: true });
+  return { root, runId };
+};
 
 // The incident: a reconciler returned Trio's own rendered vocabulary
 // (CONFIRMED) plus an invented category (OUT_OF_SCOPE), and the first bad
@@ -183,4 +195,85 @@ test("a pass whose verdicts were rejected does not converge", () => {
     record: record([finding("a1", { severity: "critical" })]),
   });
   assert.equal(converged, false);
+});
+
+// D-adjudication-gate: a pass advanced with live findings and no
+// verdicts.json at all (the CLI's own gate refused this by default; this is
+// what happens once it is bypassed, or when applyAdjudication is called
+// directly and never went through that gate). This must not read as agreement
+// — a warning names the pass and count, and the record is marked so a later
+// reader (promote.mjs's report, or the operator reopening the run) can tell
+// "nobody looked" apart from "looked, found nothing to flag".
+test("no verdicts.json and a live finding: warns, marks the record, and still does not converge", () => {
+  const { root, runId } = setupUnadjudicated();
+  const { record: updated, converged } = applyAdjudication({
+    root,
+    config: config(),
+    runId,
+    pass: 1,
+    record: record([finding("a1", { severity: "critical" })]),
+  });
+
+  assert.equal(updated.unadjudicated, true);
+  assert.equal(converged, false);
+
+  const warns = warnings(root, runId);
+  assert.equal(warns.length, 1);
+  assert.equal(warns[0].pass, 1);
+  assert.match(warns[0].payload.warning, /pass 1/);
+  assert.match(warns[0].payload.warning, /1 live finding/);
+  assert.equal(warns[0].payload.live, 1);
+
+  // The mark is durable, not just in the returned value in memory — a later
+  // reader of this pass (promote.mjs, or a second call after --unadjudicated)
+  // has only the file on disk to go on.
+  const written = JSON.parse(
+    readFileSync(join(passDir(root, runId, 1), "reconcile.json"), "utf8"),
+  );
+  assert.equal(written.unadjudicated, true);
+});
+
+// A pass with nothing live to adjudicate (everything already refuted or
+// duplicated) is not "unadjudicated" in any sense that matters — there is
+// nothing here for a reconciler to have missed, so no warning and no mark.
+test("no verdicts.json but nothing live: no warning, no mark", () => {
+  const { root, runId } = setupUnadjudicated();
+  const { record: updated } = applyAdjudication({
+    root,
+    config: config(),
+    runId,
+    pass: 1,
+    record: record([finding("a1", { verdict: "refute" })]),
+  });
+  assert.equal(updated.unadjudicated, undefined);
+  assert.equal(warnings(root, runId).length, 0);
+});
+
+// Calling this twice on the same still-unadjudicated pass (exactly what
+// `extend` does to a run it reopens without ever writing verdicts) must not
+// double the event or re-write the file a second time for nothing.
+test("applying to an already-marked unadjudicated pass is idempotent", () => {
+  const { root, runId } = setupUnadjudicated();
+  const first = applyAdjudication({
+    root,
+    config: config(),
+    runId,
+    pass: 1,
+    record: record([finding("a1", { severity: "critical" })]),
+  });
+  assert.equal(first.record.unadjudicated, true);
+
+  const stored = JSON.parse(
+    readFileSync(join(passDir(root, runId, 1), "reconcile.json"), "utf8"),
+  );
+  const second = applyAdjudication({
+    root,
+    config: config(),
+    runId,
+    pass: 1,
+    record: stored,
+  });
+
+  assert.equal(second.record.unadjudicated, true);
+  assert.equal(warnings(root, runId).length, 1, "no second warning on the same mark");
 });

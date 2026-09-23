@@ -1412,3 +1412,278 @@ test("releaseOwnClaim: also releases a worker lock this process holds", async ()
   assert.equal(existsSync(activeMarker(root)), false);
   assert.equal(existsSync(workerLockPath(root)), false);
 });
+
+// --- run.json names the Trio that produced it ---
+
+test("startRun: run.json carries the plugin's own trioVersion, read from package.json", async () => {
+  const root = tmp();
+  const r = await startRun({ root, config: cfg(), target: "/repo", runLensFn: okLens([]) });
+  const runJson = JSON.parse(
+    readFileSync(join(runDir(root, r.runId), "run.json"), "utf8"),
+  );
+  const pkg = JSON.parse(
+    readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+  );
+  assert.equal(runJson.trioVersion, pkg.version);
+  assert.equal(typeof runJson.trioVersion, "string");
+});
+
+// --- Extension offer: extensions / previousBlocking / recommend ---
+
+// 64 real runs took the extension offer and one converged clean. `closed`/
+// `new` alone did not say why: they describe one pass's own diff, with
+// nothing about whether blocking is actually trending down across passes, or
+// whether this run has already spent an extension on the same question. This
+// walks a run through two separate ceiling stops — one worth extending, one
+// not — and checks all three new fields at each.
+test("extensionOffer: previousBlocking, extensions, and recommend across a run that gets extended", async () => {
+  const { reopenRun } = await import("../src/driver.mjs");
+  const root = tmp();
+  const config = cfg({ maxIterations: 2 });
+  const f1 = finding("f1");
+  const f2 = finding("f2");
+  const f3 = finding("f3");
+  let call = 0;
+  const byCall = {
+    1: [f1, f2, f3],
+    2: [f2],
+    3: [f2],
+  };
+  const runLensFn = async ({ lens }) => {
+    call++;
+    return {
+      lens: lens.name,
+      status: "ok",
+      findings: byCall[call] ?? [],
+      threadId: "t",
+      raw: "",
+    };
+  };
+
+  const started = await startRun({ root, config, target: "/repo", runLensFn });
+  assert.equal(started.status, "awaiting_response");
+  assert.equal(started.pass, 1);
+
+  // Pass 1: two of three findings confirmed live, one refuted.
+  writeFileSync(
+    join(passDir(root, started.runId, 1), "verdicts.json"),
+    JSON.stringify({
+      verdicts: [
+        { id: f1.id, verdict: "refute", basis: "not reachable" },
+        { id: f2.id, verdict: "confirm", basis: "real" },
+        { id: f3.id, verdict: "confirm", basis: "real" },
+      ],
+    }),
+  );
+  const parked2 = await continueRun({ root, runLensFn });
+  assert.equal(parked2.final, true, "pass 2 is the last this budget allows");
+
+  // Pass 2: only f2 came back — f1 and f3 closed. Confirm f2 to reach the
+  // first ceiling with blocking down from 2 to 1.
+  writeFileSync(
+    join(passDir(root, started.runId, 2), "verdicts.json"),
+    JSON.stringify({ verdicts: [{ id: f2.id, verdict: "confirm", basis: "still real" }] }),
+  );
+  const ceiling1 = await continueRun({ root, runLensFn });
+  assert.equal(ceiling1.status, "finished");
+  assert.equal(ceiling1.verdict, "ceiling_reached");
+  assert.equal(ceiling1.extension.blocking, 1);
+  assert.equal(ceiling1.extension.previousBlocking, 2, "pass 1 had two confirmed");
+  assert.equal(ceiling1.extension.closed, 2, "f1 and f3 closed between pass 1 and 2");
+  assert.equal(ceiling1.extension.new, 0);
+  assert.equal(ceiling1.extension.extensions, 0, "never extended yet");
+  assert.equal(
+    ceiling1.extension.recommend,
+    true,
+    "closed more than opened, blocking fell, never extended — this is exactly the case worth another pass",
+  );
+
+  // Extend once, then run it to a second ceiling with nothing improved.
+  const reopened = reopenRun({ root, runId: started.runId, hasClaudeFindings: false });
+  assert.equal(reopened.ok, true);
+  assert.equal(reopened.maxIterations, 3);
+
+  const parked3 = await continueRun({ root, runLensFn });
+  assert.equal(parked3.final, true);
+  writeFileSync(
+    join(passDir(root, started.runId, 3), "verdicts.json"),
+    JSON.stringify({ verdicts: [{ id: f2.id, verdict: "confirm", basis: "still real" }] }),
+  );
+  const ceiling2 = await continueRun({ root, runLensFn });
+  assert.equal(ceiling2.status, "finished");
+  assert.equal(ceiling2.verdict, "ceiling_reached");
+  assert.equal(ceiling2.extension.blocking, 1);
+  assert.equal(ceiling2.extension.previousBlocking, 1, "nothing changed between pass 2 and 3");
+  assert.equal(ceiling2.extension.closed, 0);
+  assert.equal(ceiling2.extension.new, 0);
+  assert.equal(ceiling2.extension.extensions, 1, "reopenRun left pass-2/verdict-at-ceiling.json");
+  assert.equal(
+    ceiling2.extension.recommend,
+    false,
+    "already extended once with nothing closed — not worth a second",
+  );
+});
+
+// --- Adjudication gate: D-adjudication-gate ---
+
+test("adjudicationGate: refuses a pass with live findings and no verdicts.json", async () => {
+  const { adjudicationGate } = await import("../src/driver.mjs");
+  const root = tmp();
+  const config = cfg({ maxIterations: 2 });
+  const started = await startRun({
+    root,
+    config,
+    target: "/repo",
+    runLensFn: okLens([finding("leak")]),
+  });
+  assert.equal(started.status, "awaiting_response");
+
+  const gate = adjudicationGate({ root, runId: started.runId, pass: 1 });
+  assert.ok(gate);
+  assert.equal(gate.live, 1);
+  assert.match(gate.error, /pass-1\/verdicts\.json/);
+  assert.match(gate.error, new RegExp(`trio verdicts ${started.runId} 1`));
+});
+
+test("adjudicationGate: proceeds once verdicts.json exists", async () => {
+  const { adjudicationGate } = await import("../src/driver.mjs");
+  const root = tmp();
+  const config = cfg({ maxIterations: 2 });
+  const started = await startRun({
+    root,
+    config,
+    target: "/repo",
+    runLensFn: okLens([finding("leak")]),
+  });
+  writeFileSync(
+    join(passDir(root, started.runId, 1), "verdicts.json"),
+    JSON.stringify({ verdicts: [{ id: findingId("a.rs", "leak"), verdict: "confirm", basis: "x" }] }),
+  );
+  assert.equal(adjudicationGate({ root, runId: started.runId, pass: 1 }), null);
+});
+
+test("adjudicationGate: the --unadjudicated override bypasses it unconditionally", async () => {
+  const { adjudicationGate } = await import("../src/driver.mjs");
+  const root = tmp();
+  const started = await startRun({
+    root,
+    config: cfg({ maxIterations: 2 }),
+    target: "/repo",
+    runLensFn: okLens([finding("leak")]),
+  });
+  assert.equal(
+    adjudicationGate({ root, runId: started.runId, pass: 1, unadjudicated: true }),
+    null,
+  );
+});
+
+test("adjudicationGate: nothing live (all refuted already) does not refuse", async () => {
+  const { adjudicationGate } = await import("../src/driver.mjs");
+  const root = tmp();
+  const started = await startRun({
+    root,
+    config: cfg({ maxIterations: 2 }),
+    target: "/repo",
+    runLensFn: okLens([]),
+  });
+  // A clean run has no pass-1 findings at all worth gating on.
+  assert.equal(started.verdict, "clean");
+  assert.equal(adjudicationGate({ root, runId: started.runId, pass: 1 }), null);
+});
+
+test("extendAdjudicationGate: gates on the exact pass reopenRun would reopen", async () => {
+  const { extendAdjudicationGate } = await import("../src/driver.mjs");
+  const root = tmp();
+  const config = cfg({ maxIterations: 1 });
+  const runLensFn = okLens([finding("leak")]);
+  const started = await startRun({ root, config, target: "/repo", runLensFn });
+  // Settle at the ceiling without ever writing verdicts.json for pass 1.
+  const ceiling = await continueRun({ root, runLensFn });
+  assert.equal(ceiling.verdict, "ceiling_reached");
+
+  const gate = extendAdjudicationGate({ root, runId: ceiling.runId });
+  assert.ok(gate);
+  assert.equal(gate.pass, 1);
+  assert.match(gate.error, /pass-1\/verdicts\.json/);
+
+  assert.equal(
+    extendAdjudicationGate({ root, runId: ceiling.runId, unadjudicated: true }),
+    null,
+  );
+});
+
+test("extendAdjudicationGate: a run Trio cannot identify or has no verdict.json is not this gate's refusal to make", async () => {
+  const { extendAdjudicationGate } = await import("../src/driver.mjs");
+  const root = tmp();
+  assert.equal(extendAdjudicationGate({ root, runId: "../../escaped" }), null);
+  assert.equal(extendAdjudicationGate({ root, runId: "2026-01-01T00-00-00" }), null);
+});
+
+// --- Codex-availability preflight inside continueRun ---
+
+// The same shape run.mjs returns for the ping this driver-level check mirrors
+// (src/commands/context.mjs's codexRefusal): 17 of 180 real runs hit "no
+// usage left" mid-run, between passes, where nothing had checked since pass 1
+// started.
+test("continueRun: a codexRefusal that reports unavailable refuses before spawning pass N+1's lens", async () => {
+  const root = tmp();
+  const config = cfg({ maxIterations: 3 });
+  const started = await startRun({
+    root,
+    config,
+    target: "/repo",
+    runLensFn: okLens([finding("leak")]),
+  });
+  writeFileSync(
+    join(passDir(root, started.runId, 1), "verdicts.json"),
+    JSON.stringify({ verdicts: [{ id: findingId("a.rs", "leak"), verdict: "confirm", basis: "x" }] }),
+  );
+
+  let lensCalled = false;
+  const refusal = { available: false, kind: "usage", message: "out", fix: "" };
+  const r = await continueRun({
+    root,
+    runLensFn: async (...args) => {
+      lensCalled = true;
+      return okLens([finding("leak")])(...args);
+    },
+    codexRefusal: () => refusal,
+  });
+
+  assert.equal(r.status, "refused");
+  assert.equal(r.reason, "codex_unavailable");
+  assert.deepEqual(r.codexUnavailable, refusal);
+  assert.equal(lensCalled, false, "the check runs before any lens for pass 2 spawns");
+
+  // The marker still names pass 1 — nothing advanced — and the lock is free
+  // for a real retry once Codex is back.
+  const marker = JSON.parse(readFileSync(activeMarker(root), "utf8"));
+  assert.equal(marker.pass, 1);
+  assert.equal(existsSync(workerLockPath(root)), false);
+  assert.equal(existsSync(join(runDir(root, started.runId), "verdict.json")), false);
+});
+
+test("continueRun: a codexRefusal that reports available proceeds as before, and the lens for pass 2 still runs", async () => {
+  const root = tmp();
+  const config = cfg({ maxIterations: 2 });
+  let call = 0;
+  const runLensFn = async ({ lens }) => {
+    call++;
+    return {
+      lens: lens.name,
+      status: "ok",
+      findings: call === 1 ? [finding("leak")] : [],
+      threadId: "t",
+      raw: "",
+    };
+  };
+  const started = await startRun({ root, config, target: "/repo", runLensFn });
+  writeFileSync(
+    join(passDir(root, started.runId, 1), "verdicts.json"),
+    JSON.stringify({ verdicts: [{ id: findingId("a.rs", "leak"), verdict: "confirm", basis: "x" }] }),
+  );
+  const r = await continueRun({ root, runLensFn, codexRefusal: () => null });
+  assert.equal(r.status, "finished");
+  assert.equal(r.verdict, "clean");
+  assert.equal(call, 2, "pass 2's lens actually ran once the check passed");
+});

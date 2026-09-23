@@ -4,6 +4,16 @@ What went wrong, and what was done about it. One line each, newest first.
 
 ---
 
+## 2026-09-23 — what 145 audits of another project showed
+
+- **A quarter of runs advanced past a pass nobody adjudicated.** 38 of 145, and 10 reached `ceiling_reached` never adjudicated once; the promoted report filed their unreviewed findings under Open beside confirmed ones. `continue` and `extend` refuse that now unless told `--unadjudicated`, which is recorded, and the report lists those findings on their own.
+- **Extending a run almost never finished it.** 64 extensions, 1 clean. The offer now carries how often the run was already extended and whether blocking findings fell, and recommends against another pass when they didn't.
+- **`continue` and `extend` spent a lens wave discovering Codex was out of usage** — 17 of 180 runs, every failed run. They ping first now, as `run` always did.
+- **Twelve manual cancels were not stale locks.** Two were the harness killing a backgrounded worker (retrying reclaims those — the refusal never said so, and named `.trio/worker.lock` when the lock in question is `.trio/active`); four were runs parked for adjudication for up to twelve hours. The refusal says when a run is only parked, and SessionStart mentions one parked over an hour.
+- **The security lens had its majors downgraded twice as often as any other lens** (29.5%), mostly for a trust boundary the project already stated. It checks for one now. The reconciler marked 10 duplicates where ~40 same-file pairs described one defect; it groups by file first now.
+- **Event logs were 97% of 904 MB.** Codex's `item.started` for a command carries no output and doubled the event count; it is dropped. `reconcile.json` stored whole findings in its diff where only counts were read; it stores ids.
+- **Runs could not say what produced them.** `run.json` carries `trioVersion`, consults write a `run.json` with question, model and effort, and a lens stopped by `trio cancel` is `cancelled`, not an unknown Codex failure.
+
 ## 2026-09-23 — models that go stale, runs that pile up
 
 - **A retiring Codex model was invisible until a run failed on it.** Codex's model cache names a replacement and a date (`gpt-5.5 → gpt-5.6-sol, retires 2026-10-14`); Trio dropped both. The probe keeps them now, and SessionStart lists every lens and consult that is unpinned, gone or retiring with its replacement, for `trio models --apply`.

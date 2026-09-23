@@ -30,6 +30,23 @@ import {
 } from "./marker.mjs";
 import { DEFAULT_CONFIG } from "./config.mjs";
 
+// The plugin's own version, read from its package.json relative to this
+// module — not from the project being audited, whose cwd this code runs
+// under — so run.json always names the Trio that actually produced it,
+// wherever it is invoked from. Read once at load time: the version cannot
+// change under a running process, and re-reading it per run would just be a
+// file read nobody asked for.
+const TRIO_VERSION = (() => {
+  try {
+    return (
+      JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"))
+        .version ?? null
+    );
+  } catch {
+    return null;
+  }
+})();
+
 // The durable half of cancellation: `trio cancel` signals the worker process,
 // but a signal can be missed (the pid is gone, the kill is refused). The token
 // is what a surviving worker checks before it writes anything else, so a
@@ -235,6 +252,83 @@ function readRunJson(root, runId) {
   };
 }
 
+// The one field `extend`'s own Codex-availability preflight needs (D-codex-
+// preflight) — read defensively, because a run.json extend cannot even open
+// is extend's own error to report (reopenRun's "No finished run to extend"),
+// not this helper's to throw on first.
+export function readRunTarget(root, runId) {
+  try {
+    return readRunJson(root, runId).target ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// The CLI-level adjudication gate for `continue` (D-adjudication-gate): a
+// pass with live findings and no verdicts.json has never been looked at, and
+// `continue` used to advance past it in silence — 26% of audited runs did,
+// and 10 reached `ceiling_reached` having never been adjudicated at all.
+// Read-only and cheap, so `commands/continue.mjs` runs it before claiming
+// either lock; a refusal here costs nothing to undo.
+//
+// `unadjudicated` is the operator's explicit override (`--unadjudicated`):
+// this returns null and lets the caller proceed, and applyAdjudication's own
+// warning event and record mark (src/adjudicate.mjs) are what record that the
+// override was used, once the pass this let through actually advances.
+//
+// Deliberately permissive on anything it cannot read: a marker naming
+// something that is not a run id, or a pass whose record cannot be read, is
+// a different failure with its own, better error — continueRun's own checks
+// — and this must not shadow those with a worse one.
+export function adjudicationGate({ root, runId, pass, unadjudicated = false }) {
+  if (unadjudicated) return null;
+  if (!isRunId(runId) || !Number.isSafeInteger(pass) || pass < 1) return null;
+  let record;
+  try {
+    record = readReconcile(root, runId, pass);
+  } catch {
+    return null;
+  }
+  if (existsSync(join(passDir(root, runId, pass), "verdicts.json"))) return null;
+  const live = (record.findings ?? []).filter(isLive);
+  if (!live.length) return null;
+  return {
+    pass,
+    live: live.length,
+    error:
+      `Pass ${pass} of ${runId} has ${live.length} live finding(s) and no ` +
+      `pass-${pass}/verdicts.json — nobody has adjudicated it. Dispatch the ` +
+      `trio-reconciler agent with its findings and write the reply with ` +
+      `\`trio verdicts ${runId} ${pass}\`, or pass --unadjudicated to advance anyway.`,
+  };
+}
+
+// `extend`'s own use of the same gate: it has to be checked on the pass
+// `reopenRun` is about to reopen, which is derived from verdict.json exactly
+// the way reopenRun itself derives it — a mismatch here would gate the wrong
+// pass. Returns null (proceed) whenever the run cannot even be identified;
+// reopenRun's own errors ("No finished run to extend", "Not a run id") are
+// the right refusal for those, not this one.
+export function extendAdjudicationGate({ root, runId, unadjudicated = false }) {
+  if (unadjudicated) return null;
+  if (!isRunId(runId)) return null;
+  let verdict;
+  try {
+    verdict = JSON.parse(
+      readFileSync(join(runDir(root, runId), "verdict.json"), "utf8"),
+    );
+  } catch {
+    return null;
+  }
+  const claimed = verdict.passes;
+  const pass =
+    Number.isSafeInteger(claimed) && claimed > 0
+      ? claimed
+      : collectPasses(root, runId).length;
+  if (!pass) return null;
+  return adjudicationGate({ root, runId, pass, unadjudicated });
+}
+
 // Promotes a run that has already finished — what "yes, create it" runs, so
 // the audit the operator just watched is written out too, not only the next
 // one. `create` is the operator's answer: without it this is a dry no-op,
@@ -310,6 +404,13 @@ function latestCompletedPass(root, runId) {
 // Offered only at the ceiling with blocking findings still live: a run that
 // converged has nothing to extend, and one that failed or was cancelled did
 // not stop because of the ceiling.
+// 64 runs took the offer; one converged clean. `closed`/`new` alone did not
+// say why: they describe one pass in isolation, with nothing about whether
+// this run has already spent an extension on the same question, or whether
+// blocking is actually trending down across passes rather than just this
+// one's own diff. `extensions`, `previousBlocking` and `recommend` below are
+// the rest of that basis, computed once here so the skill (and any other
+// caller) does not have to re-derive it from the raw pass records.
 function extensionOffer({ root, runId, config, verdict, passes }) {
   if (verdict !== "ceiling_reached") return {};
   if (config.converge?.offerExtension === false) return {};
@@ -320,20 +421,51 @@ function extensionOffer({ root, runId, config, verdict, passes }) {
   // refute is not open work either, and an out-of-scope finding never counts
   // toward blocking convergence — so none of the three should read as a
   // reason to spend another pass.
-  const blocking = (last.findings ?? []).filter(
-    (f) => isLive(f) && !f.outOfScope && blockOn.includes(f.severity),
-  );
+  const blockingOf = (pass) =>
+    (pass?.findings ?? []).filter(
+      (f) => isLive(f) && !f.outOfScope && blockOn.includes(f.severity),
+    );
+  const blocking = blockingOf(last);
   if (!blocking.length) return {};
+
+  // reopenRun (above) leaves pass-N/verdict-at-ceiling.json every time this
+  // run was previously extended — the durable count a raw pass count cannot
+  // give, since an extended run's own pass numbering does not reset.
+  const extensions = passes.filter((p) =>
+    existsSync(join(passDir(root, runId, p.pass), "verdict-at-ceiling.json")),
+  ).length;
+
+  // null, not 0, when there is no earlier pass: "no prior data" and "prior
+  // data said zero blocking" are different claims, and `recommend` below
+  // treats the former as no evidence against recommending.
+  const previous = passes.length > 1 ? passes[passes.length - 2] : null;
+  const previousBlocking = previous ? blockingOf(previous).length : null;
+
+  const closed = last.diff?.closed?.length ?? 0;
+  const newCount = last.diff?.new?.length ?? 0;
+
   return {
     extension: {
       offer: true,
       // Progress and churn, side by side: this is the whole basis for the
       // answer, so it travels with the question rather than being described.
-      closed: last.diff?.closed?.length ?? 0,
-      new: last.diff?.new?.length ?? 0,
+      closed,
+      new: newCount,
       blocking: blocking.length,
       passes: passes.length,
       nextMax: (config.maxIterations ?? passes.length) + 1,
+      extensions,
+      previousBlocking,
+      // True only when the numbers actually say "worth it": this pass closed
+      // more than it opened, blocking is down from the pass before it (or
+      // there is no earlier pass to compare against), and this run has never
+      // been extended before — an extension that already happened once with
+      // nothing to show for it is thrashing, not progress, no matter what
+      // this pass's own diff says.
+      recommend:
+        closed > newCount &&
+        (previousBlocking === null || blocking.length < previousBlocking) &&
+        extensions === 0,
     },
   };
 }
@@ -863,8 +995,17 @@ export async function startRun({
       JSON.stringify(
         // scope is written even when null: `continue` is a separate CLI
         // invocation and run.json is the only place it can learn what this
-        // run was pointed at.
-        { runId, target, scope, startedAt: startedAt.toISOString(), config },
+        // run was pointed at. trioVersion is the plugin's own version at the
+        // moment the run started — real data across 145 runs had no way to
+        // tell which Trio produced a given run once the plugin had moved on.
+        {
+          runId,
+          target,
+          scope,
+          startedAt: startedAt.toISOString(),
+          config,
+          trioVersion: TRIO_VERSION,
+        },
         null,
         2,
       ) + "\n",
@@ -929,6 +1070,12 @@ export async function continueRun({
   claudeFindingsPath = null,
   run,
   pid = process.pid,
+  // The same one-word Codex ping `run` makes before it spawns anything
+  // (src/commands/context.mjs's codexRefusal) — defaulted to a no-op here so
+  // every existing caller (including every test that calls continueRun
+  // directly) is unaffected unless it opts in. commands/continue.mjs and
+  // extend.mjs are the callers that pass the real one.
+  codexRefusal = () => null,
 }) {
   // The marker first: "there is nothing to continue" is the more useful
   // answer, and reporting a bad handover file instead sends the operator to
@@ -1072,6 +1219,21 @@ export async function continueRun({
             `Pass ${N} carried a Claude audit and this one does not. Its findings ` +
             `would be diffed as closed without anyone re-checking them. Audit the ` +
             `scope again and pass --claude-findings.`,
+        };
+
+      // Codex-availability preflight (D-codex-preflight): the same ping
+      // `run` makes before its own first wave, run here right before pass
+      // N+1's — an account spent between passes looks identical to a healthy
+      // one until a lens actually tries it, and 17 of 180 runs hit "no usage
+      // left" this way. Nothing about pass N+1 (the marker advance below, the
+      // settled ledger, the lens wave) has happened yet, so a refusal here
+      // costs nothing to undo — the marker still names pass N.
+      const refused = codexRefusal(target);
+      if (refused)
+        return {
+          status: "refused",
+          reason: "codex_unavailable",
+          codexUnavailable: refused,
         };
 
       writeMarker(root, runId, N + 1);

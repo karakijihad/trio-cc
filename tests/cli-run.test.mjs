@@ -77,7 +77,11 @@ function project({ findings } = {}) {
 function settle(cli, first) {
   if (first.status === "finished") return first;
   assert.equal(first.final, true, "a parked last pass must say so");
-  const res = cli(["continue"]);
+  // --unadjudicated: these tests settle with no verdicts.json on purpose (see
+  // the comment above), which is exactly what D-adjudication-gate now refuses
+  // by default. The gate itself, and its default refusal, get their own
+  // dedicated tests below.
+  const res = cli(["continue", "--unadjudicated"]);
   assert.equal(res.status, 0, res.stderr);
   return JSON.parse(res.stdout);
 }
@@ -137,6 +141,9 @@ test("run: refuses to start a second run while the first is awaiting a response"
   assert.equal(second.status, 3);
   assert.match(second.stdout, /already in progress/);
   assert.match(second.stdout, new RegExp(first.runId));
+  // Parked, not working — and the lock named is never worker.lock.
+  assert.match(second.stdout, /paused after pass 1, waiting for its adjudication/);
+  assert.doesNotMatch(second.stdout, /worker\.lock/);
   // The first run's marker is untouched.
   const marker = JSON.parse(readFileSync(join(root, ".trio", "active"), "utf8"));
   assert.equal(marker.run, first.runId);
@@ -173,7 +180,11 @@ test("continue: exits 3 when a live worker holds the lock, and touches nothing",
       }),
     );
 
-    const res = cli(["continue"]);
+    // --unadjudicated: this run's pass 1 has live findings and no
+    // verdicts.json, which D-adjudication-gate now refuses by default — but
+    // that gate is not what this test is about. It bypasses the gate so the
+    // worker-lock refusal underneath is what's actually exercised.
+    const res = cli(["continue", "--unadjudicated"]);
     assert.equal(res.status, 3);
     assert.match(res.stdout, new RegExp(String(worker.pid)));
     assert.match(res.stdout, new RegExp(first.runId));
@@ -373,7 +384,9 @@ test("run --scope: reaches pass 1 and survives into continue", () => {
     join(root, ".trio", "runs", first.runId, "pass-1", "response.json"),
     JSON.stringify({ findings: [], summary: "no change" }),
   );
-  assert.equal(cli(["continue"]).status, 0);
+  // --unadjudicated: this test is about scope propagation, not adjudication —
+  // pass 1's finding is left unreviewed on purpose.
+  assert.equal(cli(["continue", "--unadjudicated"]).status, 0);
 
   const sent = readFileSync(briefs, "utf8")
     .split("===BRIEF===")
@@ -394,7 +407,9 @@ test("continue: an unanswered finding still open at the ceiling reports ceiling_
   const first = JSON.parse(cli(["run", "--lenses", "auditor", "--max", "2"]).stdout);
   assert.equal(first.status, "awaiting_response");
 
-  const second = cli(["continue"]);
+  // --unadjudicated: the finding is left unreviewed on purpose, to prove an
+  // unreviewed finding still blocks all the way to the ceiling.
+  const second = cli(["continue", "--unadjudicated"]);
   assert.equal(second.status, 0, second.stderr);
   const r = settle(cli, JSON.parse(second.stdout));
   assert.equal(r.status, "finished");
@@ -900,7 +915,9 @@ test("extend: reopens a ceiling-reached run for one more pass", () => {
   const first = settle(cli, JSON.parse(cli(["run", "--max", "1", "--lenses", "auditor"]).stdout));
   assert.equal(first.verdict, "ceiling_reached");
 
-  const r = cli(["extend", first.runId]);
+  // --unadjudicated: settle() above left pass 1 unreviewed on purpose (see
+  // its own comment); the gate this bypasses gets its own dedicated tests.
+  const r = cli(["extend", first.runId, "--unadjudicated"]);
   assert.equal(r.status, 0);
   const after = JSON.parse(r.stdout);
   assert.equal(after.runId, first.runId, "extend must not start a new run");
@@ -1087,7 +1104,9 @@ test("the Claude lane survives adjudication into pass 2", () => {
     JSON.stringify({ findings: [], summary: "none" }),
   );
 
-  assert.equal(cli(["continue", "--claude-findings", f]).status, 0);
+  // --unadjudicated: this test is about the Claude lane surviving into pass
+  // 2, not adjudication — pass 1's findings are left unreviewed on purpose.
+  assert.equal(cli(["continue", "--claude-findings", f, "--unadjudicated"]).status, 0);
   const rec2 = JSON.parse(
     readFileSync(
       join(root, ".trio", "runs", first.runId, "pass-2", "reconcile.json"),
@@ -1114,7 +1133,10 @@ test("continue refuses to drop a Claude lane the previous pass had", () => {
     JSON.stringify({ findings: [], summary: "none" }),
   );
 
-  const r = cli(["continue"]);
+  // --unadjudicated: bypasses D-adjudication-gate so the claude_lane_missing
+  // refusal underneath — the one this test is actually about — is what's
+  // exercised, not the newer, unrelated gate in front of it.
+  const r = cli(["continue", "--unadjudicated"]);
   assert.equal(r.status, 2);
   assert.match(r.stdout, /carried a Claude audit/);
   assert.equal(
@@ -1137,4 +1159,185 @@ test("continue and extend refuse run-only flags instead of ignoring them", () =>
     assert.equal(r.status, 2, args.join(" "));
     assert.match(r.stdout, /unknown flag/);
   }
+});
+
+// --- D-adjudication-gate: continue/extend refuse to advance an unadjudicated pass ---
+
+test("continue: refuses (exit 2) a pass with live findings and no verdicts.json, touching neither lock", () => {
+  const { root, cli } = project({ findings: FINDING });
+  const first = JSON.parse(cli(["run", "--lenses", "auditor"]).stdout);
+  assert.equal(first.status, "awaiting_response");
+
+  const res = cli(["continue"]);
+  assert.equal(res.status, 2, res.stdout);
+  assert.match(res.stdout, /pass-1\/verdicts\.json/);
+  assert.match(res.stdout, /trio verdicts/);
+  assert.match(res.stdout, /--unadjudicated/);
+
+  // Nothing moved: the marker still names pass 1 exactly as it did, no worker
+  // lock was ever created, and no pass 2 exists.
+  const marker = JSON.parse(readFileSync(join(root, ".trio", "active"), "utf8"));
+  assert.equal(marker.run, first.runId);
+  assert.equal(marker.pass, 1);
+  assert.equal(existsSync(join(root, ".trio", "worker.lock")), false);
+  assert.equal(existsSync(join(root, ".trio", "runs", first.runId, "pass-2")), false);
+});
+
+test("continue: --unadjudicated bypasses the gate, advances the run, and marks the pass", () => {
+  const { root, cli } = project({ findings: FINDING });
+  const first = JSON.parse(cli(["run", "--lenses", "auditor", "--max", "1"]).stdout);
+  assert.equal(first.final, true);
+
+  const res = cli(["continue", "--unadjudicated"]);
+  assert.equal(res.status, 0, res.stderr);
+  const r = JSON.parse(res.stdout);
+  assert.equal(r.verdict, "ceiling_reached");
+
+  const rec = JSON.parse(
+    readFileSync(
+      join(root, ".trio", "runs", first.runId, "pass-1", "reconcile.json"),
+      "utf8",
+    ),
+  );
+  assert.equal(rec.unadjudicated, true);
+});
+
+test("extend: refuses (exit 2) a ceiling-reached run whose last pass was never adjudicated", () => {
+  const { root, cli } = project({ findings: FINDING });
+  const first = JSON.parse(cli(["run", "--max", "1", "--lenses", "auditor"]).stdout);
+  assert.equal(first.final, true);
+  const ceiling = JSON.parse(cli(["continue", "--unadjudicated"]).stdout);
+  assert.equal(ceiling.verdict, "ceiling_reached");
+
+  const res = cli(["extend", ceiling.runId]);
+  assert.equal(res.status, 2, res.stdout);
+  assert.match(res.stdout, /pass-1\/verdicts\.json/);
+
+  // reopenRun never ran: the run is exactly as extend found it.
+  assert.equal(
+    JSON.parse(
+      readFileSync(join(root, ".trio", "runs", ceiling.runId, "verdict.json"), "utf8"),
+    ).verdict,
+    "ceiling_reached",
+  );
+  assert.equal(
+    JSON.parse(
+      readFileSync(join(root, ".trio", "runs", ceiling.runId, "run.json"), "utf8"),
+    ).config.maxIterations,
+    1,
+  );
+});
+
+test("extend: --unadjudicated bypasses the gate and reopens the run", () => {
+  const { root, cli } = project({ findings: FINDING });
+  const first = JSON.parse(cli(["run", "--max", "1", "--lenses", "auditor"]).stdout);
+  assert.equal(first.final, true);
+  const ceiling = JSON.parse(cli(["continue", "--unadjudicated"]).stdout);
+  assert.equal(ceiling.verdict, "ceiling_reached");
+
+  const res = cli(["extend", ceiling.runId, "--unadjudicated"]);
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(
+    JSON.parse(
+      readFileSync(join(root, ".trio", "runs", ceiling.runId, "run.json"), "utf8"),
+    ).config.maxIterations,
+    2,
+  );
+});
+
+// --- D-codex-preflight: continue/extend check Codex availability too ---
+
+test("continue: refuses before spawning pass N+1's lens when Codex reports no usage left", () => {
+  const root = mkdtempSync(join(tmpdir(), "trio-continue-preflight-"));
+  const pathDir = mkdtempSync(join(tmpdir(), "trio-bin-"));
+  const home = mkdtempSync(join(tmpdir(), "trio-home-"));
+  installFakeCodex(pathDir);
+  fakeCodexHome(home);
+  mkdirSync(join(root, ".trio"), { recursive: true });
+  writeFileSync(
+    join(root, ".trio", "config.json"),
+    JSON.stringify({ view: { mode: "off" } }),
+  );
+  const base = { pathDir, codexHome: home, project: root };
+  const cli = (args, extra = {}) =>
+    spawnSync("node", [CLI, ...args], {
+      env: fakeEnv({ ...base, extra: { FAKE_CODEX_FINDINGS: FINDING, ...extra } }),
+      encoding: "utf8",
+    });
+
+  const first = JSON.parse(cli(["run", "--lenses", "auditor", "--max", "2"]).stdout);
+  assert.equal(first.status, "awaiting_response");
+
+  // Adjudicate pass 1 so the gate above lets this through and the
+  // codex-availability check is the only thing left standing in the way.
+  const rec = JSON.parse(
+    readFileSync(
+      join(root, ".trio", "runs", first.runId, "pass-1", "reconcile.json"),
+      "utf8",
+    ),
+  );
+  writeFileSync(
+    join(root, ".trio", "runs", first.runId, "pass-1", "verdicts.json"),
+    JSON.stringify({
+      verdicts: rec.findings.map((f) => ({ id: f.id, verdict: "confirm", basis: "still real" })),
+    }),
+  );
+
+  const res = cli(["continue"], { FAKE_CODEX_STDERR: "You've hit your usage limit." });
+  assert.equal(res.status, 1, res.stdout + res.stderr);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.status, "refused");
+  assert.equal(out.reason, "codex_unavailable");
+  assert.equal(out.codexUnavailable.kind, "usage");
+  // Pass 2 was never created: the check ran before the lens wave.
+  assert.equal(existsSync(join(root, ".trio", "runs", first.runId, "pass-2")), false);
+  const marker = JSON.parse(readFileSync(join(root, ".trio", "active"), "utf8"));
+  assert.equal(marker.pass, 1, "the marker never advanced");
+});
+
+test("extend: refuses before reopening the run when Codex reports no usage left", () => {
+  const root = mkdtempSync(join(tmpdir(), "trio-extend-preflight-"));
+  const pathDir = mkdtempSync(join(tmpdir(), "trio-bin-"));
+  const home = mkdtempSync(join(tmpdir(), "trio-home-"));
+  installFakeCodex(pathDir);
+  fakeCodexHome(home);
+  mkdirSync(join(root, ".trio"), { recursive: true });
+  writeFileSync(
+    join(root, ".trio", "config.json"),
+    JSON.stringify({ view: { mode: "off" } }),
+  );
+  const base = { pathDir, codexHome: home, project: root };
+  const cli = (args, extra = {}) =>
+    spawnSync("node", [CLI, ...args], {
+      env: fakeEnv({ ...base, extra: { FAKE_CODEX_FINDINGS: FINDING, ...extra } }),
+      encoding: "utf8",
+    });
+
+  const first = JSON.parse(cli(["run", "--max", "1", "--lenses", "auditor"]).stdout);
+  assert.equal(first.final, true);
+  const ceiling = JSON.parse(cli(["continue", "--unadjudicated"]).stdout);
+  assert.equal(ceiling.verdict, "ceiling_reached");
+
+  const res = cli(["extend", ceiling.runId, "--unadjudicated"], {
+    FAKE_CODEX_STDERR: "You've hit your usage limit.",
+  });
+  assert.equal(res.status, 1, res.stdout + res.stderr);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.status, "refused");
+  assert.equal(out.codexUnavailable.kind, "usage");
+
+  // reopenRun never ran: the ceiling verdict stands, unextended.
+  assert.equal(
+    JSON.parse(
+      readFileSync(join(root, ".trio", "runs", ceiling.runId, "verdict.json"), "utf8"),
+    ).verdict,
+    "ceiling_reached",
+  );
+  assert.equal(
+    JSON.parse(
+      readFileSync(join(root, ".trio", "runs", ceiling.runId, "run.json"), "utf8"),
+    ).config.maxIterations,
+    1,
+    "not raised",
+  );
 });

@@ -172,16 +172,14 @@ test("a defect that really went away is reported closed", () => {
 // rule judges a new finding by the same bar as every other live finding, not
 // by "new" alone — see isConverged in src/findings.mjs.
 test("a finding at a genuinely new place is new and blocks convergence", () => {
-  const diff = diffPasses(
-    [withId({ title: "t", line: 47 })],
-    [withId({ title: "t2", file: "b.rs", line: 9 })],
-  );
+  const prev = [withId({ title: "t", line: 47 })];
+  const curr = [withId({ title: "t2", file: "b.rs", line: 9 })];
+  const diff = diffPasses(prev, curr);
   assert.equal(diff.new.length, 1);
   assert.equal(diff.closed.length, 1, "and the old one really is gone");
-  assert.equal(
-    isConverged(diff.new, diff, { blockOn: ["major"] }),
-    false,
-  );
+  // isConverged is judged on the pass's actual findings (curr), not on
+  // diff.new — which, since D-diff-ids, is ids only, not finding objects.
+  assert.equal(isConverged(curr, diff, { blockOn: ["major"] }), false);
 });
 
 // Line-less findings must not all collapse onto their filename, or two
@@ -264,18 +262,9 @@ test("diffPasses classifies new, open and closed", () => {
     id: findingId(x.file, x.title),
   }));
   const d = diffPasses(prev, curr);
-  assert.deepEqual(
-    d.open.map((x) => x.title),
-    ["kept"],
-  );
-  assert.deepEqual(
-    d.new.map((x) => x.title),
-    ["fresh"],
-  );
-  assert.deepEqual(
-    d.closed.map((x) => x.title),
-    ["fixed"],
-  );
+  assert.deepEqual(d.open, [findingId("a.rs", "kept")]);
+  assert.deepEqual(d.new, [findingId("a.rs", "fresh")]);
+  assert.deepEqual(d.closed, [findingId("a.rs", "fixed")]);
 });
 
 test("diffPasses treats an empty previous pass as all-new", () => {
@@ -284,6 +273,26 @@ test("diffPasses treats an empty previous pass as all-new", () => {
     id: findingId(x.file, x.title),
   }));
   assert.equal(diffPasses([], curr).new.length, 1);
+});
+
+// The whole point of D-diff-ids: a pass used to carry every live finding
+// three times over (findings, diff.new/open, and diff.closed on the pass
+// after) — this is what stopped it. Consumers only ever read `.length`, so
+// an id costs nothing they need.
+test("diffPasses stores ids, not full finding objects", () => {
+  const prev = [f({ title: "fixed" })].map((x) => ({
+    ...x,
+    id: findingId(x.file, x.title),
+  }));
+  const curr = [f({ title: "fresh" })].map((x) => ({
+    ...x,
+    id: findingId(x.file, x.title),
+  }));
+  const d = diffPasses(prev, curr);
+  assert.equal(typeof d.new[0], "string");
+  assert.equal(typeof d.closed[0], "string");
+  assert.deepEqual(d.new, [curr[0].id]);
+  assert.deepEqual(d.closed, [prev[0].id]);
 });
 
 test("isConverged is false while a major stays open", () => {

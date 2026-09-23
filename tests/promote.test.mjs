@@ -647,6 +647,84 @@ test("no Outside-this-change section is rendered when nothing is out of scope", 
   assert.doesNotMatch(out, /## Outside this change/);
 });
 
+// D-adjudication-gate's own reporting half: a pass applyAdjudication marked
+// `unadjudicated` (src/adjudicate.mjs, missing verdicts.json) must not have
+// its unreviewed findings read as "Open" the way a finding the reconciler
+// actually weighed and left open does — 10 real runs reached ceiling_reached
+// this way, and their reports said "Open findings" for every one of them.
+const unadjudicatedPass = () => ({
+  pass: 3,
+  unadjudicated: true,
+  lenses: [{ lens: "auditor", status: "ok" }],
+  degraded: [],
+  diff: { new: [], open: [], closed: [] },
+  findings: [
+    {
+      id: "u1",
+      severity: "major",
+      file: "src/a.rs",
+      line: 5,
+      title: "never looked at",
+      lens: "auditor",
+      verdict: "unreviewed",
+      basis: "",
+      bounds: "",
+    },
+    {
+      id: "u2",
+      severity: "minor",
+      file: "src/b.rs",
+      line: 9,
+      title: "also never looked at",
+      lens: "auditor",
+      verdict: "unreviewed",
+      basis: "",
+      bounds: "",
+    },
+  ],
+});
+
+test("an unadjudicated pass's findings are named in their own section, not Open findings", () => {
+  const out = renderReconciliation({
+    runId: "r1",
+    date: "2026-08-05",
+    verdict: "ceiling_reached",
+    passes: [unadjudicatedPass()],
+  });
+  const [openSection] = out.split("## Never adjudicated");
+  assert.doesNotMatch(
+    openSection,
+    /never looked at/,
+    "an unadjudicated finding must not also read as an open finding",
+  );
+  assert.match(out, /## Never adjudicated/);
+  assert.match(out, /2 findings were never adjudicated/);
+  assert.match(out, /never looked at/);
+  assert.match(out, /also never looked at/);
+  const openBlock = out.split("## Open findings")[1].split("## Never adjudicated")[0];
+  assert.match(openBlock, /_None\._/, "both findings moved out, so Open findings is empty");
+});
+
+// A merely-open finding (the pass WAS adjudicated; this one just wasn't
+// resolved) must keep reading exactly as before — the new section is scoped
+// to `last.unadjudicated`, not to the verdict on any one finding.
+test("no Never-adjudicated section when the pass was adjudicated, even with unreviewed findings left over from a carry", () => {
+  const out = renderReconciliation({
+    runId: "r1",
+    date: "2026-08-05",
+    verdict: "ceiling_reached",
+    passes: [carriedPass({
+      fromPass: 1,
+      kind: "refuted",
+      priorVerdict: "refute",
+      matchedBy: "id",
+      basis: "pinned by a.test.mjs:8",
+    })],
+  });
+  assert.doesNotMatch(out, /## Never adjudicated/);
+  assert.match(out, /a resource is not released/);
+});
+
 // The verification-pass flag: a fix landed after the run's last look, and
 // nothing re-audited it. Rendered regardless of the verdict — see
 // isConverged/isLive, which never read response.json, so the verdict above

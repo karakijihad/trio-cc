@@ -2,6 +2,9 @@ import { loadConfig, configErrors } from "../config.mjs";
 import { validateLens } from "../capabilities.mjs";
 import { startRun } from "../driver.mjs";
 import { runLens } from "../codex-lane.mjs";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { passDir, isRunId } from "../paths.mjs";
 import {
   USAGE,
   RUN_FLAGS,
@@ -209,9 +212,21 @@ export default async function runCommand({
   // waiting is the right response, and every other exit-1 refusal (Trio
   // off, not logged in, drift) is one where waiting never helps. A caller
   // that polls has to be able to tell them apart without parsing prose.
+  //
+  // A claim whose process died mid-pass never reaches here — startRun
+  // reclaims it — so the holder is either working or parked between passes
+  // waiting for its adjudication. The worker.lock hint this message used to
+  // end with belongs to worker_busy below; the lock here is .trio/active.
   if (r.status === "run_in_progress") {
+    const parked =
+      isRunId(r.runId) &&
+      Number.isSafeInteger(r.pass) &&
+      existsSync(join(passDir(root, r.runId, r.pass), "reconcile.json"));
     out(
-      `A run is already in progress: ${r.runId}${r.pass ? ` (pass ${r.pass})` : ""}.\n  Wait for it to finish, or /trio:cancel to end it. If no Trio process is running, the lock is stale: delete .trio/worker.lock.`,
+      `A run is already in progress: ${r.runId}${r.pass ? ` (pass ${r.pass})` : ""}.\n  ` +
+        (parked
+          ? `It is paused after pass ${r.pass}, waiting for its adjudication — finish it with trio continue, or /trio:cancel to drop it.`
+          : "Wait for it to finish, or /trio:cancel to end it."),
     );
     process.exitCode = 3;
     return;

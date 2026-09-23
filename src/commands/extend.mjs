@@ -1,12 +1,32 @@
-import { continueRun, reopenRun, readClaudeFindings } from "../driver.mjs";
+import {
+  continueRun,
+  reopenRun,
+  readClaudeFindings,
+  extendAdjudicationGate,
+  readRunTarget,
+} from "../driver.mjs";
 import { runLens } from "../codex-lane.mjs";
-import { EXTEND_FLAGS, unknownFlags, valuelessFlags, flagValue } from "../cli-args.mjs";
+import {
+  EXTEND_FLAGS,
+  UNADJUDICATED_FLAG,
+  unknownFlags,
+  valuelessFlags,
+  flagValue,
+} from "../cli-args.mjs";
 
-// `trio extend [runId]` — the "yes" half of the offer a ceiling-reached run
-// makes: one more pass on the same run, rather than a fresh run that would
-// re-find everything from scratch and compare against nothing.
-export default async function extendCommand({ root, rest, out, run, latestFinishedRun, stopLensesOnSignal }) {
-  const strays = unknownFlags(rest, EXTEND_FLAGS);
+// `trio extend [runId] [--claude-findings PATH] [--unadjudicated]` — the
+// "yes" half of the offer a ceiling-reached run makes: one more pass on the
+// same run, rather than a fresh run that would re-find everything from
+// scratch and compare against nothing.
+export default async function extendCommand({ root, rest, out, run, latestFinishedRun, stopLensesOnSignal, codexRefusal }) {
+  const unadjudicated = rest.includes(UNADJUDICATED_FLAG);
+  // Stripped before the general flag checks: those assume every flag they
+  // know takes a value, and --unadjudicated deliberately does not. The
+  // positional scan below still uses the untouched `rest` — a token starting
+  // with "-" that EXTEND_FLAGS does not know is already skipped there, so
+  // --unadjudicated never gets mistaken for a run id.
+  const checked = rest.filter((a) => a !== UNADJUDICATED_FLAG);
+  const strays = unknownFlags(checked, EXTEND_FLAGS);
   if (strays.length) {
     out(`unknown flag${strays.length > 1 ? "s" : ""}: ${strays.join(", ")}`);
     process.exitCode = 2;
@@ -14,7 +34,7 @@ export default async function extendCommand({ root, rest, out, run, latestFinish
   }
   // `--claude-findings` with nothing after it reads as "no lane given",
   // which is the one answer that quietly halves the audit.
-  const bareExtend = valuelessFlags(rest, EXTEND_FLAGS);
+  const bareExtend = valuelessFlags(checked, EXTEND_FLAGS);
   if (bareExtend.length) {
     out(`${bareExtend.join(", ")} needs a value`);
     process.exitCode = 2;
@@ -39,17 +59,43 @@ export default async function extendCommand({ root, rest, out, run, latestFinish
   // leave the run torn open with the claim held and nothing to release it.
   // Validate the cheap thing first and mutate nothing until it passes.
   const extendFindings = flagValue(rest, "--claude-findings");
-  const checked = readClaudeFindings(extendFindings);
-  if (!checked.ok) {
-    out(`--claude-findings: ${checked.error}`);
+  const claudeChecked = readClaudeFindings(extendFindings);
+  if (!claudeChecked.ok) {
+    out(`--claude-findings: ${claudeChecked.error}`);
     process.exitCode = 2;
+    return;
+  }
+
+  // D-adjudication-gate, on the exact pass reopenRun is about to reopen —
+  // before anything is claimed, reopened, or spent.
+  const gate = extendAdjudicationGate({ root, runId, unadjudicated });
+  if (gate) {
+    out(gate.error);
+    process.exitCode = 2;
+    return;
+  }
+
+  // D-codex-preflight, for the same reason `run` has it and before the same
+  // kind of side effect: reopenRun deletes the ceiling verdict, raises the
+  // ceiling and claims the lock, and a refusal that arrived after that would
+  // leave the run torn open for an account that cannot use the extra pass.
+  const refused = codexRefusal(readRunTarget(root, runId));
+  if (refused) {
+    out(
+      JSON.stringify(
+        { status: "refused", reason: "codex_unavailable", codexUnavailable: refused },
+        null,
+        2,
+      ),
+    );
+    process.exitCode = 1;
     return;
   }
 
   const opened = reopenRun({
     root,
     runId,
-    hasClaudeFindings: Boolean(checked.findings),
+    hasClaudeFindings: Boolean(claudeChecked.findings),
     run,
   });
   if (!opened.ok) {
@@ -72,10 +118,19 @@ export default async function extendCommand({ root, rest, out, run, latestFinish
     runLensFn: runLens,
     claudeFindingsPath: extendFindings,
     run,
+    codexRefusal,
   });
   if (r.status === "invalid_findings" || r.status === "claude_lane_missing") {
     out(r.error);
     process.exitCode = 2;
+    return;
+  }
+  // The account went out between the preflight above and this pass actually
+  // spawning — rare, but the same shape `run` and `continue` return either
+  // way.
+  if (r.status === "refused") {
+    out(JSON.stringify(r, null, 2));
+    process.exitCode = 1;
     return;
   }
   // reopenRun just took (and released) the worker lock, so this call should

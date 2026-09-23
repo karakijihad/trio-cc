@@ -6,6 +6,10 @@ import assert from "node:assert/strict";
 import {
   RUN_FLAGS,
   CONSULT_FLAGS,
+  CONTINUE_FLAGS,
+  EXTEND_FLAGS,
+  UNADJUDICATED_FLAG,
+  USAGE,
   asksForHelp,
   unknownFlags,
   valuelessFlags,
@@ -186,6 +190,27 @@ test("repeatedFlags does not mistake a value equal to a flag name for a repeat",
     repeatedFlags(["--model", "--model", "is", "x", "ok?"], CONSULT_FLAGS),
     [],
   );
+});
+
+// D-adjudication-gate's own flag: deliberately a bare word, not part of
+// CONTINUE_FLAGS/EXTEND_FLAGS — both call sets assume every flag they list
+// takes a value, and unknownFlags would otherwise swallow whatever token
+// follows --unadjudicated as if it belonged to it.
+test("--unadjudicated is a bare flag, kept out of the value-taking flag sets", () => {
+  assert.equal(UNADJUDICATED_FLAG, "--unadjudicated");
+  assert.equal(CONTINUE_FLAGS.has(UNADJUDICATED_FLAG), false);
+  assert.equal(EXTEND_FLAGS.has(UNADJUDICATED_FLAG), false);
+  // unknownFlags is what commands/continue.mjs and extend.mjs run once the
+  // flag itself has been filtered out of argv — it must not itself know
+  // about --unadjudicated, or a stray copy left in argv would silently pass.
+  assert.deepEqual(unknownFlags([UNADJUDICATED_FLAG], CONTINUE_FLAGS), [
+    UNADJUDICATED_FLAG,
+  ]);
+});
+
+test("USAGE documents --unadjudicated for both continue and extend", () => {
+  assert.match(USAGE, /trio continue.*--unadjudicated/);
+  assert.match(USAGE, /trio extend.*--unadjudicated/);
 });
 
 test("parseLensArgs refuses what it cannot fully parse", () => {

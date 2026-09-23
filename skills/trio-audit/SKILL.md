@@ -47,6 +47,21 @@ answers the same way — the run and pass are named, and waiting (or
 not retry in a tight loop, and do not take it as license to cancel someone
 else's audit.
 
+`continue` and `extend` also exit **2** and touch nothing when the pass they
+would advance past has live findings and no `pass-N/verdicts.json` — nobody
+has adjudicated it. This is not optional to work around: dispatch the
+`trio-reconciler` agent and write its reply with
+`trio verdicts <runId> <pass>` as step 2a below already describes, then retry.
+Only pass `--unadjudicated` when the operator explicitly wants to advance
+without adjudicating — it is recorded on the run, not silent, and it is a
+last resort, not a habit for clearing the refusal.
+
+Both also probe Codex before doing anything that would spend it — the same
+one-word ping `run` makes, so a spent account is caught before `continue`
+spawns the next pass's lenses or `extend` reopens the run at all. It arrives
+exactly like `run`'s own `codexUnavailable`, described above: hand off to
+`trio-solo` the same way.
+
 ## Running the command without it being killed
 
 A run is every enabled lens in parallel, each allowed `codex.timeoutMinutes`
@@ -239,10 +254,21 @@ Report exactly what `verdict.json` says:
   pass itself was cut short.
   When the result carries `extension: {offer: true, ...}`, the run stopped on
   budget with blocking findings still live. Report the verdict first, then ask
-  once with `AskUserQuestion`, **showing `closed` and `new` in the question** —
-  those two numbers are the whole basis for the answer. A pass that closed
-  many and opened a few was still converging and is worth one more; a pass
-  that closed nothing is thrashing and another pass buys only spend.
+  once with `AskUserQuestion`, **showing `closed`, `new`, `blocking`,
+  `previousBlocking` (the pass before this one's blocking count, or none when
+  there was no earlier pass) and `extensions` (how many times this run has
+  already been extended) in the question** — that is the whole basis for the
+  answer. A pass that closed many and opened a few, with blocking down from
+  `previousBlocking`, was still converging and is worth one more; a pass that
+  closed nothing, or one on a run already extended once with nothing to show
+  for it, is thrashing and another pass buys only spend.
+
+  `extension.recommend` is `true` only when the numbers actually say "worth
+  it" — closed > new, blocking down from the previous pass (or no previous
+  pass to compare against), and this run has never been extended. Mark
+  **No** as **(Recommended)** in the question whenever `recommend` is
+  `false`, so the operator sees the honest read before they answer, not
+  after.
   **Yes** → audit the scope yourself again first, exactly as before, then
   `node "${CLAUDE_PLUGIN_ROOT}/bin/trio.mjs" extend <runId> --claude-findings <path>`,
   which runs one more pass on the same run. Loop from step 2 as normal.

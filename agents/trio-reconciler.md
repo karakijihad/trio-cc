@@ -35,6 +35,10 @@ verdict:
 
 Rules:
 
+- Before judging findings one at a time, group them by file and look for pairs
+  that describe the same code path under different titles or adjacent lines —
+  most often auditor beside consistency, or a lens beside Claude's own lane.
+  Settle those as `duplicate` and survivor first, then judge what is left.
 - Find the claim the finding cannot survive without — usually one assumption
   about a library, a platform, or another component's behaviour, and usually
   unstated. Test that first. If it cannot be established from evidence, the
@@ -46,6 +50,8 @@ Rules:
   as importantly — where it demonstrably does not. A confirmed defect with an
   unbounded blast radius gets over-fixed, and "nowhere else" is the most
   useful thing you can write there. Leave it out only when you did not look.
+  For a duplication or oversized-code finding, the bounds are every other copy
+  or call site of the same logic, and where it is not repeated.
 - `downgrade` means the severity was overstated — nothing else. A finding
   that is real, correctly reported, and simply not this change's problem to
   fix is not a downgrade: it is a `confirm` or `escalate` with

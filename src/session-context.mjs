@@ -3,6 +3,28 @@ import { loadConfig, configErrors } from "./config.mjs";
 import { loadCapabilities, modelProposals } from "./capabilities.mjs";
 import { proposalLine } from "./commands/models.mjs";
 import { archiveOldRuns } from "./archive.mjs";
+import { readMarker } from "./marker.mjs";
+import { passDir, isRunId } from "./paths.mjs";
+import { statSync } from "node:fs";
+import { join } from "node:path";
+
+const PARKED_NOTICE_MS = 3_600_000;
+
+// A run parked between passes holds the project lock on purpose, waiting for
+// its adjudication — and in practice gets forgotten while its session moves
+// on, for hours, until a sibling session cancels it to get the lock. Past an
+// hour it is worth one line.
+export function parkedRun(root, now = Date.now()) {
+  const held = readMarker(root);
+  if (!held || !isRunId(held.run) || !Number.isSafeInteger(held.pass)) return null;
+  try {
+    const at = statSync(join(passDir(root, held.run, held.pass), "reconcile.json")).mtimeMs;
+    const hours = Math.floor((now - at) / 3_600_000);
+    return now - at >= PARKED_NOTICE_MS ? { run: held.run, pass: held.pass, hours } : null;
+  } catch {
+    return null;
+  }
+}
 
 const BIN = fileURLToPath(new URL("../bin/trio.mjs", import.meta.url));
 
@@ -37,6 +59,11 @@ export function main(root) {
   if (archived.length)
     lines.push(
       `Trio archived ${archived.length} run(s) older than ${config.artifacts.archiveAfterDays} days to .trio/archive/.`,
+    );
+  const parked = parkedRun(root);
+  if (parked)
+    lines.push(
+      `Trio run ${parked.run} has been paused after pass ${parked.pass} for ${parked.hours}h, waiting for its adjudication, and holds the project lock until then. Mention it once and offer: finish it (adjudicate, then trio continue) or /trio:cancel.`,
     );
   const proposals = modelProposals(loadCapabilities(root), config);
   if (proposals.length)

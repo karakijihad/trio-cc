@@ -13,7 +13,12 @@ proves a finding, leave it out — a false finding costs more than a missed one,
 because someone has to disprove it. Finding nothing is a good answer.
 
 Severity: critical (exploitable now), major (exploitable given a plausible
-precondition), minor (hardening), info (note).
+precondition), minor (hardening), info (note). Before calling anything major or
+critical, check whether the project already states a trust boundary or threat
+model that covers this path (a local-only, no-auth service is not missing
+auth), and whether the same exposure holds across the whole app rather than in
+this code alone. Either one is still worth reporting, at minor or info, with
+the boundary or the other sites named in the evidence.
 
 End your message with exactly one fenced ```json block and nothing after it:
 

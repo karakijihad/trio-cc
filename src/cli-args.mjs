@@ -10,12 +10,18 @@ export const USAGE = `trio — Codex as a read-only second reviewer.
   trio doctor                       re-probe Codex and report health
   trio run [--max N] [--target PATH] [--lenses a,b|all] [--scope TEXT]
                  [--claude-findings PATH]   Claude's own audit of the same scope
-  trio continue [--claude-findings PATH]  run the next pass of the active run
+  trio continue [--claude-findings PATH] [--unadjudicated]
+                                    run the next pass of the active run;
+                                    refuses a pass with live findings and no
+                                    verdicts.json unless --unadjudicated says
+                                    to advance anyway
   trio verdicts [runId] [pass] [--file PATH]   validate adjudication and write
                                     pass-N/verdicts.json; reads stdin by
                                     default, and writes nothing if anything
                                     is wrong
-  trio extend [runId]               one more pass on a ceiling-reached run
+  trio extend [runId] [--claude-findings PATH] [--unadjudicated]
+                                    one more pass on a ceiling-reached run;
+                                    the same --unadjudicated override applies
   trio cancel                       cancel the active run
   trio consult [--model NAME] [--effort LEVEL] <question>
                                     ask Codex one question; --model takes any
@@ -54,6 +60,14 @@ export const RUN_FLAGS = new Set([
 // unknown-flag guard exists to prevent.
 export const CONTINUE_FLAGS = new Set(["--claude-findings"]);
 export const EXTEND_FLAGS = new Set(["--claude-findings"]);
+
+// A bare flag, not a valued one — unknownFlags/valuelessFlags above assume
+// every flag they are given takes a value, so this is deliberately kept out
+// of CONTINUE_FLAGS/EXTEND_FLAGS and stripped from argv by hand before those
+// run. The operator's own override for the adjudication gate (D-adjudication-
+// gate, src/driver.mjs): advance past a pass with live findings and no
+// verdicts.json anyway, and have that choice recorded rather than silent.
+export const UNADJUDICATED_FLAG = "--unadjudicated";
 
 // Named on the command line, both hold for one consult and are never saved:
 // the configured pair is what the next consult runs on. A consult takes no

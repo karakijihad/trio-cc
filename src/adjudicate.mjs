@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { diffPasses, isConverged } from "./findings.mjs";
+import { diffPasses, isConverged, isLive } from "./findings.mjs";
 import { applyVerdicts, VERDICTS } from "./reconcile.mjs";
 import { makeEvent, appendEvent } from "./bus.mjs";
 import { runDir, passDir } from "./paths.mjs";
@@ -47,6 +47,38 @@ export function readVerdictsFile(root, runId, pass) {
 export function applyAdjudication({ root, config, runId, pass, record }) {
   const parsed = readVerdictsFile(root, runId, pass);
   if (!parsed) {
+    // Nobody adjudicated this pass — whether because the operator explicitly
+    // advanced with `--unadjudicated` (src/commands/continue.mjs, extend.mjs)
+    // or because the CLI gate that refuses this by default was never in
+    // front of it (a direct driver call, or an older Trio). Either way, a
+    // pass with live findings advancing past this point unlooked-at used to
+    // read exactly like one the reconciler looked at and confirmed had
+    // nothing to flag — 26% of audited runs did this, and 10 reached
+    // `ceiling_reached` having never been adjudicated once. Marked here,
+    // once, so promote.mjs's report and anyone re-reading the run later can
+    // tell "nobody has looked" apart from "looked, found nothing to say".
+    const live = record.findings.filter(isLive);
+    if (live.length && !record.unadjudicated) {
+      appendEvent(
+        runDir(root, runId),
+        makeEvent({
+          run: runId,
+          pass,
+          lane: "trio",
+          actor: "trio",
+          kind: "warning",
+          payload: {
+            warning: `pass ${pass} advanced with ${live.length} live finding(s) and no verdicts.json — nobody adjudicated it`,
+            live: live.length,
+          },
+        }),
+      );
+      record = { ...record, unadjudicated: true };
+      writeFileSync(
+        join(passDir(root, runId, pass), "reconcile.json"),
+        JSON.stringify(record, null, 2) + "\n",
+      );
+    }
     const converged =
       record.degraded.length === 0 &&
       isConverged(record.findings, record.diff, config.converge);

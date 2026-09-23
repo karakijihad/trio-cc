@@ -301,6 +301,10 @@ test("a pass records its diff against the prior pass", async () => {
   });
   assert.equal(second.record.diff.new.length, 1);
   assert.equal(second.record.diff.closed.length, 1);
+  // The whole point: ids, not the findings themselves duplicated a second
+  // (and, on the next pass, a third) time inside reconcile.json.
+  assert.deepEqual(second.record.diff.new, [findingId("a.rs", "b")]);
+  assert.deepEqual(second.record.diff.closed, [findingId("a.rs", "a")]);
 });
 
 test("briefFor is called with the lens, the pass number, and the prior record", async () => {

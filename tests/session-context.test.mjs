@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { main } from "../src/session-context.mjs";
@@ -53,4 +53,17 @@ test("an unpinned project is offered the models capabilities name", () => {
 
 test("no cached capabilities means no model check", () => {
   assert.doesNotMatch(main(tmp()), /model check/);
+});
+
+test("a run parked for over an hour is mentioned; a fresh one is not", () => {
+  const root = tmp();
+  const run = "2026-09-20T10-00-00";
+  mkdirSync(join(trioDir(root), "runs", run, "pass-1"), { recursive: true });
+  const rec = join(trioDir(root), "runs", run, "pass-1", "reconcile.json");
+  writeFileSync(rec, "{}");
+  writeFileSync(join(trioDir(root), "active"), JSON.stringify({ run, pass: 1, pid: 1 }));
+  assert.doesNotMatch(main(root), /paused after pass/);
+  const old = new Date(Date.now() - 3 * 3_600_000);
+  utimesSync(rec, old, old);
+  assert.match(main(root), /run 2026-09-20T10-00-00 has been paused after pass 1 for 3h/);
 });

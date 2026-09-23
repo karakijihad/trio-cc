@@ -1,4 +1,6 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { loadConfig, configErrors } from "../config.mjs";
 import { validateLens, resolveModel } from "../capabilities.mjs";
 import {
@@ -13,6 +15,51 @@ import {
 } from "../cli-args.mjs";
 import { runDir } from "../paths.mjs";
 import { newRunId } from "../orchestrator.mjs";
+
+// Resolved relative to this module, not cwd — `trio` runs from whatever
+// directory the operator is in, and package.json lives beside this install,
+// two levels up from src/commands/.
+const HERE = dirname(fileURLToPath(import.meta.url));
+const PACKAGE_JSON = join(HERE, "..", "..", "package.json");
+
+function trioVersion() {
+  try {
+    return JSON.parse(readFileSync(PACKAGE_JSON, "utf8")).version ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// A consult used to persist nothing on disk but events.jsonl — no record of
+// which model or effort answered, or whether it ever finished, once the
+// stdout JSON scrolled off the terminal. run.json is written the moment the
+// run dir exists, so even a consult that crashes before askCodex returns
+// leaves behind what was asked and of whom; finishRunJson below fills in how
+// it ended. Best-effort: this file is a record for later reading, and losing
+// it must never turn a real answer into a failed consult.
+function writeStartedRunJson(path, fields) {
+  try {
+    writeFileSync(path, JSON.stringify(fields, null, 2) + "\n");
+  } catch {
+    /* stdout's JSON is the actual contract; this is a bonus record */
+  }
+}
+
+function finishRunJson(path, failed) {
+  try {
+    const started = JSON.parse(readFileSync(path, "utf8"));
+    writeFileSync(
+      path,
+      JSON.stringify(
+        { ...started, finishedAt: new Date().toISOString(), failed },
+        null,
+        2,
+      ) + "\n",
+    );
+  } catch {
+    /* same */
+  }
+}
 
 // `trio consult <question>`
 export default async function consultCommand({ root, rest, out, gatherState, codexRefusal, unavailable }) {
@@ -118,6 +165,16 @@ export default async function consultCommand({ root, rest, out, gatherState, cod
 
   const runId = `consult-${newRunId()}`;
   mkdirSync(runDir(root, runId), { recursive: true });
+  const runJsonPath = join(runDir(root, runId), "run.json");
+  writeStartedRunJson(runJsonPath, {
+    runId,
+    kind: "consult",
+    question,
+    model: chosen.model,
+    effort: chosen.effort,
+    startedAt: new Date().toISOString(),
+    trioVersion: trioVersion(),
+  });
   const { askCodex } = await import("../consult.mjs");
   let r;
   try {
@@ -134,6 +191,7 @@ export default async function consultCommand({ root, rest, out, gatherState, cod
     // Codex being uninvokable is a failed consult, not a crashed CLI —
     // a cached-fresh preflight can report "ready" for an install that has
     // broken since it was probed.
+    finishRunJson(runJsonPath, true);
     out(
       JSON.stringify(
         {
@@ -151,6 +209,7 @@ export default async function consultCommand({ root, rest, out, gatherState, cod
     process.exitCode = 1;
     return;
   }
+  finishRunJson(runJsonPath, r.failed);
   // A failed consult says why, and exits non-zero so a caller cannot read
   // an empty answer as one.
   const result = {

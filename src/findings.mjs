@@ -171,13 +171,22 @@ const matcher = (findings) => {
 // ever) and slower to call something closed (so nothing is reported fixed on
 // the strength of a rewrite). Severity blocking reads the current pass
 // directly and is unaffected by either.
+// Ids, not the findings themselves: every reader past this function
+// (driver.mjs's summary, promote.mjs's pass table, isConverged) only ever
+// asks `.length`, or — orchestrator.mjs's pass_completed event — the same.
+// Full objects here meant reconcile.json stored each finding up to three
+// times over (findings, diff.new/open, diff.closed on the next pass), which
+// across 180 real runs was most of the on-disk cost that wasn't
+// events.jsonl. A reconcile.json written before this change still loads:
+// nothing downstream dereferences an entry's fields, so an old file's full
+// objects answer `.length` exactly as well as this file's ids do.
 export function diffPasses(prev, curr) {
   const seenBefore = matcher(prev);
   const seenNow = matcher(curr);
   return {
-    new: curr.filter((x) => !seenBefore(x)),
-    open: curr.filter(seenBefore),
-    closed: prev.filter((x) => !seenNow(x)),
+    new: curr.filter((x) => !seenBefore(x)).map((x) => x.id),
+    open: curr.filter(seenBefore).map((x) => x.id),
+    closed: prev.filter((x) => !seenNow(x)).map((x) => x.id),
   };
 }
 

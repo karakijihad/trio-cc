@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -155,6 +155,27 @@ test("mapEvent leaves output under the cap untouched and unmarked", () => {
   assert.equal(e.payload.output, "hi");
   assert.equal("output_truncated" in e.payload, false);
   assert.equal("output_length" in e.payload, false);
+});
+
+// item.started for a command_execution carries no output and no exit code —
+// the command has not finished — so mapping it only doubled the event count.
+// A 904 MB sample of real runs was 97% events.jsonl, and this was most of it.
+test("mapEvent ignores item.started for a command_execution", () => {
+  const e = mapEvent({
+    type: "item.started",
+    item: { type: "command_execution", command: "ls", status: "in_progress" },
+  });
+  assert.equal(e, null);
+});
+
+// Other item types still map on item.started — only command_execution's
+// started copy was the doubling problem, and only it is scoped out.
+test("mapEvent still maps item.started for an agent_message", () => {
+  const e = mapEvent({
+    type: "item.started",
+    item: { type: "agent_message", text: "" },
+  });
+  assert.equal(e.kind, "agent_message");
 });
 
 test("mapEvent maps turn.completed to usage", () => {
@@ -393,6 +414,28 @@ test("runLens reports failed on a non-zero exit", async () => {
   });
   assert.equal(r.status, "failed");
   assert.deepEqual(r.findings, []);
+});
+
+// `trio cancel` (src/commands/cancel.mjs) kills the whole worker tree and
+// drops this token in the run dir first. A lens whose Codex child dies that
+// way exits non-zero with nothing on stderr to classify — before this,
+// classifyFailure called every one of these "unknown" (14 of 29 recorded
+// "unknown" failures were cancelled runs, not real Codex faults).
+test("a lens killed by trio cancel is reported cancelled, not an unknown failure", async () => {
+  const dir = tmp();
+  writeFileSync(join(dir, "cancelled"), JSON.stringify({ at: "now" }));
+  const r = await runLens({
+    lens: LENS,
+    target: "/repo",
+    brief: "b",
+    runDirPath: dir,
+    run: "r1",
+    pass: 1,
+    spawnFn: fakeSpawn("", { code: 1 }),
+  });
+  assert.equal(r.status, "cancelled");
+  assert.deepEqual(r.findings, []);
+  assert.equal(r.failure, undefined, "not classified as a Codex failure");
 });
 
 test("a launch failure settles the lens as failed instead of crashing", async () => {

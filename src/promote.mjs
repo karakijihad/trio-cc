@@ -7,7 +7,7 @@ import {
 } from "node:fs";
 import { join, dirname, sep } from "node:path";
 import { renderDisagreementTable } from "./reconcile.mjs";
-import { isLive } from "./findings.mjs";
+import { isLive, UNREVIEWED } from "./findings.mjs";
 import { isRelativeInsidePath } from "./config.mjs";
 
 const SEV_ORDER = ["critical", "major", "minor", "info"];
@@ -15,10 +15,18 @@ const dateOf = (now) => now.toISOString().slice(0, 10);
 
 // A finding belongs in "## Open findings" unless something else already
 // accounts for it: `refute` says it is not a defect, `duplicate` says it is
-// counted under its survivor, and `outOfScope` says it is real but reported
-// in its own section instead ("## Outside this change" below).
-const isOpenFinding = (f) =>
-  f.verdict !== "refute" && f.verdict !== "duplicate" && !f.outOfScope;
+// counted under its survivor, `outOfScope` says it is real but reported in
+// its own section instead ("## Outside this change" below) — and, when the
+// pass itself was never adjudicated (`record.unadjudicated`,
+// src/adjudicate.mjs), an `unreviewed` finding is not "open" the way a
+// finding the reconciler actually weighed and left open is. It gets its own
+// section instead ("## Never adjudicated" below), so a report cannot read
+// "nobody looked" as "looked, and it's still a problem".
+const isOpenFinding = (f, unadjudicated = false) =>
+  f.verdict !== "refute" &&
+  f.verdict !== "duplicate" &&
+  !f.outOfScope &&
+  !(unadjudicated && f.verdict === UNREVIEWED);
 
 export function nextAuditNumber(dir) {
   let entries;
@@ -199,9 +207,9 @@ export function renderReconciliation({
     // open defect. It is named once, in "## Outside this change" below —
     // never silently, the one thing `downgrade` used to do when misused for
     // this.
-    last.findings.filter(isOpenFinding).length
+    last.findings.filter((f) => isOpenFinding(f, last.unadjudicated)).length
       ? last.findings
-          .filter(isOpenFinding)
+          .filter((f) => isOpenFinding(f, last.unadjudicated))
           .map((f) => {
             const head = `- **${f.severity}** \`${f.file}\` — ${f.title} (\`${f.id}\`)`;
             // An indented continuation line, not a table cell — bounds is
@@ -236,6 +244,26 @@ export function renderReconciliation({
           .join("\n")
       : "_None._",
     "",
+    // Only rendered when the pass itself was never adjudicated — see
+    // isOpenFinding above. `last.unadjudicated` is set once, by
+    // applyAdjudication (src/adjudicate.mjs), the one time it finds live
+    // findings and no verdicts.json for this pass; it is not recomputed here,
+    // so this section and the exclusion from Open findings above can never
+    // disagree about which pass they mean.
+    ...(last.unadjudicated
+      ? [
+          "## Never adjudicated",
+          "",
+          `${last.findings.filter((f) => f.verdict === UNREVIEWED).length} findings were never adjudicated — ` +
+            `pass ${last.pass} advanced with no pass-${last.pass}/verdicts.json, so nothing below has been checked against the code.`,
+          "",
+          last.findings
+            .filter((f) => f.verdict === UNREVIEWED)
+            .map((f) => `- **${f.severity}** \`${f.file}\` — ${f.title} (\`${f.id}\`)`)
+            .join("\n"),
+          "",
+        ]
+      : []),
     ...(last.findings.some((f) => f.verdict === "duplicate")
       ? [
           "## Duplicates",

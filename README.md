@@ -195,6 +195,10 @@ instead of a verdict, and one more `continue` settles the run once the verdicts
 are in. Without that the final pass was judged on raw lens output — where every
 finding is `unreviewed` and therefore still counts as live — so a single
 unreviewed `major` could close a run that the reconciler would have refuted.
+`continue` and `extend` refuse to advance past a pass with live findings and no
+`verdicts.json`; `--unadjudicated` overrides that, and the pass is then marked
+unadjudicated in its record and listed apart from open findings in the
+promoted report. Both also check the Codex account first, as `run` does.
 
 **Promotion** — once a run finishes, its audits are written to
 `Docs/Audit/codex/YYYY-MM-DD/audit-N.md` (Codex's findings, as reported) and
