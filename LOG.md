@@ -4,6 +4,10 @@ What went wrong, and what was done about it. One line each, newest first.
 
 ---
 
+## 2026-09-29 — Claude models: take ids, follow the operator's settings
+
+- **The Claude side took aliases only, and the audit agents pinned Sonnet.** A `claude-*` id in config was refused, one named in a consult was sent to Codex as `--model`, and `trio-lens`/`trio-reconciler` ignored `CLAUDE_CODE_SUBAGENT_MODEL`. Config now takes an alias or a `claude-*` id, dispatched as its alias because the Agent tool takes nothing else; the cards pin no model, so with `agentModel` null the harness runs the settings id exactly; with neither, Claude asks. `trio config dispatch` resolves which applies.
+
 ## 2026-09-23 — auditing the release before it shipped
 
 A three-lens Codex audit (auditor, security, consistency) over three passes; 13 findings confirmed, 12 fixed, one out of scope.

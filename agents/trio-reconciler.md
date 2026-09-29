@@ -1,7 +1,6 @@
 ---
 name: trio-reconciler
 description: Adjudicates Codex audit findings against the actual code. Use when Trio has completed an audit pass and its findings need independent verification before they drive fixes. Returns one verdict per finding with evidence.
-model: sonnet
 effort: high
 disallowedTools: Write, Edit, NotebookEdit
 ---

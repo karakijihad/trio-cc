@@ -44,11 +44,11 @@ export const DEFAULT_CONFIG = Object.freeze({
     // question worth thinking about, where a lens is one of five in a wave.
     consult: { model: null, effort: "high" },
   },
-  // The Claude side. Aliases rather than model ids, so they survive a release.
-  // agentModel: the model for trio-lens and trio-reconciler subagents; null
-  // keeps what their definitions pin. consultModel: when set, the Claude half
-  // of a consult is answered by a subagent on that model instead of the
-  // session model.
+  // The Claude side: an alias, or a claude-* id. agentModel: the model for
+  // trio-lens and trio-reconciler subagents; null leaves it to the harness's
+  // CLAUDE_CODE_SUBAGENT_MODEL. consultModel: when set, the Claude half of a
+  // consult is answered by a subagent on that model instead of the session
+  // model.
   claude: { agentModel: null, consultModel: null },
   view: { mode: "window", port: 4319, autoOpen: true },
   // offerExtension: hitting the ceiling with blocking findings still open is
@@ -74,9 +74,37 @@ export const DEFAULT_CONFIG = Object.freeze({
 const CLAUDE_ALIASES = ["sonnet", "opus", "haiku", "fable"];
 const ENUMS = {
   "view.mode": ["pane", "window", "off"],
-  "claude.agentModel": CLAUDE_ALIASES,
-  "claude.consultModel": CLAUDE_ALIASES,
 };
+const CLAUDE_MODEL_KEYS = ["claude.agentModel", "claude.consultModel"];
+
+// The Agent tool's `model` takes only an alias, so a claude-* id dispatches as
+// the alias it belongs to. null when there is none to derive.
+export function claudeAlias(model) {
+  if (typeof model !== "string") return null;
+  if (CLAUDE_ALIASES.includes(model)) return model;
+  if (!/^claude-[a-z0-9.-]+$/.test(model)) return null;
+  return CLAUDE_ALIASES.find((a) => model.includes(a)) ?? null;
+}
+
+// Who each Claude-side dispatch runs on. An agentModel is passed as its alias.
+// Without one, a dispatch that passes no `model` gets the harness's
+// CLAUDE_CODE_SUBAGENT_MODEL, exact id included — and with neither, ask.
+// consultModel null means the session answers.
+export function claudeDispatch(cfg, env = process.env) {
+  const agent = cfg?.claude?.agentModel ?? null;
+  const consult = cfg?.claude?.consultModel ?? null;
+  const settings = env.CLAUDE_CODE_SUBAGENT_MODEL?.trim();
+  return {
+    agent: agent
+      ? { model: agent, pass: claudeAlias(agent), source: "claude.agentModel" }
+      : settings && settings !== "ask"
+        ? { model: settings, pass: null, source: "CLAUDE_CODE_SUBAGENT_MODEL" }
+        : { model: null, pass: null, source: "ask" },
+    consult: consult
+      ? { model: consult, pass: claudeAlias(consult), source: "claude.consultModel" }
+      : { model: null, pass: null, source: "session" },
+  };
+}
 
 // Keys whose default is null, where `config set <key> null` is how a value is
 // cleared again. Every other key keeps the string "null" as a string.
@@ -230,11 +258,11 @@ export function configErrors(cfg) {
     );
   // These reach an Agent call's `model` verbatim, so a hand-edited typo is
   // refused here rather than failing the dispatch.
-  for (const key of ["claude.agentModel", "claude.consultModel"]) {
+  for (const key of CLAUDE_MODEL_KEYS) {
     const v = at(cfg, key);
-    if (v !== null && v !== undefined && !ENUMS[key].includes(v))
+    if (v !== null && v !== undefined && !claudeAlias(v))
       errors.push(
-        `${key} must be one of: ${ENUMS[key].join(", ")} or null, got: ${JSON.stringify(v)}`,
+        `${key} must be one of: ${CLAUDE_ALIASES.join(", ")}, a claude-* id, or null, got: ${JSON.stringify(v)}`,
       );
   }
   return errors;
@@ -383,6 +411,10 @@ export function setConfigValue(cfg, dottedKey, raw) {
       `set consult's model and effort with: trio lens consult model <slug> effort <level> (it checks the catalogue). ${dottedKey} null hands it back to the lenses.`,
     );
 
+  if (CLAUDE_MODEL_KEYS.includes(dottedKey) && !claudeAlias(raw))
+    throw new Error(
+      `invalid value for ${dottedKey}: ${raw}. valid: ${CLAUDE_ALIASES.join(", ")}, or a claude-* id such as claude-sonnet-5-5`,
+    );
   const allowed = ENUMS[dottedKey];
   if (allowed && !allowed.includes(raw)) {
     throw new Error(

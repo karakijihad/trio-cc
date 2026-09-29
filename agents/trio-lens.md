@@ -1,7 +1,6 @@
 ---
 name: trio-lens
 description: Audits code read-only through one named Trio lens and returns that lens's findings block. Use when Codex is unavailable and the audit is being run with Claude subagents instead - one of these per lens, spawned together so none of them sees another's work.
-model: sonnet
 effort: high
 disallowedTools: Write, Edit, NotebookEdit
 ---

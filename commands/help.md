@@ -117,7 +117,7 @@ name the closest match.
   — everything after it is question text, dashes and all, so a question that
   mentions `--model` reaches Codex whole. Nothing is written; the next
   consult is back on `codex.consult`. On the Claude side, `claude.agentModel`
-  and `claude.consultModel` take aliases.
+  and `claude.consultModel` take an alias or a `claude-*` id; a dispatch passes its alias.
 - **Preflight and the drift guard** — before a run, Trio checks Codex is
   installed, logged in, and still accepts the flags Trio depends on. It
   refuses to start with a clear message rather than failing mid-run.
@@ -154,8 +154,8 @@ it thinks," and `trio-solo` when Codex cannot be reached.
 | `codex.timeoutMinutes`          | `15`                   | How long one lens may run before it is stopped and marked degraded. |
 | `codex.lenses[]`                | 5 entries, all `on`    | `{name, model, effort, on}` per lens; `model` ships `null` (Codex CLI default). Unpinned, vanished or retiring models are proposed at session start; `trio models --apply` swaps them. |
 | `codex.consult`                 | `{model: null, effort: "high"}` | What `trio consult` runs on; a null field borrows the first enabled lens's (the first lens's if all are off). `--model`/`--effort` on the command override this for one call, unsaved. |
-| `claude.agentModel`             | `null`                 | `sonnet`/`opus`/`haiku`/`fable` for trio-lens and trio-reconciler subagents; null keeps Sonnet. |
-| `claude.consultModel`           | `null`                 | Alias the Claude half of a consult is answered on; null answers in session. |
+| `claude.agentModel`             | `null`                 | An alias or `claude-*` id for trio-lens and trio-reconciler subagents; null uses `CLAUDE_CODE_SUBAGENT_MODEL`, or asks when that is unset. |
+| `claude.consultModel`           | `null`                 | Alias or `claude-*` id the Claude half of a consult is answered on; null answers in session. |
 | `view.mode`                     | `window`               | `window` opens a browser · `pane` prints the viewer URL to open yourself · `off`. |
 | `view.port`                     | `4319`                 | Viewer's local port.                           |
 | `view.autoOpen`                 | `true`                 | Auto-open the browser in `window` mode.        |

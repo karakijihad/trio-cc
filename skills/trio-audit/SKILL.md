@@ -178,8 +178,10 @@ Skip this only if the operator explicitly asks for a Codex-only run.
    Findings carry a `lens` naming every lane that raised them; one reading
    `claude` alone is yours and Codex's lenses all missed it. If there are
    findings, dispatch the `trio-reconciler` agent with the findings array —
-   with `model` set to `claude.agentModel` from `trio config get` when that is
-   not null, and left off when it is.
+   on the model `agent` names in `trio config dispatch`: `pass` as `model` when
+   set, `model` left off when `source` is `CLAUDE_CODE_SUBAGENT_MODEL`, and the
+   operator asked first when it is `ask`. A model the operator names for this
+   audit wins, passed as its alias.
    Your own findings are adjudicated too — being yours earns them nothing.
 
    Do not write `verdicts.json` yourself. Pipe the reconciler's reply to

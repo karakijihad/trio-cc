@@ -11,6 +11,7 @@ import {
   configErrors,
   unknownKeys,
   consultSettings,
+  claudeDispatch,
 } from "../src/config.mjs";
 import { codexHome, trioDir } from "../src/paths.mjs";
 
@@ -197,14 +198,16 @@ test("a hand-edited consult model or effort must be a string or null", () => {
   assert.match(errs, /codex\.consult\.effort must be a string or null/);
 });
 
-test("claude model keys take aliases only, and null clears them", () => {
+test("claude model keys take an alias or a claude-* id, and null clears them", () => {
   for (const key of ["claude.agentModel", "claude.consultModel"]) {
     const set = setConfigValue(DEFAULT_CONFIG, key, "opus");
     assert.equal(set.claude[key.split(".")[1]], "opus");
-    assert.throws(
-      () => setConfigValue(DEFAULT_CONFIG, key, "claude-opus-5"),
-      /sonnet.*opus/s,
+    assert.equal(
+      setConfigValue(DEFAULT_CONFIG, key, "claude-opus-5").claude[key.split(".")[1]],
+      "claude-opus-5",
     );
+    for (const bad of ["gpt-6-astra", "claude-mystery-1"])
+      assert.throws(() => setConfigValue(DEFAULT_CONFIG, key, bad), /sonnet.*opus/s);
     assert.equal(setConfigValue(set, key, "null").claude[key.split(".")[1]], null);
   }
   // No catalogue here, so consult values are routed to `trio lens consult`.
@@ -381,4 +384,25 @@ test("lens names must be unique and cannot be consult", () => {
   reserved.codex.lenses[0].name = "consult";
   assert.ok(configErrors(reserved).some((e) => /"consult" is reserved/.test(e)));
   assert.deepEqual(configErrors(base), []);
+});
+
+test("claude dispatch: a set model passes its alias, else the harness setting, else ask", () => {
+  const cfg = (agentModel, consultModel = null) => ({
+    ...DEFAULT_CONFIG,
+    claude: { agentModel, consultModel },
+  });
+  const env = { CLAUDE_CODE_SUBAGENT_MODEL: "claude-sonnet-9" };
+  assert.deepEqual(claudeDispatch(cfg("claude-opus-5", "claude-fable-2"), env), {
+    agent: { model: "claude-opus-5", pass: "opus", source: "claude.agentModel" },
+    consult: { model: "claude-fable-2", pass: "fable", source: "claude.consultModel" },
+  });
+  // No `model` passed, so the harness runs the exact id from settings.
+  assert.deepEqual(claudeDispatch(cfg(null), env).agent, {
+    model: "claude-sonnet-9",
+    pass: null,
+    source: "CLAUDE_CODE_SUBAGENT_MODEL",
+  });
+  for (const unset of [{}, { CLAUDE_CODE_SUBAGENT_MODEL: "" }, { CLAUDE_CODE_SUBAGENT_MODEL: "ask" }])
+    assert.equal(claudeDispatch(cfg(null), unset).agent.source, "ask");
+  assert.equal(claudeDispatch(cfg(null), env).consult.source, "session");
 });

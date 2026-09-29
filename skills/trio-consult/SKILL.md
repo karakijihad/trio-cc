@@ -25,7 +25,7 @@ question and route them:
 
 | Named | Where it goes |
 | --- | --- |
-| `sonnet`, `opus`, `haiku`, `fable` | the Claude half: the alias to dispatch on, overriding `claude.consultModel` |
+| `sonnet`, `opus`, `haiku`, `fable`, or a `claude-*` id | the Claude half, overriding `claude.consultModel`: dispatch on the alias it belongs to (`claude-fable-5-1` → `fable`), or ask when it names none |
 | anything else named as a model (`astra`, `terra`, `gpt-6-astra`) | the Codex half: passed as `--model <name>` |
 
 Only lift a name when the operator is saying *who should answer*. A model that
@@ -39,10 +39,11 @@ of the question.
 Neither half is saved: the next consult is back on the configured pair, and
 `/trio:model consult` is how a choice is made to stick.
 
-**Who answers for Claude.** The alias named in the request, else
-`claude.consultModel` from `node "${CLAUDE_PLUGIN_ROOT}/bin/trio.mjs" config get`
-— a per-project setting that ships null. With neither, you answer, in session.
-With one, dispatch one `general-purpose` Agent with `model` set to it, the
+**Who answers for Claude.** The model named in the request, else `consult`
+from `node "${CLAUDE_PLUGIN_ROOT}/bin/trio.mjs" config dispatch` — from
+`claude.consultModel`, a per-project setting that ships null. With neither, you
+answer, in session. With one, dispatch one `general-purpose` Agent with `model`
+set to its alias (`pass`) — the Agent tool takes no full id — the
 question, and the context it needs to answer — and its reply is the Claude
 answer, presented as is. That agent gives advice only; it writes no code.
 

@@ -93,12 +93,14 @@ Each prompt carries three things and nothing else:
 Do not paste your own findings into their prompts. Do not tell one lens what
 another is looking at.
 
-**Models.** `trio-lens` and `trio-reconciler` are pinned to Sonnet at high
-effort. Run `node "${CLAUDE_PLUGIN_ROOT}/bin/trio.mjs" config get` and read
-`claude.agentModel`: when it names an alias, pass it as `model` on every
-`trio-lens` and `trio-reconciler` Agent call. A model the operator names for
-this audit wins over both. Otherwise leave `model` off and do not ask about it.
-Effort comes from the definition and cannot be set per call.
+**Models.** Run `node "${CLAUDE_PLUGIN_ROOT}/bin/trio.mjs" config dispatch`
+and read `agent`, which applies to every `trio-lens` and `trio-reconciler`
+Agent call. `pass` set: pass it as `model`. `source` is
+`CLAUDE_CODE_SUBAGENT_MODEL`: leave `model` off, and the harness runs that exact
+id. `source` is `ask`: ask the operator which model before the first dispatch.
+A model the operator names for this audit wins over all three, passed as its
+alias — the Agent tool takes no full id. Effort is high, from the definition,
+and cannot be set per call.
 
 ## Merge, then adjudicate
 

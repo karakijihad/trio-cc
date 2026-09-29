@@ -27,7 +27,7 @@ export const USAGE = `trio — Codex as a read-only second reviewer.
                                     ask Codex one question; --model takes any
                                     part of a slug ("astra") and holds for
                                     this call only
-  trio config get | set <key> <value>
+  trio config get | dispatch | set <key> <value>
   trio lens <name> [on|off] [model <slug>] [effort <level>]
   trio models [--json] [--apply]    Codex models, which lens uses each, and swaps to apply
   trio promote [runId] [--create]   copy a finished run into artifacts.promoteTo
