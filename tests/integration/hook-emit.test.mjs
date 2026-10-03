@@ -94,22 +94,6 @@ test("the tap survives a marker that names no run", () => {
   );
 });
 
-test("the tap appends normally below the ceiling", () => {
-  const root = tmp();
-  const dir = activate(root);
-  main(
-    JSON.stringify({
-      hook_event_name: "MessageDisplay",
-      message_text: "under the ceiling",
-    }),
-    root,
-  );
-  assert.equal(
-    readEvents(dir).some((e) => e.payload?.text === "under the ceiling"),
-    true,
-  );
-});
-
 test("laneOf returns claude:main outside a subagent", () => {
   assert.equal(laneOf({ hook_event_name: "MessageDisplay" }), "claude:main");
 });
@@ -213,6 +197,7 @@ test("main appends to the active run when the marker is present", () => {
   assert.equal(events.length, 1);
   assert.equal(events[0].lane, "claude:main");
   assert.equal(events[0].pass, 1);
+  assert.equal(events[0].payload?.text, "hi");
 });
 
 test("main swallows malformed stdin rather than throwing", () => {

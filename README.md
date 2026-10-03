@@ -537,6 +537,20 @@ overwrite it.
 
 ---
 
+## Development
+
+No dependencies, no build step. Node 18.18 or later. Tests are split by what
+they cost to run:
+
+| Command                    | Runs                                                              |
+| -------------------------- | ----------------------------------------------------------------- |
+| `npm test`                 | `tests/unit` and `tests/integration` — in-process, the everyday run |
+| `npm run test:process`     | `tests/process` — spawns the CLI against a fake Codex; slow        |
+| `npm run test:all`         | all three, which is what CI runs on Linux and Windows             |
+| `npm run test:live`        | `tests/live` — your real Codex, real tokens; skipped unless `TRIO_E2E=1` |
+
+---
+
 ## Credits
 
 Trio is glue. The intelligence belongs to two other teams:

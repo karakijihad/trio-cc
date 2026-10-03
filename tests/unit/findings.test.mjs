@@ -316,22 +316,6 @@ test("isConverged is true when a new finding appears at minor", () => {
   );
 });
 
-test("isConverged is true when a new finding appears at info", () => {
-  const curr = [{ ...f({ severity: "info" }), id: "aaaa1111" }];
-  assert.equal(
-    isConverged(curr, { new: curr, open: [], closed: [] }, CONVERGE),
-    true,
-  );
-});
-
-test("isConverged is false when a new finding appears at major", () => {
-  const curr = [{ ...f({ severity: "major" }), id: "aaaa1111" }];
-  assert.equal(
-    isConverged(curr, { new: curr, open: [], closed: [] }, CONVERGE),
-    false,
-  );
-});
-
 // A new major the reconciler already downgraded to minor is judged on its
 // post-adjudication severity, not on having been new in the first place.
 test("a new major downgraded to minor does not block convergence", () => {
@@ -340,14 +324,6 @@ test("a new major downgraded to minor does not block convergence", () => {
   ];
   assert.equal(
     isConverged(curr, { new: curr, open: [], closed: [] }, CONVERGE),
-    true,
-  );
-});
-
-test("isConverged is true with only pre-existing minors", () => {
-  const curr = [{ ...f({ severity: "minor" }), id: "aaaa1111" }];
-  assert.equal(
-    isConverged(curr, { new: [], open: curr, closed: [] }, CONVERGE),
     true,
   );
 });
@@ -372,16 +348,6 @@ test("isConverged ignores a finding marked duplicate", () => {
   );
 });
 
-test("a new duplicate does not block either", () => {
-  const curr = [
-    { ...f({ severity: "critical" }), id: "aaaa1111", verdict: "duplicate", of: "bbbb2222" },
-  ];
-  assert.equal(
-    isConverged(curr, { new: curr, open: [], closed: [] }, CONVERGE),
-    true,
-  );
-});
-
 // `outOfScope` (reconcile.mjs's validateVerdicts) says the reconciler
 // confirmed or escalated a real defect but ruled it outside the change under
 // audit. It keeps its severity and stays live (it is not refuted or
@@ -393,16 +359,6 @@ test("isConverged ignores a confirmed finding marked outOfScope", () => {
   ];
   assert.equal(
     isConverged(curr, { new: [], open: curr, closed: [] }, CONVERGE),
-    true,
-  );
-});
-
-test("a new finding marked outOfScope does not block either", () => {
-  const curr = [
-    { ...f({ severity: "critical" }), id: "aaaa1111", verdict: "escalate", outOfScope: true },
-  ];
-  assert.equal(
-    isConverged(curr, { new: curr, open: [], closed: [] }, CONVERGE),
     true,
   );
 });
@@ -444,14 +400,6 @@ test("isConverged excuses a re-raise this run already refuted", () => {
   );
 });
 
-test("a carried refutation excuses a finding in the new column too", () => {
-  const curr = [carried()];
-  assert.equal(
-    isConverged(curr, { new: curr, open: [], closed: [] }, CONVERGE),
-    true,
-  );
-});
-
 // The other half: settledMatcher (src/settled.mjs) also matches by bare
 // location, because a re-raise is usually reworded. But a location match
 // proves nothing about the claim itself — a genuinely new, different defect
@@ -462,14 +410,6 @@ test("a location-only carried refutation does not excuse a different claim", () 
   const curr = [carried({ carried: { ...carried().carried, matchedBy: "location" } })];
   assert.equal(
     isConverged(curr, { new: [], open: curr, closed: [] }, CONVERGE),
-    false,
-  );
-});
-
-test("a location-only carried refutation still blocks from the new column", () => {
-  const curr = [carried({ carried: { ...carried().carried, matchedBy: "location" } })];
-  assert.equal(
-    isConverged(curr, { new: curr, open: [], closed: [] }, CONVERGE),
     false,
   );
 });

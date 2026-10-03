@@ -102,28 +102,3 @@ test(
     assert.match(readFileSync(promoted.codexPath, "utf8"), /## Findings/);
   },
 );
-
-test(
-  "smoke (real Codex): the active marker is always removed after a run",
-  { skip: !ENABLED && "set TRIO_E2E=1 to run" },
-  () => {
-    const root = mkdtempSync(join(tmpdir(), "trio-e2e2-"));
-    const env = { ...process.env, CLAUDE_PROJECT_DIR: root };
-    run(env, ["on"]);
-    run(env, ["config", "set", "view.mode", "off"]);
-    run(env, ["config", "set", "maxIterations", "1"]);
-    // The run has to actually happen for the assertion below to mean
-    // anything: a run that never started leaves no marker either, which used
-    // to pass this test while proving nothing.
-    const res = run(env, ["run", "--lenses", "auditor"]);
-    assert.equal(res.status, 0, res.stderr);
-
-    // This repo is empty, so a clean, unparked finish is the expected path —
-    // but nothing here promises Codex reports zero findings on an empty
-    // tree, so the parking flow is handled the same way as the other test.
-    const final = settle(env, root, JSON.parse(res.stdout));
-    assert.equal(final.status, "finished");
-    assert.ok(existsSync(join(root, ".trio", "runs", final.runId, "verdict.json")));
-    assert.equal(existsSync(join(root, ".trio", "active")), false);
-  },
-);

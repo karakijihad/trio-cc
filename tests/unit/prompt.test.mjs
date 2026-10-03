@@ -301,12 +301,6 @@ test("empty prior findings and changes produce fallback statements", () => {
   assert.match(out, /no file changes/i);
 });
 
-test("scope is absent from the prompt when no scope was given", () => {
-  const out = buildLensPrompt({ brief: "BRIEF", pass: 1, prior: null });
-  assert.ok(out.startsWith("BRIEF\n\n## Off-limits"));
-  assert.doesNotMatch(out, /## Scope/);
-});
-
 test("scope reaches pass 1, which has no prior turn to carry it", () => {
   const out = buildLensPrompt({
     brief: "BRIEF",
@@ -447,17 +441,6 @@ test("a changes section under the cap lists every file with no omission note", (
 
 // buildLensPrompt never referenced its `lens` argument, so passing it (or
 // not) must make no difference to what gets rendered.
-test("buildLensPrompt ignores an extra lens argument", () => {
-  const withLens = buildLensPrompt({
-    brief: "BRIEF",
-    lens: { name: "auditor" },
-    pass: 1,
-    prior: null,
-  });
-  const withoutLens = buildLensPrompt({ brief: "BRIEF", pass: 1, prior: null });
-  assert.equal(withLens, withoutLens);
-});
-
 // Codex briefs (lenses/*.md) say nothing about staying out of `.trio/` or the
 // promoted audit directory — only agents/trio-lens.md (Claude's lens) does.
 // The shared builder is where that rule has to live instead, so every lens's

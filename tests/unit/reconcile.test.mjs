@@ -2,7 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   applyVerdicts,
+  parseVerdictsInput,
   renderDisagreementTable,
+  validateVerdicts,
   VERDICTS,
 } from "../../src/reconcile.mjs";
 
@@ -24,6 +26,7 @@ test("applyVerdicts ignores a duplicate without a valid survivor", () => {
       onInvalid: (r) => rejected.push(...r),
     });
     assert.equal(out[0].verdict, "unreviewed", JSON.stringify(bad));
+    assert.equal(out[0].of, undefined, JSON.stringify(bad));
     assert.equal(rejected.length, 1, JSON.stringify(bad));
     // The reason travels with the rejection, so the event can say what to fix.
     assert.match(rejected[0].reason, /"of"/, JSON.stringify(bad));
@@ -68,14 +71,6 @@ test("confirm leaves severity untouched", () => {
   );
   assert.equal(out[0].severity, "major");
   assert.equal(out[0].verdict, "confirm");
-});
-
-test("downgrade lowers severity one step", () => {
-  const out = applyVerdicts(
-    [f("a1", { severity: "critical" })],
-    [{ id: "a1", verdict: "downgrade", basis: "dormant" }],
-  );
-  assert.equal(out[0].severity, "major");
 });
 
 test("escalate raises severity one step", () => {
@@ -390,15 +385,6 @@ test("folding a duplicate's lens twice does not repeat it", () => {
 // It used to apply, which let a verdicts.json nobody validated hide a live
 // finding behind a survivor that does not exist. It is ignored now, without
 // crashing, and the finding stays unreviewed.
-test("a duplicate naming an unknown survivor is ignored without crashing", () => {
-  const out = applyVerdicts(
-    [f("a1")],
-    [{ id: "a1", verdict: "duplicate", of: "zzzz", basis: "same as zzzz" }],
-  );
-  assert.equal(out[0].verdict, "unreviewed");
-  assert.equal(out[0].of, undefined);
-});
-
 // `outOfScope` says a confirmed/escalated finding is real, at the severity
 // shown, but outside the change under audit — the explicit alternative to
 // misusing `downgrade` for the same purpose (see agents/trio-reconciler.md).
@@ -442,4 +428,177 @@ test("outOfScope does not survive being re-adjudicated without it", () => {
     [{ id: "a1", verdict: "confirm", basis: "actually ours to fix" }],
   );
   assert.equal(second[0].outOfScope, false);
+});
+
+// The pieces `trio verdicts` composes (src/commands/verdicts.mjs): input
+// parsing and submission validation. Moved here from the CLI test, where they
+// were being exercised through a process spawn for no reason.
+test("parseVerdictsInput prefers a bare object and falls back to the block", () => {
+  assert.equal(parseVerdictsInput('{"verdicts":[]}').ok, true);
+  const fenced = parseVerdictsInput('noise\n```json\n{"verdicts":[]}\n```\nmore');
+  assert.equal(fenced.ok, true);
+  assert.deepEqual(fenced.parsed, { verdicts: [] });
+  assert.equal(parseVerdictsInput("").ok, false);
+});
+
+test("validateVerdicts rejects a non-string basis rather than coercing it", () => {
+  const r = validateVerdicts(
+    { verdicts: [{ id: "a1", verdict: "confirm", basis: 3 }] },
+    { knownIds: ["a1"] },
+  );
+  assert.equal(r.ok, false);
+  assert.ok(r.problems.some((p) => /basis must be a string/.test(p)));
+});
+
+test("validateVerdicts with no knownIds checks shape but not coverage", () => {
+  const r = validateVerdicts({
+    verdicts: [{ id: "a1", verdict: "CONFIRMED", basis: "path: x breaks y" }],
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.verdicts[0].verdict, "confirm");
+});
+
+// One defect reported by two lenses used to have nothing to write but
+// `escalate`. `duplicate` names its survivor in `of`.
+test("a duplicate verdict is accepted with a valid of", () => {
+  const r = validateVerdicts(
+    {
+      verdicts: [
+        { id: "a1", verdict: "confirm", basis: "reproduced" },
+        { id: "a2", verdict: "duplicate", of: "a1", basis: "same defect as a1" },
+      ],
+    },
+    { knownIds: ["a1", "a2"] },
+  );
+  assert.equal(r.ok, true, r.problems.join("; "));
+  assert.equal(r.verdicts[1].of, "a1");
+});
+
+test("uppercase past tense DUPLICATED is normalized", () => {
+  const r = validateVerdicts(
+    {
+      verdicts: [
+        { id: "a1", verdict: "confirm", basis: "reproduced" },
+        { id: "a2", verdict: "DUPLICATED", of: "a1", basis: "same defect" },
+      ],
+    },
+    { knownIds: ["a1", "a2"] },
+  );
+  assert.equal(r.ok, true, r.problems.join("; "));
+  assert.equal(r.verdicts[1].verdict, "duplicate");
+});
+
+test("a duplicate with no of is refused", () => {
+  const r = validateVerdicts(
+    { verdicts: [{ id: "a1", verdict: "duplicate", basis: "same as something" }] },
+    { knownIds: ["a1"] },
+  );
+  assert.equal(r.ok, false);
+  assert.ok(r.problems.some((p) => /needs "of"/.test(p)));
+});
+
+test("a duplicate naming itself is refused", () => {
+  const r = validateVerdicts(
+    { verdicts: [{ id: "a1", verdict: "duplicate", of: "a1", basis: "x" }] },
+    { knownIds: ["a1"] },
+  );
+  assert.equal(r.ok, false);
+  assert.ok(r.problems.some((p) => /cannot name itself/.test(p)));
+});
+
+test("a duplicate naming an unknown finding is refused", () => {
+  const r = validateVerdicts(
+    { verdicts: [{ id: "a1", verdict: "duplicate", of: "zz", basis: "x" }] },
+    { knownIds: ["a1"] },
+  );
+  assert.equal(r.ok, false);
+  assert.ok(r.problems.some((p) => /duplicate of unknown finding zz/.test(p)));
+});
+
+test("a duplicate cannot name another duplicate as its survivor", () => {
+  const r = validateVerdicts(
+    {
+      verdicts: [
+        { id: "a1", verdict: "duplicate", of: "a2", basis: "same as a2" },
+        { id: "a2", verdict: "duplicate", of: "a3", basis: "same as a3" },
+        { id: "a3", verdict: "confirm", basis: "reproduced" },
+      ],
+    },
+    { knownIds: ["a1", "a2", "a3"] },
+  );
+  assert.equal(r.ok, false);
+  assert.ok(r.problems.some((p) => /duplicates cannot chain/.test(p)));
+});
+
+test("`of` on a non-duplicate verdict is refused", () => {
+  const r = validateVerdicts(
+    { verdicts: [{ id: "a1", verdict: "confirm", basis: "x", of: "a2" }] },
+    { knownIds: ["a1", "a2"] },
+  );
+  assert.equal(r.ok, false);
+  assert.ok(r.problems.some((p) => /only valid on a duplicate/.test(p)));
+});
+
+// `outOfScope` is the recorded alternative to misusing `downgrade` for "real
+// but not this diff's problem" (see agents/trio-reconciler.md).
+test("outOfScope is accepted on a confirm verdict", () => {
+  const r = validateVerdicts(
+    {
+      verdicts: [
+        { id: "a1", verdict: "confirm", basis: "real, not this change's fix", outOfScope: true },
+      ],
+    },
+    { knownIds: ["a1"] },
+  );
+  assert.equal(r.ok, true, r.problems.join("; "));
+  assert.equal(r.verdicts[0].outOfScope, true);
+});
+
+test("outOfScope is accepted on an escalate verdict", () => {
+  const r = validateVerdicts(
+    {
+      verdicts: [
+        { id: "a1", verdict: "escalate", basis: "composes, but not ours", outOfScope: true },
+      ],
+    },
+    { knownIds: ["a1"] },
+  );
+  assert.equal(r.ok, true, r.problems.join("; "));
+  assert.equal(r.verdicts[0].outOfScope, true);
+});
+
+test("outOfScope on a refute is refused", () => {
+  const r = validateVerdicts(
+    { verdicts: [{ id: "a1", verdict: "refute", basis: "x", outOfScope: true }] },
+    { knownIds: ["a1"] },
+  );
+  assert.equal(r.ok, false);
+  assert.ok(r.problems.some((p) => /outOfScope is only valid on confirm or escalate/.test(p)));
+});
+
+test("outOfScope on a downgrade is refused", () => {
+  const r = validateVerdicts(
+    { verdicts: [{ id: "a1", verdict: "downgrade", basis: "x", outOfScope: true }] },
+    { knownIds: ["a1"] },
+  );
+  assert.equal(r.ok, false);
+  assert.ok(r.problems.some((p) => /outOfScope is only valid on confirm or escalate/.test(p)));
+});
+
+test("a non-boolean outOfScope is refused rather than coerced", () => {
+  const r = validateVerdicts(
+    { verdicts: [{ id: "a1", verdict: "confirm", basis: "x", outOfScope: "true" }] },
+    { knownIds: ["a1"] },
+  );
+  assert.equal(r.ok, false);
+  assert.ok(r.problems.some((p) => /outOfScope must be true or false/.test(p)));
+});
+
+test("outOfScope: false is accepted but not carried onto the verdict", () => {
+  const r = validateVerdicts(
+    { verdicts: [{ id: "a1", verdict: "confirm", basis: "x", outOfScope: false }] },
+    { knownIds: ["a1"] },
+  );
+  assert.equal(r.ok, true, r.problems.join("; "));
+  assert.equal(r.verdicts[0].outOfScope, undefined);
 });

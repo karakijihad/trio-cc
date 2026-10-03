@@ -5,10 +5,13 @@ import {
   mkdirSync,
   writeFileSync,
   readFileSync,
+  readdirSync,
+  symlinkSync,
   existsSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { startRun, continueRun } from "../../src/driver.mjs";
 import { DEFAULT_CONFIG } from "../../src/config.mjs";
 import { findingId } from "../../src/findings.mjs";
@@ -1717,4 +1720,346 @@ test("adjudicationGate: an entry with no recognised verdict is not coverage", as
     writeFileSync(join(passDir(root, started.runId, 1), "verdicts.json"), JSON.stringify({ verdicts: [entry] }));
     assert.ok(adjudicationGate({ root, runId: started.runId, pass: 1 }), JSON.stringify(entry));
   }
+});
+
+// --- Outcomes the CLI used to be spawned for, driven in process ---
+//
+// tests/process/cli-run.test.mjs ran each of these through a real `trio run` /
+// `trio continue` — node's own startup, a fake Codex, a ping and a probe, for
+// an outcome startRun/continueRun produce entirely by themselves. The CLI-side
+// wiring (flags, exit codes, the `promote` command) is still tested there.
+
+// A pid that is genuinely absent. Pid 1 exists on POSIX and on win32, and high
+// pids are recycled, so this is a child that has exited and been reaped —
+// spawned once and reused, but checked on every use so a recycled pid is
+// replaced rather than trusted.
+const isAlive = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err.code === "EPERM";
+  }
+};
+let corpse = null;
+const deadPid = () => {
+  if (corpse === null || isAlive(corpse))
+    corpse = spawnSync(process.execPath, ["-e", ""]).pid;
+  return corpse;
+};
+
+// A harness timeout, a crash, or a reboot leaves a marker no signal handler
+// got to clear — on win32 nothing can, because kill is TerminateProcess. The
+// lock has to be reclaimable without a human running /trio:cancel.
+test("startRun: reclaims a claim whose process died mid-pass", async () => {
+  const root = tmp();
+  const first = await startRun({
+    root,
+    config: cfg({ maxIterations: 2 }),
+    target: "/repo",
+    runLensFn: okLens([finding("leak")]),
+  });
+  assert.equal(first.status, "awaiting_response");
+
+  // Pass 1 completed, so the parked run is legitimately locked. Point the
+  // marker at a pass that never reconciled — what a mid-pass kill leaves.
+  writeFileSync(
+    activeMarker(root),
+    JSON.stringify({ run: first.runId, pass: 2, pid: deadPid() }),
+  );
+
+  const second = await startRun({
+    root,
+    config: cfg({ maxIterations: 2 }),
+    target: "/repo",
+    runLensFn: okLens([finding("leak")]),
+  });
+  assert.equal(second.status, "awaiting_response");
+  assert.notEqual(second.runId, first.runId);
+  // The abandoned run is closed out, not left looking like it is still going.
+  assert.equal(
+    JSON.parse(
+      readFileSync(join(runDir(root, first.runId), "verdict.json"), "utf8"),
+    ).verdict,
+    "cancelled",
+  );
+});
+
+// The counterpart: no process is running while a run waits for its reply
+// either, and that lock must hold. The completed pass on disk is what tells
+// the two apart.
+test("startRun: does not reclaim a parked run just because no process is alive", async () => {
+  const root = tmp();
+  const first = await startRun({
+    root,
+    config: cfg({ maxIterations: 2 }),
+    target: "/repo",
+    runLensFn: okLens([finding("leak")]),
+  });
+  assert.equal(first.status, "awaiting_response");
+
+  writeFileSync(
+    activeMarker(root),
+    JSON.stringify({ run: first.runId, pass: 1, pid: deadPid() }),
+  );
+
+  let called = false;
+  const second = await startRun({
+    root,
+    config: cfg({ maxIterations: 2 }),
+    target: "/repo",
+    runLensFn: async (...args) => {
+      called = true;
+      return okLens([])(...args);
+    },
+  });
+  assert.equal(second.status, "run_in_progress");
+  assert.equal(second.runId, first.runId);
+  assert.equal(called, false, "the second run must not spawn a lens");
+  assert.equal(
+    existsSync(join(runDir(root, first.runId), "verdict.json")),
+    false,
+    "a parked run is not closed out",
+  );
+});
+
+// What a finished run says about promotion. `--max 1` parks on its only pass
+// (`final: true`) and the settling continueRun produces the verdict — the same
+// two calls the CLI made, with no verdicts.json, so the finding stays
+// unreviewed and still blocks.
+async function runToCeiling({ root, config }) {
+  const runLensFn = okLens([finding("leak")]);
+  const parked = await startRun({ root, config, target: "/repo", runLensFn });
+  assert.equal(parked.final, true, "a parked last pass must say so");
+  const r = await continueRun({ root, runLensFn });
+  assert.equal(r.status, "finished");
+  return r;
+}
+
+const PROMOTE_DEFAULT = DEFAULT_CONFIG.artifacts;
+
+for (const c of [
+  {
+    name: "a missing promote directory is reported as an offer, not a silence",
+    artifacts: PROMOTE_DEFAULT,
+    expect: (root, r) => {
+      assert.equal(r.promoted, null);
+      assert.deepEqual(r.promotion, {
+        skipped: true,
+        path: "Docs/Audit",
+        offer: true,
+      });
+      assert.equal(existsSync(join(root, "Docs", "Audit")), false);
+    },
+  },
+  {
+    name: "declining the offer silences it for good",
+    artifacts: { ...PROMOTE_DEFAULT, offerToCreate: false },
+    expect: (_root, r) => {
+      assert.equal(r.promoted, null);
+      assert.equal(r.promotion.offer, false);
+      assert.equal(r.promotion.skipped, true);
+    },
+  },
+  {
+    name: "promotes both audits when the promote directory exists",
+    artifacts: PROMOTE_DEFAULT,
+    setup: (root) => mkdirSync(join(root, "Docs", "Audit"), { recursive: true }),
+    expect: (_root, r) => {
+      assert.ok(r.promoted, "promotion result");
+      assert.ok(existsSync(r.promoted.codexPath));
+      assert.match(readFileSync(r.promoted.codexPath, "utf8"), /## Findings/);
+      assert.ok(existsSync(r.promoted.claudePath));
+    },
+  },
+]) {
+  test(`finalize: ${c.name}`, async () => {
+    const root = tmp();
+    c.setup?.(root);
+    const r = await runToCeiling({
+      root,
+      config: cfg({ maxIterations: 1, artifacts: c.artifacts }),
+    });
+    c.expect(root, r);
+  });
+}
+
+// A lexically valid promoteTo can still lead outside through a directory
+// link. Junctions need no admin on Windows; the test skips where the OS
+// refuses.
+test("finalize: a promotion refused for containment is reported as refused, with no offer", async (t) => {
+  const root = tmp();
+  mkdirSync(join(root, "Docs"), { recursive: true });
+  const outside = mkdtempSync(join(tmpdir(), "trio-outside-"));
+  try {
+    symlinkSync(outside, join(root, "Docs", "Audit"), "junction");
+  } catch (err) {
+    t.skip(`cannot create a directory link here: ${err.code}`);
+    return;
+  }
+
+  const r = await runToCeiling({ root, config: cfg({ maxIterations: 1 }) });
+  assert.equal(r.status, "finished");
+  assert.equal(r.promoted, null);
+  assert.equal(r.promotion.refused, true);
+  assert.equal(r.promotion.offer, false);
+  assert.match(r.promotion.error, /outside the project/);
+  assert.deepEqual(readdirSync(outside), []);
+});
+
+// The second audit lane: Claude's blind findings, handed over as a file. How
+// the lanes merge on a real `trio run` is still a CLI test; this is the rest.
+const claudeFinding = (over = {}) => ({
+  severity: "major",
+  file: "src/app.js",
+  line: 1,
+  title: "add() subtracts",
+  evidence: "return a - b",
+  impact: "wrong number",
+  correction: "return a + b",
+  ...over,
+});
+const claudeOnly = claudeFinding({
+  file: "src/only-claude.js",
+  line: 3,
+  title: "codex never looked here",
+  evidence: "n/a",
+  impact: "n/a",
+  correction: null,
+});
+const writeClaudeFile = (root, findings = [claudeFinding()]) => {
+  const f = join(root, "claude-audit.json");
+  writeFileSync(f, JSON.stringify({ findings }));
+  return f;
+};
+const codexAppFinding = () => ({
+  ...claudeFinding(),
+  id: findingId("src/app.js", "add() subtracts"),
+});
+const readPassRecord = (root, runId, pass) =>
+  JSON.parse(readFileSync(join(passDir(root, runId, pass), "reconcile.json"), "utf8"));
+
+// A Claude-only finding has to be able to hold a run open on its own, or the
+// second lane is decoration.
+test("startRun: a Claude-only finding blocks convergence like any other", async () => {
+  const root = tmp();
+  const r = await startRun({
+    root,
+    config: cfg({ maxIterations: 2 }),
+    target: "/repo",
+    runLensFn: okLens([]),
+    claudeFindingsPath: writeClaudeFile(root),
+  });
+  // Codex found nothing this time; without the lane this run would be clean.
+  assert.equal(r.status, "awaiting_response");
+  assert.equal(r.findings.length, 1);
+  assert.equal(r.findings[0].lens, "claude");
+});
+
+// A handover that will not parse must cost neither a lock nor a wave of
+// Codex processes — a run that silently audits one lane while reporting two
+// is worse than one that refuses to start.
+for (const [name, content, message] of [
+  ["not json", "{ not json", /could not read/],
+  [
+    "an unknown severity",
+    JSON.stringify({ findings: [{ severity: "urgent", file: "a", title: "b" }] }),
+    /unknown severity/,
+  ],
+  [
+    "a finding with no title",
+    JSON.stringify({ findings: [{ severity: "major", file: "a" }] }),
+    /file and a title/,
+  ],
+]) {
+  test(`startRun: a malformed --claude-findings file (${name}) is refused before claiming the lock`, async () => {
+    const root = tmp();
+    const f = join(root, "bad.json");
+    writeFileSync(f, content);
+    const r = await startRun({
+      root,
+      config: cfg(),
+      target: "/repo",
+      runLensFn: () => {
+        throw new Error("no lens may run for a refused handover");
+      },
+      claudeFindingsPath: f,
+    });
+    assert.equal(r.status, "invalid_findings");
+    assert.match(r.error, message);
+    assert.equal(existsSync(activeMarker(root)), false);
+    assert.equal(existsSync(join(trioDir(root), "runs")), false);
+  });
+}
+
+// The lane is optional: a Codex-only run must behave exactly as before.
+test("startRun: no Claude findings leaves the record without a claude lane", async () => {
+  const root = tmp();
+  const r = await startRun({
+    root,
+    config: cfg({ maxIterations: 2 }),
+    target: "/repo",
+    runLensFn: okLens([codexAppFinding()]),
+  });
+  const rec = readPassRecord(root, r.runId, 1);
+  assert.equal(rec.claude, undefined);
+  assert.equal(rec.findings[0].lens, "auditor");
+});
+
+// The lane has to survive adjudication into pass 2. It rides on
+// applyAdjudication spreading `...record` and re-using record.findings rather
+// than re-merging from record.lenses — which does not contain the claude
+// result. Both are load-bearing and neither was asserted anywhere.
+test("continueRun: the Claude lane survives adjudication into pass 2", async () => {
+  const root = tmp();
+  const f = writeClaudeFile(root, [claudeFinding(), claudeOnly]);
+  const runLensFn = okLens([codexAppFinding()]);
+  const first = await startRun({
+    root,
+    config: cfg({ maxIterations: 2 }),
+    target: "/repo",
+    runLensFn,
+    claudeFindingsPath: f,
+  });
+  writeFileSync(
+    join(passDir(root, first.runId, 1), "response.json"),
+    JSON.stringify({ findings: [], summary: "none" }),
+  );
+
+  // No verdicts.json: pass 1's findings are left unreviewed on purpose. The
+  // adjudication gate is the CLI's, not continueRun's.
+  const second = await continueRun({ root, runLensFn, claudeFindingsPath: f });
+  assert.equal(second.status, "awaiting_response");
+  const rec2 = readPassRecord(root, first.runId, 2);
+  const mine = rec2.findings.find((x) => x.title === "codex never looked here");
+  assert.ok(mine, "the claude-only finding vanished in pass 2");
+  assert.equal(mine.lens, "claude");
+  assert.equal(rec2.claude.length, 2);
+});
+
+// The failure this prevents is the one this repo already shipped once: a
+// finding reported closed because nobody re-checked it.
+test("continueRun: refuses to drop a Claude lane the previous pass had", async () => {
+  const root = tmp();
+  const runLensFn = okLens([codexAppFinding()]);
+  const first = await startRun({
+    root,
+    config: cfg({ maxIterations: 2 }),
+    target: "/repo",
+    runLensFn,
+    claudeFindingsPath: writeClaudeFile(root),
+  });
+  writeFileSync(
+    join(passDir(root, first.runId, 1), "response.json"),
+    JSON.stringify({ findings: [], summary: "none" }),
+  );
+
+  const r = await continueRun({ root, runLensFn });
+  assert.equal(r.status, "claude_lane_missing");
+  assert.match(r.error, /carried a Claude audit/);
+  assert.equal(
+    existsSync(passDir(root, first.runId, 2)),
+    false,
+    "a refused continue must not have run a pass",
+  );
 });

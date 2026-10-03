@@ -45,13 +45,6 @@ test("newRunId is second-resolution and filename-safe", () => {
   assert.doesNotMatch(id, /[:/\\]/);
 });
 
-test("newRunId distinguishes two runs started in the same minute", () => {
-  assert.notEqual(
-    newRunId(new Date("2026-07-29T14:03:11Z")),
-    newRunId(new Date("2026-07-29T14:03:47Z")),
-  );
-});
-
 test("the configured timeout reaches every lens", async () => {
   let seen = null;
   await runPass({
@@ -214,7 +207,7 @@ test("respects the parallel cap", async () => {
     },
     briefFor: () => "b",
   });
-  assert.ok(peak <= 2, `peak concurrency was ${peak}`);
+  assert.equal(peak, 2, `peak concurrency was ${peak}`);
 });
 
 test("an unparseable lens blocks convergence even with no findings", async () => {

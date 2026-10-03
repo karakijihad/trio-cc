@@ -11,7 +11,6 @@ import {
   runLens,
   killTree,
   stopAllLenses,
-  SANDBOX,
 } from "../../src/codex-lane.mjs";
 import { readEvents } from "../../src/bus.mjs";
 import { fakeCodexOnPath } from "../helpers/fake-codex.mjs";
@@ -61,10 +60,6 @@ const LENS = {
   effort: "xhigh",
   on: true,
 };
-
-test("sandbox is read-only and frozen", () => {
-  assert.equal(SANDBOX, "read-only");
-});
 
 test("buildArgs always passes read-only and never a write sandbox", () => {
   const args = buildArgs({ target: "/repo", model: LENS.model, effort: LENS.effort });

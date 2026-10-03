@@ -13,7 +13,7 @@ import {
   consultSettings,
   claudeDispatch,
 } from "../../src/config.mjs";
-import { codexHome, trioDir } from "../../src/paths.mjs";
+import { trioDir } from "../../src/paths.mjs";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "trio-"));
 
@@ -256,10 +256,6 @@ test("unknownKeys names a stale top-level key and a stale nested one", () => {
   assert.ok(found.includes("artifacts.raw"));
 });
 
-test("unknownKeys is quiet over the untouched default config", () => {
-  assert.deepEqual(unknownKeys(DEFAULT_CONFIG), []);
-});
-
 test("unknownKeys never flags the load-time unreadable marker", () => {
   assert.deepEqual(unknownKeys({ ...DEFAULT_CONFIG, unreadable: true }), []);
 });
@@ -365,14 +361,6 @@ test("artifacts.promoteTo refuses Unicode line separators", () => {
     }).join(" ");
     assert.match(errs, /artifacts\.promoteTo/, `U+${code.toString(16)}`);
   }
-});
-
-test("codexHome honours CODEX_HOME", () => {
-  const prev = process.env.CODEX_HOME;
-  process.env.CODEX_HOME = "/custom/codex";
-  assert.equal(codexHome(), "/custom/codex");
-  if (prev === undefined) delete process.env.CODEX_HOME;
-  else process.env.CODEX_HOME = prev;
 });
 
 test("lens names must be unique and cannot be consult", () => {

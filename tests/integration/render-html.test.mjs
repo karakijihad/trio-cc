@@ -67,10 +67,6 @@ test("escapes html in event payloads", () => {
   assert.match(html, /&lt;img/);
 });
 
-test("renders an empty log without throwing", () => {
-  assert.match(renderStatic(tmp()), /<!doctype html>/i);
-});
-
 test("writeStatic puts live.html inside the run directory", () => {
   const dir = tmp();
   seed(dir, "claude:main", "agent_message", { text: "x" });

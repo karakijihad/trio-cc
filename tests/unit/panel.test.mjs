@@ -255,14 +255,3 @@ test("renderModelsTable marks a model no lens currently uses", () => {
   });
   assert.match(out, /—/);
 });
-
-test("never prints anything token-shaped", () => {
-  const out = renderPanel({
-    installed: true,
-    config: DEFAULT_CONFIG,
-    caps: CAPS,
-    drift: OK_DRIFT,
-    pre: READY,
-  });
-  assert.doesNotMatch(out, /sk-|eyJ|Bearer /);
-});

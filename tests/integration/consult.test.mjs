@@ -8,18 +8,13 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
 import { Readable } from "node:stream";
 import { EventEmitter } from "node:events";
 import { askCodex } from "../../src/consult.mjs";
 import { readEvents } from "../../src/bus.mjs";
-import {
-  fakeCodexOnPath,
-  installFakeCodex,
-  fakeCodexHome,
-  fakeEnv,
-  CLI,
-} from "../helpers/fake-codex.mjs";
+import consultCommand from "../../src/commands/consult.mjs";
+import { unavailable, ensureGitignore } from "../../src/commands/context.mjs";
+import { fakeCodexOnPath } from "../helpers/fake-codex.mjs";
 
 // codexCommand resolves against PATH; without this these tests only pass on
 // a machine that happens to have the real Codex installed.
@@ -152,23 +147,42 @@ test("askCodex says why Codex failed, from its error events", async () => {
 
 // A consult used to persist nothing but events.jsonl — no record on disk of
 // what was asked, of which model, or whether it ever finished. These drive
-// the CLI itself (`trio consult`), the way an operator actually reaches
-// src/commands/consult.mjs, rather than askCodex directly: run.json is
-// written there, not in this file's askCodex.
+// `trio consult`'s command module (src/commands/consult.mjs) in-process, the
+// way bin/trio.mjs does, rather than askCodex directly: run.json is written
+// there, not in this file's askCodex. Only the fake codex it launches is a
+// child process; the CLI shell around it is not what is under test.
+async function runConsult(root, question, { exit } = {}) {
+  const outs = [];
+  const priorExitCode = process.exitCode;
+  const priorFakeExit = process.env.FAKE_CODEX_EXIT;
+  if (exit !== undefined) process.env.FAKE_CODEX_EXIT = String(exit);
+  process.exitCode = undefined;
+  try {
+    await consultCommand({
+      root,
+      rest: [question],
+      out: (t) => outs.push(t),
+      gatherState: () => ({
+        pre: { state: "ready" },
+        caps: null,
+        consult: { model: null, effort: "high" },
+      }),
+      codexRefusal: () => null,
+      unavailable,
+      ensureGitignore: () => ensureGitignore(root),
+    });
+    return { status: process.exitCode ?? 0, out: outs.join("") };
+  } finally {
+    process.exitCode = priorExitCode;
+    if (priorFakeExit === undefined) delete process.env.FAKE_CODEX_EXIT;
+    else process.env.FAKE_CODEX_EXIT = priorFakeExit;
+  }
+}
+
 function consultProject() {
   const root = mkdtempSync(join(tmpdir(), "trio-consult-cmd-"));
-  const pathDir = mkdtempSync(join(tmpdir(), "trio-consult-bin-"));
-  const home = mkdtempSync(join(tmpdir(), "trio-consult-home-"));
-  installFakeCodex(pathDir);
-  fakeCodexHome(home);
   mkdirSync(join(root, ".trio"), { recursive: true });
-  const env = fakeEnv({ pathDir, codexHome: home, project: root });
-  const cli = (args, extraEnv = {}) =>
-    spawnSync("node", [CLI, ...args], {
-      env: { ...env, ...extraEnv },
-      encoding: "utf8",
-    });
-  return { root, cli };
+  return root;
 }
 
 function consultRunJson(root) {
@@ -177,10 +191,13 @@ function consultRunJson(root) {
   return JSON.parse(readFileSync(join(runsDir, runId, "run.json"), "utf8"));
 }
 
-test("trio consult writes run.json with the question, model, effort and trio's version", () => {
-  const { root, cli } = consultProject();
-  const res = cli(["consult", "is this sound?"]);
-  assert.equal(res.status, 0, res.stderr);
+test("trio consult writes run.json with the question, model, effort and trio's version", async () => {
+  const root = consultProject();
+  // A git checkout: the question is persisted verbatim, so .trio/ has to be
+  // ignored before run.json is written.
+  mkdirSync(join(root, ".git"));
+  const res = await runConsult(root, "is this sound?");
+  assert.equal(res.status, 0, res.out);
   const json = consultRunJson(root);
   assert.equal(json.kind, "consult");
   assert.equal(json.question, "is this sound?");
@@ -191,11 +208,12 @@ test("trio consult writes run.json with the question, model, effort and trio's v
   assert.equal(json.trioVersion, pkg.version);
   assert.match(json.finishedAt, /^\d{4}-\d{2}-\d{2}T/);
   assert.equal(json.failed, false);
+  assert.match(readFileSync(join(root, ".gitignore"), "utf8"), /^\.trio\/$/m);
 });
 
-test("trio consult marks run.json failed when Codex exits non-zero", () => {
-  const { root, cli } = consultProject();
-  const res = cli(["consult", "is this sound?"], { FAKE_CODEX_EXIT: "1" });
+test("trio consult marks run.json failed when Codex exits non-zero", async () => {
+  const root = consultProject();
+  const res = await runConsult(root, "is this sound?", { exit: 1 });
   assert.equal(res.status, 1);
   const json = consultRunJson(root);
   assert.equal(json.failed, true);
@@ -215,12 +233,4 @@ test("two consults minted in the same second get separate directories", async ()
   assert.equal(a, base);
   assert.equal(b, `${base}-2`);
   assert.ok(existsSync(runDir(root, a)) && existsSync(runDir(root, b)));
-});
-
-test("trio consult ignores .trio/ in a git checkout before persisting the question", () => {
-  const { root, cli } = consultProject();
-  mkdirSync(join(root, ".git"));
-  const res = cli(["consult", "is this sound?"]);
-  assert.equal(res.status, 0, res.stderr);
-  assert.match(readFileSync(join(root, ".gitignore"), "utf8"), /^\.trio\/$/m);
 });

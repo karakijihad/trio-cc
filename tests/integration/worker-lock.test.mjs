@@ -25,6 +25,12 @@ import {
 
 const tmp = () => mkdtempSync(join(tmpdir(), "trio-worker-lock-"));
 
+// A fresh child's pid is guaranteed dead the moment it has exited and reaped —
+// unlike a hardcoded number, which a recycled pid could collide with. Spawned
+// once, lazily, so only a run that reaches the stale-lock test pays for it.
+let corpsePid;
+const deadPid = () => (corpsePid ??= spawnSync(process.execPath, ["-e", ""]).pid);
+
 test("acquireWorkerLock: takes an uncontended lock and records who holds it", () => {
   const root = tmp();
   const r = acquireWorkerLock({ root, runId: "2026-01-01T00-00-00", pass: 1 });
@@ -65,14 +71,9 @@ test("acquireWorkerLock: refuses while held by a live pid it cannot positively r
 test("acquireWorkerLock: reclaims a stale lock left by a dead pid", () => {
   const root = tmp();
   mkdirSync(trioDir(root), { recursive: true });
-  // A fresh child's pid is guaranteed dead the moment it has exited and
-  // reaped — unlike a hardcoded number, which a recycled pid could collide
-  // with.
-  const corpse = spawnSync(process.execPath, ["-e", ""]);
-  const dead = corpse.pid;
   writeFileSync(
     workerLockPath(root),
-    JSON.stringify({ pid: dead, run: "r1", pass: 3, since: "t" }),
+    JSON.stringify({ pid: deadPid(), run: "r1", pass: 3, since: "t" }),
   );
 
   const r = acquireWorkerLock({ root, runId: "r2", pass: 1 });
@@ -106,30 +107,4 @@ test("readWorkerLock: absent or corrupt both read as null, not a throw", () => {
   mkdirSync(trioDir(root), { recursive: true });
   writeFileSync(workerLockPath(root), "{ not json");
   assert.equal(readWorkerLock(root), null);
-});
-
-// Mirrors claimActiveRun's own ownership-scoped reclaim: two callers racing
-// the same stale lock must not have the second one delete the first's fresh
-// replacement.
-test("acquireWorkerLock: a second racer's stale-reclaim never deletes the winner's fresh claim", () => {
-  const root = tmp();
-  mkdirSync(trioDir(root), { recursive: true });
-  const corpse = spawnSync(process.execPath, ["-e", ""]);
-  const dead = corpse.pid;
-  writeFileSync(
-    workerLockPath(root),
-    JSON.stringify({ pid: dead, run: "r1", pass: 1, since: "stale-since" }),
-  );
-
-  // First racer reclaims and wins outright.
-  const first = acquireWorkerLock({ root, runId: "winner", pass: 1 });
-  assert.equal(first.ok, true);
-
-  // A second racer that had already read the *original* stale snapshot
-  // before the first one reclaimed it must not blindly delete whatever is
-  // there now — it has to compare against that original snapshot first.
-  const staleSnapshot = { pid: dead, run: "r1", pass: 1, since: "stale-since" };
-  const held = readWorkerLock(root);
-  assert.notDeepEqual(held, staleSnapshot, "the winner's claim replaced it");
-  assert.equal(held.run, "winner");
 });

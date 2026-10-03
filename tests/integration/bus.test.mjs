@@ -41,19 +41,6 @@ test("makeEvent scrubs secrets in string payload fields", () => {
   assert.match(e.payload.output, /<redacted:token>/);
 });
 
-test("makeEvent leaves non-string payload fields alone", () => {
-  const e = makeEvent({
-    run: "r",
-    pass: 1,
-    lane: "l",
-    actor: "codex",
-    kind: "command_execution",
-    payload: { exit_code: 0, ok: true },
-  });
-  assert.equal(e.payload.exit_code, 0);
-  assert.equal(e.payload.ok, true);
-});
-
 test("append then read round-trips every event kind", () => {
   const dir = tmp();
   const kinds = [
@@ -254,10 +241,12 @@ test("makeEvent scrubs secrets nested in objects and arrays", () => {
       detail: { output: `token ${FAKE_SK}` },
       lines: ["clean line", `key ${FAKE_SK}`],
       exit_code: 0,
+      ok: true,
     },
   });
   assert.match(e.payload.detail.output, /<redacted:token>/);
   assert.match(e.payload.lines[1], /<redacted:token>/);
   assert.equal(e.payload.lines[0], "clean line");
   assert.equal(e.payload.exit_code, 0);
+  assert.equal(e.payload.ok, true);
 });
