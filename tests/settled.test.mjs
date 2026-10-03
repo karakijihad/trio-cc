@@ -11,6 +11,7 @@ import {
 } from "../src/settled.mjs";
 import { findingId } from "../src/findings.mjs";
 import { passDir } from "../src/paths.mjs";
+import { FAKE_BEARER, FAKE_SK } from "./helpers/fake-secrets.mjs";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "trio-settled-"));
 
@@ -358,15 +359,15 @@ test("a secret in a decline reason never becomes an entry", () => {
         {
           id: f.id,
           action: "declined",
-          reason: "the token sk-proj-AAAABBBBCCCCDDDD1234 is a test fixture",
+          reason: `the token ${FAKE_SK} is a test fixture`,
         },
       ],
     },
   });
   const [entry] = buildSettled(root, "r1", 1);
-  assert.doesNotMatch(entry.basis, /sk-proj-AAAABBBBCCCCDDDD1234/);
+  assert.doesNotMatch(entry.basis, new RegExp(FAKE_SK));
   assert.match(entry.basis, /<redacted:/);
-  assert.doesNotMatch(renderSettledSection([entry]), /sk-proj-AAAABBBB/);
+  assert.doesNotMatch(renderSettledSection([entry]), new RegExp(FAKE_SK));
 });
 
 test("a secret in a refuted basis is scrubbed at the same boundary", () => {
@@ -375,12 +376,12 @@ test("a secret in a refuted basis is scrubbed at the same boundary", () => {
     findings: [
       finding("src/a.mjs", 10, "claim one", {
         verdict: "refute",
-        basis: "harmless: Authorization: Bearer abcdefghijklmnop1234",
+        basis: `harmless: Authorization: Bearer ${FAKE_BEARER}`,
       }),
     ],
   });
   const [entry] = buildSettled(root, "r1", 1);
-  assert.doesNotMatch(entry.basis, /abcdefghijklmnop1234/);
+  assert.doesNotMatch(entry.basis, new RegExp(FAKE_BEARER));
 });
 
 // The module's contract is that a malformed record contributes nothing and

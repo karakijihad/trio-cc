@@ -10,6 +10,7 @@ import {
   readEventsFrom,
   eventsFile,
 } from "../src/bus.mjs";
+import { FAKE_SK } from "./helpers/fake-secrets.mjs";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "trio-bus-"));
 
@@ -35,7 +36,7 @@ test("makeEvent scrubs secrets in string payload fields", () => {
     lane: "l",
     actor: "codex",
     kind: "command_execution",
-    payload: { output: "token sk-proj-AAAABBBBCCCCDDDD1234" },
+    payload: { output: `token ${FAKE_SK}` },
   });
   assert.match(e.payload.output, /<redacted:token>/);
 });
@@ -250,8 +251,8 @@ test("makeEvent scrubs secrets nested in objects and arrays", () => {
     actor: "codex",
     kind: "command_execution",
     payload: {
-      detail: { output: "token sk-proj-AAAABBBBCCCCDDDD1234" },
-      lines: ["clean line", "key sk-proj-AAAABBBBCCCCDDDD1234"],
+      detail: { output: `token ${FAKE_SK}` },
+      lines: ["clean line", `key ${FAKE_SK}`],
       exit_code: 0,
     },
   });

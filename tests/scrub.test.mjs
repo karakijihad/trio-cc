@@ -1,6 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { scrub } from "../src/scrub.mjs";
+import {
+  FAKE_BASIC,
+  FAKE_BEARER,
+  FAKE_COOKIE,
+  FAKE_JWT,
+  FAKE_PEM,
+  FAKE_SK,
+} from "./helpers/fake-secrets.mjs";
 
 test("redacts email addresses", () => {
   assert.equal(scrub("user: alice@example.com"), "user: <redacted:email>");
@@ -9,32 +17,32 @@ test("redacts email addresses", () => {
 test("redacts bearer and sk- tokens", () => {
   // A whole Authorization header is redacted as a unit, so the scheme goes
   // with the credential rather than the token alone being swapped out.
-  const header = scrub("Authorization: Bearer abcdef1234567890abcdef");
+  const header = scrub(`Authorization: Bearer ${FAKE_BEARER}`);
   assert.match(header, /<redacted:credential>/);
-  assert.doesNotMatch(header, /abcdef1234567890/);
-  assert.match(scrub("Bearer abcdef1234567890abcdef"), /<redacted:token>/);
-  assert.match(scrub("key sk-proj-AAAABBBBCCCCDDDD1234"), /<redacted:token>/);
+  assert.doesNotMatch(header, new RegExp(FAKE_BEARER));
+  assert.match(scrub(`Bearer ${FAKE_BEARER}`), /<redacted:token>/);
+  assert.match(scrub(`key ${FAKE_SK}`), /<redacted:token>/);
 });
 
 // The bypass the audit found: none of the token-shaped rules match a base64
 // Basic credential or an opaque session cookie, and the hook copies whole
 // shell command lines into the event log.
 test("redacts credential headers no token rule would match", () => {
-  const basic = scrub('curl -H "Authorization: Basic YWRtaW46aHVudGVyMg==" https://api.example.com');
-  assert.doesNotMatch(basic, /YWRtaW46aHVudGVyMg/);
+  const basic = scrub(`curl -H "Authorization: Basic ${FAKE_BASIC}" https://api.example.com`);
+  assert.doesNotMatch(basic, new RegExp(FAKE_BASIC));
   assert.match(basic, /<redacted:credential>/);
   // Bounded at the quote: the rest of the command survives for context.
   assert.match(basic, /https:\/\/api\.example\.com/);
 
-  const cookie = scrub("Cookie: session=8f14e45fceea167a5a36dedd4bea2543");
-  assert.doesNotMatch(cookie, /8f14e45fceea167a5a36dedd4bea2543/);
+  const cookie = scrub(`Cookie: session=${FAKE_COOKIE}`);
+  assert.doesNotMatch(cookie, new RegExp(FAKE_COOKIE));
   assert.match(cookie, /<redacted:cookie>/);
 
   const setCookie = scrub("Set-Cookie: sid=abc123; HttpOnly");
   assert.doesNotMatch(setCookie, /abc123/);
 
-  const proxy = scrub("Proxy-Authorization: Basic Zm9vOmJhcg==");
-  assert.doesNotMatch(proxy, /Zm9vOmJhcg/);
+  const proxy = scrub(`Proxy-Authorization: Basic ${FAKE_BASIC}`);
+  assert.doesNotMatch(proxy, new RegExp(FAKE_BASIC));
 });
 
 test("redacts GitHub's underscore-delimited token families", () => {
@@ -53,21 +61,16 @@ test("redacts GitHub's underscore-delimited token families", () => {
 });
 
 test("redacts JWTs", () => {
-  assert.match(
-    scrub("t=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcdEFGH1234"),
-    /<redacted:token>/,
-  );
+  assert.match(scrub(`t=${FAKE_JWT}`), /<redacted:token>/);
 });
 
 test("redacts private key blocks", () => {
-  const pem =
-    "-----BEGIN RSA PRIVATE KEY-----\nMIIEow==\n-----END RSA PRIVATE KEY-----";
-  assert.equal(scrub(pem), "<redacted:private-key>");
+  assert.equal(scrub(FAKE_PEM), "<redacted:private-key>");
 });
 
 test("redacts assigned secret values, keeping the key name", () => {
   assert.equal(
-    scrub('api_key = "s3cr3tvalue123456"'),
+    scrub('api_key = "YOUR_API_KEY_HERE"'),
     'api_key = "<redacted:secret>"',
   );
 });

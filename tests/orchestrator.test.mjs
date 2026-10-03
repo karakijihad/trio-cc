@@ -9,6 +9,7 @@ import { DEFAULT_CONFIG } from "../src/config.mjs";
 import { findingId } from "../src/findings.mjs";
 import { readEvents } from "../src/bus.mjs";
 import { runDir, passDir } from "../src/paths.mjs";
+import { FAKE_SK } from "./helpers/fake-secrets.mjs";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "trio-orch-"));
 const cfg = (over = {}) => ({
@@ -426,7 +427,7 @@ test("a finding's secret-shaped evidence is scrubbed before it hits disk", async
     severity: "major",
     file: "a.rs",
     title: "leaked secret",
-    evidence: "found sk-proj-AAAABBBBCCCCDDDD1234 in code",
+    evidence: `found ${FAKE_SK} in code`,
     impact: "",
     correction: "",
     id: findingId("a.rs", "leaked secret"),
@@ -455,7 +456,7 @@ test("a finding's secret-shaped evidence is scrubbed before it hits disk", async
 
   assert.doesNotMatch(
     JSON.stringify(record),
-    /sk-proj-AAAABBBBCCCCDDDD1234/,
+    new RegExp(FAKE_SK),
   );
   assert.match(JSON.stringify(record), /<redacted:token>/);
 
@@ -463,14 +464,14 @@ test("a finding's secret-shaped evidence is scrubbed before it hits disk", async
     join(passDir(root, "r1", 1), "reconcile.json"),
     "utf8",
   );
-  assert.doesNotMatch(reconcile, /sk-proj-AAAABBBBCCCCDDDD1234/);
+  assert.doesNotMatch(reconcile, new RegExp(FAKE_SK));
   assert.match(reconcile, /<redacted:token>/);
 
   const lensJson = readFileSync(
     join(passDir(root, "r1", 1), "codex", "security.json"),
     "utf8",
   );
-  assert.doesNotMatch(lensJson, /sk-proj-AAAABBBBCCCCDDDD1234/);
+  assert.doesNotMatch(lensJson, new RegExp(FAKE_SK));
   assert.match(lensJson, /<redacted:token>/);
 });
 

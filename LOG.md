@@ -4,6 +4,11 @@ What went wrong, and what was done about it. One line each, newest first.
 
 ---
 
+## 2026-10-03 — plugin directory validation
+
+- **The scrubber tests shipped token-shaped literals**, which the directory's secret scanner blocks as real credentials. The fixtures now live in `tests/helpers/fake-secrets.mjs` as `EXAMPLE` placeholders that still match every scrub rule.
+- **A raw NUL byte in a string made `tests/paths.test.mjs` read as binary**, so the validator could not inspect it and held the plugin. The byte is now written as `\u0000`.
+
 ## 2026-09-29 — Claude models: take ids, follow the operator's settings
 
 - **The Claude side took aliases only, and the audit agents pinned Sonnet.** A `claude-*` id in config was refused, one named in a consult was sent to Codex as `--model`, and `trio-lens`/`trio-reconciler` ignored `CLAUDE_CODE_SUBAGENT_MODEL`. Config now takes an alias or a `claude-*` id, dispatched as its alias because the Agent tool takes nothing else; the cards pin no model, so with `agentModel` null the harness runs the settings id exactly; with neither, Claude asks. `trio config dispatch` resolves which applies.

@@ -17,6 +17,7 @@ import {
 } from "../src/promote.mjs";
 import { runPass } from "../src/orchestrator.mjs";
 import { DEFAULT_CONFIG } from "../src/config.mjs";
+import { FAKE_SK } from "./helpers/fake-secrets.mjs";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "trio-promote-"));
 const NOW = new Date("2026-07-29T14:03:00Z");
@@ -277,7 +278,7 @@ test("promote never leaks a lens finding's secret-shaped evidence into the codex
     severity: "critical",
     file: "src/a.rs",
     title: "leaked secret",
-    evidence: "token sk-proj-AAAABBBBCCCCDDDD1234 found in src/a.rs:12",
+    evidence: `token ${FAKE_SK} found in src/a.rs:12`,
     impact: "credential exposure",
     correction: "rotate and remove",
     id: "s1",
@@ -314,7 +315,7 @@ test("promote never leaks a lens finding's secret-shaped evidence into the codex
     now: NOW,
   });
   const md = readFileSync(r.codexPath, "utf8");
-  assert.doesNotMatch(md, /sk-proj-AAAABBBBCCCCDDDD1234/);
+  assert.doesNotMatch(md, new RegExp(FAKE_SK));
   assert.match(md, /<redacted:token>/);
 });
 
