@@ -8,6 +8,7 @@ What went wrong, and what was done about it. One line each, newest first.
 
 - **The scrubber tests shipped token-shaped literals**, which the directory's secret scanner blocks as real credentials. The fixtures now live in `tests/helpers/fake-secrets.mjs` as `EXAMPLE` placeholders that still match every scrub rule.
 - **A raw NUL byte in a string made `tests/paths.test.mjs` read as binary**, so the validator could not inspect it and held the plugin. The byte is now written as `\u0000`.
+- **A `curl … https://api.example.com` scrubber fixture read as download-and-execute**, and as a credential sent to that host. The header now rides a command line with no fetch tool or URL.
 
 ## 2026-09-29 — Claude models: take ids, follow the operator's settings
 

@@ -28,11 +28,13 @@ test("redacts bearer and sk- tokens", () => {
 // Basic credential or an opaque session cookie, and the hook copies whole
 // shell command lines into the event log.
 test("redacts credential headers no token rule would match", () => {
-  const basic = scrub(`curl -H "Authorization: Basic ${FAKE_BASIC}" https://api.example.com`);
+  // A shell command line carrying the header, as the hook records one. No
+  // fetch tool or URL: the directory scanner reads those as a network call.
+  const basic = scrub("tool -H \"Authorization: Basic " + FAKE_BASIC + "\" --verbose");
   assert.doesNotMatch(basic, new RegExp(FAKE_BASIC));
   assert.match(basic, /<redacted:credential>/);
   // Bounded at the quote: the rest of the command survives for context.
-  assert.match(basic, /https:\/\/api\.example\.com/);
+  assert.match(basic, /--verbose$/);
 
   const cookie = scrub(`Cookie: session=${FAKE_COOKIE}`);
   assert.doesNotMatch(cookie, new RegExp(FAKE_COOKIE));
