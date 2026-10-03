@@ -215,6 +215,10 @@ export function main(rawStdin, root) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const chunks = [];
+  // Claude Code stops waiting after the hook's timeout, but on Windows a
+  // killed hook can leave this process orphaned on a stdin that never ends.
+  // Past the deadline the event is dropped: a tap never outlives its caller.
+  setTimeout(() => process.exit(0), 10_000).unref();
   process.stdin.on("error", () => process.exit(0));
   process.stdin.on("data", (c) => chunks.push(c));
   process.stdin.on("end", () => {

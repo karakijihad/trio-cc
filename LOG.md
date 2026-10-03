@@ -8,6 +8,7 @@ What went wrong, and what was done about it. One line each, newest first.
 
 - **The scrubber tests shipped token-shaped literals**, which the directory's secret scanner blocks as real credentials. The fixtures now live in `tests/helpers/fake-secrets.mjs` as `EXAMPLE` placeholders that still match every scrub rule.
 - **A raw NUL byte in a string made `tests/paths.test.mjs` read as binary**, so the validator could not inspect it and held the plugin. The byte is now written as `\u0000`.
+- **The event hook leaked processes on Windows.** A hook killed at its timeout could leave `hook-emit.mjs` orphaned, waiting forever on a stdin that never closed; five had piled up in a day. It now exits on its own after 10 seconds.
 - **The full suite took the best part of an hour on Windows**, almost all of it node starting up: CLI tests spawned the CLI to check argument parsing, and every project re-probed Codex cold. Argument and config tests now call the commands in-process, process tests share a seeded capability cache and pre-built run states, ~40 duplicate tests are gone, and the suite is split so `npm test` runs only unit and integration.
 - **A `curl … https://api.example.com` scrubber fixture read as download-and-execute**, and as a credential sent to that host. The header now rides a command line with no fetch tool or URL.
 
