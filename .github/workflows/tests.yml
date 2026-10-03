@@ -52,7 +52,8 @@ jobs:
       - name: Node and platform
         run: node --version && node -p "process.platform + ' ' + process.arch"
 
-      # package.json's own test script quotes its glob ("tests/**/*.test.mjs")
+      # CI runs every category but live (real Codex, opt-in). package.json's
+      # test scripts quote their globs ("tests/unit/*.test.mjs" and the rest)
       # so no shell ever expands it — node --test has to do that itself, and
       # only started supporting glob arguments after Node 18. On 18.18.0 that
       # quoted string is passed straight through as a literal, non-existent
@@ -64,8 +65,8 @@ jobs:
       - name: Tests (Node 18.18.0 — its test runner can't expand npm test's glob)
         if: matrix.node == '18.18.0'
         shell: bash
-        run: node --test tests/*.test.mjs
+        run: node --test tests/unit/*.test.mjs tests/integration/*.test.mjs tests/process/*.test.mjs
 
       - name: Tests
         if: matrix.node != '18.18.0'
-        run: npm test
+        run: npm run test:all

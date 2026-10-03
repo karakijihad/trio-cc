@@ -1,0 +1,268 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { renderPanel, renderModelsTable, modelLabel } from "../../src/panel.mjs";
+import { DEFAULT_CONFIG } from "../../src/config.mjs";
+
+const CAPS = {
+  cliVersion: "0.145.0",
+  authMode: "chatgpt",
+  models: [{ slug: "gpt-5.6-luna", efforts: ["xhigh"] }],
+};
+const OK_DRIFT = { ok: true, warnings: [] };
+const READY = { state: "ready", message: "Logged in using ChatGPT", fix: "" };
+
+test("shows the not-installed path with the install command", () => {
+  const out = renderPanel({
+    installed: false,
+    config: DEFAULT_CONFIG,
+    caps: null,
+    drift: OK_DRIFT,
+    pre: {
+      state: "not_installed",
+      message: "missing",
+      fix: "npm i -g @openai/codex",
+    },
+  });
+  assert.match(out, /npm i -g @openai\/codex/);
+});
+
+test("shows disabled state and how to enable", () => {
+  const out = renderPanel({
+    installed: true,
+    config: { ...DEFAULT_CONFIG, enabled: false },
+    caps: CAPS,
+    drift: OK_DRIFT,
+    pre: READY,
+  });
+  assert.match(out, /disabled/i);
+  assert.match(out, /\/trio:on/);
+});
+
+test("shows enabled state with the iteration ceiling", () => {
+  const out = renderPanel({
+    installed: true,
+    config: { ...DEFAULT_CONFIG, enabled: true },
+    caps: CAPS,
+    drift: OK_DRIFT,
+    pre: READY,
+  });
+  assert.match(out, /enabled/i);
+  assert.match(out, /max iterations\s+2/);
+});
+
+test("lists every lens with model, effort and on/off", () => {
+  const out = renderPanel({
+    installed: true,
+    config: { ...DEFAULT_CONFIG, enabled: true },
+    caps: CAPS,
+    drift: OK_DRIFT,
+    pre: READY,
+  });
+  // Through modelLabel, not l.model: an unpinned lens is a supported config
+  // and `null.replace` would fail here as if the panel were broken.
+  for (const l of DEFAULT_CONFIG.codex.lenses) {
+    assert.match(out, new RegExp(l.name));
+    assert.match(out, new RegExp(modelLabel(l.model).replace(/\./g, "\\.")));
+  }
+});
+
+test("shows the resolved consult model and effort", () => {
+  const base = {
+    installed: true,
+    config: DEFAULT_CONFIG,
+    caps: CAPS,
+    drift: OK_DRIFT,
+    pre: READY,
+  };
+  assert.match(
+    renderPanel({ ...base, consult: { model: "gpt-5.6-luna", effort: "xhigh" } }),
+    /Consult\s+gpt-5\.6-luna\s+xhigh/,
+  );
+  assert.match(
+    renderPanel({ ...base, consult: { model: null, effort: "medium" } }),
+    /Consult\s+codex default\s+medium/,
+  );
+});
+
+test("the panel names an unpinned lens instead of printing null", () => {
+  const config = {
+    ...DEFAULT_CONFIG,
+    enabled: true,
+    codex: {
+      ...DEFAULT_CONFIG.codex,
+      lenses: [{ name: "auditor", model: null, effort: "medium", on: true }],
+    },
+  };
+  const out = renderPanel({
+    enabled: true,
+    installed: true,
+    config,
+    caps: CAPS,
+    drift: OK_DRIFT,
+    pre: READY,
+  });
+  assert.match(out, /codex default/);
+  assert.doesNotMatch(out, /null/);
+});
+
+// Rows are built from the catalogue, so an unpinned lens matches no slug and
+// would otherwise be absent from the one table that answers "what runs where".
+test("renderModelsTable still accounts for a lens with no model pinned", () => {
+  const out = renderModelsTable({
+    models: [{ slug: "gpt-5.6-luna", displayName: "Luna", defaultEffort: "medium", efforts: ["medium"] }],
+    lenses: [
+      { name: "auditor", model: "gpt-5.6-luna", effort: "medium", on: true },
+      { name: "security", model: null, effort: "medium", on: true },
+    ],
+  });
+  assert.match(out, /codex default.*security/s);
+  assert.match(out, /gpt-5\.6-luna.*auditor/);
+});
+
+// `config.codex.lenses.forEach` used to throw a raw TypeError here when the
+// config was malformed. The panel is the one caller that cannot simply
+// refuse — it is what /trio:on and bare `trio` render — so it reports the
+// errors and stops instead of reading a config it cannot trust.
+test("reports config errors instead of crashing on a malformed lens list", () => {
+  const out = renderPanel({
+    installed: true,
+    config: { ...DEFAULT_CONFIG, codex: { ...DEFAULT_CONFIG.codex, lenses: null } },
+    caps: CAPS,
+    drift: OK_DRIFT,
+    pre: READY,
+    configErrors: ["codex.lenses must be a non-empty array, got: null"],
+  });
+  assert.match(out, /codex\.lenses/);
+  assert.doesNotMatch(out, /TypeError/);
+});
+
+test("a config error takes over the panel before drift, lenses, or anything else", () => {
+  const out = renderPanel({
+    installed: true,
+    config: DEFAULT_CONFIG,
+    caps: CAPS,
+    drift: { ok: false, warnings: ["codex exec no longer accepts: --json"] },
+    pre: READY,
+    configErrors: ["codex.consult must be an object, got: null"],
+  });
+  assert.match(out, /codex\.consult/);
+  assert.doesNotMatch(out, /--json/);
+});
+
+test("surfaces unknown config keys as a warning, never a refusal", () => {
+  const out = renderPanel({
+    installed: true,
+    config: DEFAULT_CONFIG,
+    caps: CAPS,
+    drift: OK_DRIFT,
+    pre: READY,
+    unknownKeys: ["artifacts.raw", "auto"],
+  });
+  assert.match(out, /artifacts\.raw/);
+  assert.match(out, /auto/);
+});
+
+test("omits the unknown-key line when there are none", () => {
+  const out = renderPanel({
+    installed: true,
+    config: DEFAULT_CONFIG,
+    caps: CAPS,
+    drift: OK_DRIFT,
+    pre: READY,
+  });
+  assert.doesNotMatch(out, /unknown config key/);
+});
+
+test("surfaces drift warnings", () => {
+  const out = renderPanel({
+    installed: true,
+    config: DEFAULT_CONFIG,
+    caps: CAPS,
+    drift: { ok: false, warnings: ["codex exec no longer accepts: --json"] },
+    pre: READY,
+  });
+  assert.match(out, /--json/);
+});
+
+test("surfaces the API-key billing warning", () => {
+  const out = renderPanel({
+    installed: true,
+    config: DEFAULT_CONFIG,
+    caps: { ...CAPS, authMode: "apikey" },
+    drift: OK_DRIFT,
+    pre: { state: "api_key_mode", message: "billed per token", fix: "" },
+  });
+  assert.match(out, /billed per token/i);
+});
+
+test("shows the cached-probe line with its age and escape hatch", () => {
+  const probedAt = new Date(Date.now() - 3 * 3_600_000).toISOString();
+  const out = renderPanel({
+    installed: true,
+    config: { ...DEFAULT_CONFIG, enabled: true },
+    caps: CAPS,
+    drift: OK_DRIFT,
+    pre: READY,
+    cached: true,
+    probedAt,
+  });
+  assert.match(out, /cached probe from/);
+  assert.match(out, /\/trio:doctor to re-probe/);
+});
+
+test("omits the cached-probe line when cached is not set", () => {
+  const out = renderPanel({
+    installed: true,
+    config: { ...DEFAULT_CONFIG, enabled: true },
+    caps: CAPS,
+    drift: OK_DRIFT,
+    pre: READY,
+  });
+  assert.doesNotMatch(out, /cached probe/);
+});
+
+test("renderModelsTable lists each model with the lenses that use it", () => {
+  const out = renderModelsTable({
+    models: [
+      {
+        slug: "gpt-5.6-luna",
+        displayName: "GPT-5.6-Luna",
+        defaultEffort: "medium",
+        efforts: ["medium", "xhigh"],
+      },
+    ],
+    lenses: [
+      { name: "auditor", model: "gpt-5.6-luna", effort: "xhigh", on: true },
+      { name: "tester", model: "gpt-5.4", effort: "high", on: true },
+    ],
+  });
+  assert.match(out, /gpt-5\.6-luna/);
+  assert.match(out, /auditor/);
+  assert.doesNotMatch(out, /tester.*gpt-5\.6-luna|gpt-5\.6-luna.*tester/);
+});
+
+test("renderModelsTable marks a model no lens currently uses", () => {
+  const out = renderModelsTable({
+    models: [
+      {
+        slug: "gpt-5.4",
+        displayName: "GPT-5.4",
+        defaultEffort: "high",
+        efforts: ["high"],
+      },
+    ],
+    lenses: [],
+  });
+  assert.match(out, /—/);
+});
+
+test("never prints anything token-shaped", () => {
+  const out = renderPanel({
+    installed: true,
+    config: DEFAULT_CONFIG,
+    caps: CAPS,
+    drift: OK_DRIFT,
+    pre: READY,
+  });
+  assert.doesNotMatch(out, /sk-|eyJ|Bearer /);
+});

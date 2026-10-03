@@ -1,0 +1,449 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  normalize,
+  laneOf,
+  main,
+  TAP_CEILING_BYTES,
+} from "../../src/hook-emit.mjs";
+import { readEvents, eventsFile } from "../../src/bus.mjs";
+import { activeMarker, trioDir, runDir } from "../../src/paths.mjs";
+
+const tmp = () => mkdtempSync(join(tmpdir(), "trio-hook-"));
+
+// `target`, when given, writes the run.json a real run always has by the
+// time any tool call fires — startRun writes it before claiming the marker.
+// Omitting it simulates the corrupt-run.json edge case on purpose.
+const activate = (root, runId = "r1", target) => {
+  mkdirSync(trioDir(root), { recursive: true });
+  writeFileSync(activeMarker(root), JSON.stringify({ run: runId, pass: 1 }));
+  const dir = runDir(root, runId);
+  if (target) {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "run.json"), JSON.stringify({ target }));
+  }
+  return dir;
+};
+
+// An orphaned worker finishing late must release its own lock, not the lock
+// of whatever run claimed the marker after it.
+test("removeMarker leaves a marker that names a different run alone", async () => {
+  const { removeMarker } = await import("../../src/marker.mjs");
+  const root = tmp();
+  activate(root, "newer-run");
+  assert.equal(removeMarker(root, "older-run"), false);
+  assert.equal(existsSync(activeMarker(root)), true);
+  assert.equal(removeMarker(root, "newer-run"), true);
+  assert.equal(existsSync(activeMarker(root)), false);
+});
+
+// The likeliest thing standing there when an orphan finishes is the {run:null}
+// a fresh claim writes before it has named its run.
+test("removeMarker leaves an unnamed fresh claim alone", async () => {
+  const { removeMarker } = await import("../../src/marker.mjs");
+  const root = tmp();
+  mkdirSync(trioDir(root), { recursive: true });
+  writeFileSync(activeMarker(root), JSON.stringify({ run: null, pass: 0 }));
+  assert.equal(removeMarker(root, "older-run"), false);
+  assert.equal(existsSync(activeMarker(root)), true);
+});
+
+// The marker outlives a pass on purpose, so this tap would otherwise record
+// hours of unrelated work while a run sits parked between passes.
+test("the tap stops appending once the log is oversized", () => {
+  const root = tmp();
+  const dir = activate(root);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(eventsFile(dir), "x".repeat(TAP_CEILING_BYTES + 1));
+  main(
+    JSON.stringify({
+      hook_event_name: "MessageDisplay",
+      message_text: "after the ceiling",
+    }),
+    root,
+  );
+  assert.equal(
+    readEvents(dir).some((e) => e.payload?.text === "after the ceiling"),
+    false,
+  );
+});
+
+// A start that claimed the marker but has not named its run yet writes
+// {run: null}. A tap must never break a tool call, whatever it finds there.
+test("the tap survives a marker that names no run", () => {
+  const root = tmp();
+  mkdirSync(trioDir(root), { recursive: true });
+  writeFileSync(activeMarker(root), JSON.stringify({ run: null, pass: 0 }));
+  assert.doesNotThrow(() =>
+    main(
+      JSON.stringify({
+        hook_event_name: "MessageDisplay",
+        message_text: "mid-claim",
+      }),
+      root,
+    ),
+  );
+});
+
+test("the tap appends normally below the ceiling", () => {
+  const root = tmp();
+  const dir = activate(root);
+  main(
+    JSON.stringify({
+      hook_event_name: "MessageDisplay",
+      message_text: "under the ceiling",
+    }),
+    root,
+  );
+  assert.equal(
+    readEvents(dir).some((e) => e.payload?.text === "under the ceiling"),
+    true,
+  );
+});
+
+test("laneOf returns claude:main outside a subagent", () => {
+  assert.equal(laneOf({ hook_event_name: "MessageDisplay" }), "claude:main");
+});
+
+test("laneOf names the subagent lane from agent_type and agent_id", () => {
+  assert.equal(
+    laneOf({ agent_type: "code-reviewer", agent_id: "a91f3c2d" }),
+    "claude:code-reviewer#a91f",
+  );
+});
+
+test("normalize maps MessageDisplay to an agent_message", () => {
+  const e = normalize({
+    hook_event_name: "MessageDisplay",
+    message_text: "thinking out loud",
+  });
+  assert.equal(e.kind, "agent_message");
+  assert.equal(e.payload.text, "thinking out loud");
+  assert.equal(e.actor, "claude");
+});
+
+test("normalize turns an Edit PostToolUse into a unified diff", () => {
+  const e = normalize({
+    hook_event_name: "PostToolUse",
+    tool_name: "Edit",
+    tool_input: {
+      file_path: "src/a.js",
+      old_string: "let y = 2;",
+      new_string: "let y = 3;",
+    },
+  });
+  assert.equal(e.kind, "file_change");
+  assert.match(e.payload.diff, /^-let y = 2;$/m);
+  assert.match(e.payload.diff, /^\+let y = 3;$/m);
+});
+
+test("normalize maps a Bash PreToolUse to command_execution", () => {
+  const e = normalize({
+    hook_event_name: "PreToolUse",
+    tool_name: "Bash",
+    tool_input: { command: "npm test" },
+  });
+  assert.equal(e.kind, "command_execution");
+  assert.equal(e.payload.command, "npm test");
+});
+
+test("normalize maps PostToolUseFailure to an error", () => {
+  const e = normalize({
+    hook_event_name: "PostToolUseFailure",
+    tool_name: "Bash",
+    error: "exit 1",
+  });
+  assert.equal(e.kind, "error");
+  assert.equal(e.payload.error, "exit 1");
+});
+
+test("normalize maps subagent lifecycle events", () => {
+  assert.equal(
+    normalize({
+      hook_event_name: "SubagentStart",
+      agent_type: "Explore",
+      agent_id: "ab12",
+    }).kind,
+    "subagent_start",
+  );
+  assert.equal(
+    normalize({
+      hook_event_name: "SubagentStop",
+      agent_type: "Explore",
+      agent_id: "ab12",
+      last_assistant_message: "done",
+    }).kind,
+    "subagent_stop",
+  );
+});
+
+test("normalize returns null for an event with nothing to record", () => {
+  assert.equal(
+    normalize({ hook_event_name: "MessageDisplay", message_text: "" }),
+    null,
+  );
+});
+
+test("main is a no-op when the active marker is absent", () => {
+  const root = tmp();
+  main(
+    JSON.stringify({ hook_event_name: "MessageDisplay", message_text: "hi" }),
+    root,
+  );
+  assert.deepEqual(readEvents(runDir(root, "r1")), []);
+});
+
+test("main appends to the active run when the marker is present", () => {
+  const root = tmp();
+  const dir = activate(root);
+  main(
+    JSON.stringify({ hook_event_name: "MessageDisplay", message_text: "hi" }),
+    root,
+  );
+  const events = readEvents(dir);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].lane, "claude:main");
+  assert.equal(events[0].pass, 1);
+});
+
+test("main swallows malformed stdin rather than throwing", () => {
+  const root = tmp();
+  activate(root);
+  assert.doesNotThrow(() => main("not json at all", root));
+});
+
+// --- brief leak: only file changes inside the run's target ever reach the
+// recorded log (and, downstream, prompt.mjs's "What Claude changed" section).
+
+test("a file_change inside the run's target is recorded", () => {
+  const root = tmp();
+  const target = tmp();
+  const dir = activate(root, "r1", target);
+  main(
+    JSON.stringify({
+      hook_event_name: "PostToolUse",
+      tool_name: "Edit",
+      tool_input: {
+        file_path: join(target, "src", "a.js"),
+        old_string: "x",
+        new_string: "y",
+      },
+    }),
+    root,
+  );
+  assert.equal(
+    readEvents(dir).filter((e) => e.kind === "file_change").length,
+    1,
+  );
+});
+
+test("a file_change outside the run's target never reaches the log", () => {
+  const root = tmp();
+  const target = tmp();
+  const outside = tmp();
+  const dir = activate(root, "r1", target);
+  main(
+    JSON.stringify({
+      hook_event_name: "PostToolUse",
+      tool_name: "Write",
+      tool_input: {
+        file_path: join(outside, "scratchpad", "verdicts-1.json"),
+        content: "{}",
+      },
+    }),
+    root,
+  );
+  assert.deepEqual(
+    readEvents(dir).filter((e) => e.kind === "file_change"),
+    [],
+  );
+});
+
+// The common case is target === root, so the run's own .trio/ has to be
+// excluded even though it sits squarely inside the target by pure prefix —
+// this is the exact shape of the real leak: scratchpad/response.json paths
+// under .trio/runs/<id>/ reaching a later pass's brief.
+test("a file_change under the run's own .trio directory never reaches the log, even when it is inside the target", () => {
+  const root = tmp();
+  const dir = activate(root, "r1", root);
+  main(
+    JSON.stringify({
+      hook_event_name: "PostToolUse",
+      tool_name: "Write",
+      tool_input: {
+        file_path: join(dir, "scratchpad", "claude-findings-2.json"),
+        content: "{}",
+      },
+    }),
+    root,
+  );
+  main(
+    JSON.stringify({
+      hook_event_name: "PostToolUse",
+      tool_name: "Write",
+      tool_input: {
+        file_path: join(dir, "pass-1", "response.json"),
+        content: "{}",
+      },
+    }),
+    root,
+  );
+  assert.deepEqual(
+    readEvents(dir).filter((e) => e.kind === "file_change"),
+    [],
+  );
+});
+
+// Windows drive letters are case-insensitive and paths mix separators — a
+// target reported one way and an edit path reported another must still
+// compare equal.
+test("a file_change matches its target across path case and separator differences", { skip: process.platform !== "win32" && "paths are case-sensitive off Windows" }, () => {
+  const root = tmp();
+  const target = tmp();
+  const dir = activate(root, "r1", target.toUpperCase());
+  main(
+    JSON.stringify({
+      hook_event_name: "PostToolUse",
+      tool_name: "Edit",
+      tool_input: {
+        file_path: join(target, "src", "a.js").replace(/\\/g, "/"),
+        old_string: "x",
+        new_string: "y",
+      },
+    }),
+    root,
+  );
+  const events = readEvents(dir).filter((e) => e.kind === "file_change");
+  assert.equal(events.length, 1);
+});
+
+// A symlink inside the target that points into .trio/ is inside the target
+// only lexically. Creating one needs privileges on Windows, so the test skips
+// itself where the OS refuses.
+test("a file_change through a symlink into .trio/ is dropped", async (t) => {
+  const { symlinkSync, mkdirSync: mk, writeFileSync: wf } = await import("node:fs");
+  const root = tmp();
+  const dir = activate(root, "r1", root);
+  mk(join(root, ".trio"), { recursive: true });
+  wf(join(root, ".trio", "secret.json"), "{}");
+  try {
+    symlinkSync(join(root, ".trio", "secret.json"), join(root, "link.json"));
+  } catch (err) {
+    t.skip(`cannot create a symlink here: ${err.code}`);
+    return;
+  }
+  main(
+    JSON.stringify({
+      hook_event_name: "PostToolUse",
+      tool_name: "Write",
+      tool_input: { file_path: join(root, "link.json"), content: "{\"x\":1}" },
+    }),
+    root,
+  );
+  assert.deepEqual(
+    readEvents(dir).filter((e) => e.kind === "file_change"),
+    [],
+  );
+});
+
+test("a file_change is dropped when the run's target cannot be determined", () => {
+  const root = tmp();
+  const dir = activate(root); // no run.json written — target unknown
+  main(
+    JSON.stringify({
+      hook_event_name: "PostToolUse",
+      tool_name: "Edit",
+      tool_input: {
+        file_path: join(root, "src", "a.js"),
+        old_string: "x",
+        new_string: "y",
+      },
+    }),
+    root,
+  );
+  assert.deepEqual(
+    readEvents(dir).filter((e) => e.kind === "file_change"),
+    [],
+  );
+});
+
+// --- duplicate recording: PreToolUse and PostToolUse both firing hook-emit.mjs
+// for the same tool call recorded every non-Edit/Write tool call twice.
+
+test("hooks.json no longer registers hook-emit.mjs on PreToolUse", () => {
+  const raw = readFileSync(
+    new URL("../../hooks/hooks.json", import.meta.url),
+    "utf8",
+  );
+  const hooks = JSON.parse(raw);
+  const preToolCommands = (hooks.hooks.PreToolUse ?? []).flatMap((m) =>
+    (m.hooks ?? []).map((h) => h.command),
+  );
+  assert.ok(
+    !preToolCommands.some((c) => c.includes("hook-emit.mjs")),
+    "PreToolUse must not run hook-emit.mjs — PostToolUse already records the same call",
+  );
+});
+
+test("one Bash tool call yields one recorded event under the fixed hook registration", () => {
+  const root = tmp();
+  const dir = activate(root);
+  // hooks.json now fires hook-emit.mjs on PostToolUse only for a live tool
+  // call, so a single call is exactly one main() invocation.
+  main(
+    JSON.stringify({
+      hook_event_name: "PostToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "npm test" },
+    }),
+    root,
+  );
+  assert.equal(
+    readEvents(dir).filter((e) => e.kind === "command_execution").length,
+    1,
+  );
+});
+
+test("PostToolUseFailure is still recorded once the PreToolUse duplicate is gone", () => {
+  const root = tmp();
+  const dir = activate(root);
+  main(
+    JSON.stringify({
+      hook_event_name: "PostToolUseFailure",
+      tool_name: "Bash",
+      error: "exit 1",
+    }),
+    root,
+  );
+  assert.equal(readEvents(dir).filter((e) => e.kind === "error").length, 1);
+});
+
+test("an Edit diff inside the target is still recorded once the PreToolUse duplicate is gone", () => {
+  const root = tmp();
+  const dir = activate(root, "r1", root);
+  main(
+    JSON.stringify({
+      hook_event_name: "PostToolUse",
+      tool_name: "Edit",
+      tool_input: {
+        file_path: join(root, "src", "a.js"),
+        old_string: "let y = 2;",
+        new_string: "let y = 3;",
+      },
+    }),
+    root,
+  );
+  assert.equal(
+    readEvents(dir).filter((e) => e.kind === "file_change").length,
+    1,
+  );
+});

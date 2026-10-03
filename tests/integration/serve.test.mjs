@@ -1,0 +1,345 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { start } from "../../src/serve.mjs";
+import { appendEvent, makeEvent } from "../../src/bus.mjs";
+
+const tmp = () => mkdtempSync(join(tmpdir(), "trio-serve-"));
+const seed = (dir, kind) =>
+  appendEvent(
+    dir,
+    makeEvent({
+      run: "r",
+      pass: 1,
+      lane: "codex:auditor",
+      actor: "codex",
+      kind,
+      payload: { text: "x" },
+    }),
+  );
+
+test("binds loopback only", async () => {
+  const { server, port } = await start({ runDirPath: tmp(), port: 0 });
+  assert.equal(server.address().address, "127.0.0.1");
+  assert.ok(port > 0);
+  server.close();
+});
+
+test("walks past an occupied port and reports the one it actually bound", async () => {
+  const first = await start({ runDirPath: tmp(), port: 0 });
+  // Ask for the port already in use: the server must move on, and the URL it
+  // returns is the only truthful one — the configured port is a request.
+  const second = await start({ runDirPath: tmp(), port: first.port });
+  assert.notEqual(second.port, first.port);
+  assert.equal(second.url, `http://127.0.0.1:${second.port}`);
+  const res = await fetch(second.url);
+  assert.equal(res.status, 200);
+  first.server.close();
+  second.server.close();
+});
+
+test("serves the pane html at /", async () => {
+  const { server, url } = await start({ runDirPath: tmp(), port: 0 });
+  const res = await fetch(url);
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get("content-type"), /text\/html/);
+  assert.match(await res.text(), /<!doctype html>/i);
+  server.close();
+});
+
+test("/events replays the existing backlog as SSE data lines", async () => {
+  const dir = tmp();
+  seed(dir, "agent_message");
+  seed(dir, "command_execution");
+  const { server, url } = await start({ runDirPath: dir, port: 0 });
+
+  const res = await fetch(`${url}/events`);
+  assert.match(res.headers.get("content-type"), /text\/event-stream/);
+
+  // Reading one chunk and checking for the first event let a server that
+  // dropped everything after it pass. Read until both seeded events arrive.
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let seen = "";
+  const deadline = Date.now() + 5000;
+  while (
+    !(seen.includes("agent_message") && seen.includes("command_execution")) &&
+    Date.now() < deadline
+  ) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    seen += decoder.decode(value, { stream: true });
+  }
+  await reader.cancel();
+  server.close();
+
+  assert.match(seen, /^data: /m);
+  assert.ok(seen.includes("agent_message"), "first backlog event missing");
+  assert.ok(seen.includes("command_execution"), "second backlog event missing");
+  assert.ok(
+    seen.indexOf("agent_message") < seen.indexOf("command_execution"),
+    "backlog replayed out of order",
+  );
+});
+
+test("/events streams events appended after connecting, without resending the backlog", async () => {
+  const dir = tmp();
+  seed(dir, "agent_message");
+  const { server, url } = await start({ runDirPath: dir, port: 0 });
+
+  const res = await fetch(`${url}/events`);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let seen = "";
+  const readUntil = async (pred, ms) => {
+    const deadline = Date.now() + ms;
+    while (!pred(seen) && Date.now() < deadline) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      seen += decoder.decode(value, { stream: true });
+    }
+  };
+
+  await readUntil((s) => s.includes("agent_message"), 5000);
+  assert.equal((seen.match(/agent_message/g) ?? []).length, 1);
+
+  seed(dir, "reasoning");
+  await readUntil((s) => s.includes("reasoning"), 5000);
+
+  await reader.cancel();
+  server.close();
+
+  // The new event arrived, and the backlog line was not sent a second time.
+  assert.equal((seen.match(/agent_message/g) ?? []).length, 1);
+  assert.equal((seen.match(/reasoning/g) ?? []).length, 1);
+});
+
+test("/version reports the plugin manifest's version", async () => {
+  const { server, url } = await start({ runDirPath: tmp(), port: 0 });
+  const res = await fetch(`${url}/version`);
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get("content-type"), /application\/json/);
+  const body = await res.json();
+  // Pinning the exact number here would make every release touch this test;
+  // what matters is that it is the manifest's value, not a hardcoded one.
+  const { readFileSync } = await import("node:fs");
+  const manifest = JSON.parse(
+    readFileSync(new URL("../../.claude-plugin/plugin.json", import.meta.url)),
+  );
+  assert.equal(body.version, manifest.version);
+  server.close();
+});
+
+test("unknown paths return 404", async () => {
+  const { server, url } = await start({ runDirPath: tmp(), port: 0 });
+  assert.equal((await fetch(`${url}/nope`)).status, 404);
+  server.close();
+});
+
+test("the server never writes to the run directory", async () => {
+  const dir = tmp();
+  seed(dir, "agent_message");
+  const { server, url } = await start({ runDirPath: dir, port: 0 });
+  await fetch(url);
+  const res = await fetch(`${url}/events`);
+  await res.body.getReader().cancel();
+  const { readEvents } = await import("../../src/bus.mjs");
+  assert.equal(readEvents(dir).length, 1);
+  server.close();
+});
+
+test("/events survives a run directory with no log file yet", async () => {
+  const { server, url } = await start({ runDirPath: tmp(), port: 0 });
+  const res = await fetch(`${url}/events`);
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get("content-type"), /text\/event-stream/);
+  await res.body.getReader().cancel();
+  server.close();
+});
+
+// The verdict has to land *after* the server is listening, or this never
+// exercises the poll at all — it just starts a server next to a file that
+// was already there.
+test("autoExit closes the server once verdict.json appears", async () => {
+  const dir = tmp();
+  const { server } = await start({
+    runDirPath: dir,
+    port: 0,
+    autoExit: true,
+    pollMs: 20,
+    lingerMs: 20,
+  });
+  const closed = new Promise((resolve, reject) => {
+    const guard = setTimeout(
+      () => reject(new Error("server did not auto-exit")),
+      2000,
+    );
+    server.on("close", () => {
+      clearTimeout(guard);
+      resolve();
+    });
+  });
+
+  // Still up before the verdict exists — the poll must be what closes it.
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(server.listening, true, "closed before any verdict was written");
+
+  writeFileSync(join(dir, "verdict.json"), JSON.stringify({ verdict: "clean" }));
+  await closed;
+});
+
+// The bug this guards: server.close() only resolves once every existing
+// connection has ended, and an SSE response never ends on its own — a
+// browser tab left attached kept the poll interval and fs.watch watcher
+// alive right along with it, so auto-exit never actually exited. A plain
+// setTimeout "deadline" cannot prove this: a `reader.read()` left pending
+// against a socket that is never closed just hangs forever regardless of
+// any timer running elsewhere, so the actual deadline here is an
+// AbortController tied to the fetch itself, which is the only thing that
+// can unblock that pending read on the old, broken code — the reject on
+// timeout is what makes this fail loudly on old code instead of hanging
+// the test run.
+test("autoExit closes the server even with a client connected to /events", async () => {
+  const dir = tmp();
+  const { server, url } = await start({
+    runDirPath: dir,
+    port: 0,
+    autoExit: true,
+    pollMs: 20,
+    lingerMs: 20,
+  });
+
+  const controller = new AbortController();
+  const res = await fetch(`${url}/events`, { signal: controller.signal });
+  const reader = res.body.getReader();
+  // Keep a read pending against the stream, the way a browser tab holding
+  // the connection open would — this is exactly what the old code left
+  // dangling forever.
+  reader.read().catch(() => {});
+
+  const closed = new Promise((resolve, reject) => {
+    const guard = setTimeout(() => {
+      controller.abort();
+      reject(
+        new Error("server did not auto-exit with a client still connected"),
+      );
+    }, 3000);
+    server.on("close", () => {
+      clearTimeout(guard);
+      resolve();
+    });
+  });
+
+  writeFileSync(join(dir, "verdict.json"), JSON.stringify({ verdict: "clean" }));
+  await closed;
+  controller.abort();
+});
+
+// Every reconnection used to start over from byte offset zero, so the page
+// (view/index.html) replayed the whole backlog on top of what it had already
+// rendered. The server now hands back an SSE `id:` (a byte offset) and, on a
+// reconnect carrying `Last-Event-ID`, resumes reading from exactly there
+// instead of from the start.
+test("/events honours Last-Event-ID on reconnect and does not replay the backlog", async () => {
+  const dir = tmp();
+  seed(dir, "agent_message");
+  const { server, url } = await start({ runDirPath: dir, port: 0 });
+
+  const decoder = new TextDecoder();
+  const readUntil = async (reader, pred, ms) => {
+    let seen = "";
+    const deadline = Date.now() + ms;
+    while (!pred(seen) && Date.now() < deadline) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      seen += decoder.decode(value, { stream: true });
+    }
+    return seen;
+  };
+
+  const first = await fetch(`${url}/events`);
+  const reader1 = first.body.getReader();
+  const seen1 = await readUntil(
+    reader1,
+    (s) => s.includes("agent_message"),
+    5000,
+  );
+  await reader1.cancel();
+
+  const idLine = seen1.match(/^id: (\S+)\s*$/m);
+  assert.ok(idLine, "server did not send an id: line with the backlog");
+  const lastEventId = idLine[1];
+
+  seed(dir, "reasoning");
+
+  const second = await fetch(`${url}/events`, {
+    headers: { "Last-Event-ID": lastEventId },
+  });
+  const reader2 = second.body.getReader();
+  const seen2 = await readUntil(
+    reader2,
+    (s) => s.includes("reasoning"),
+    5000,
+  );
+  await reader2.cancel();
+  server.close();
+
+  assert.ok(
+    !seen2.includes("agent_message"),
+    "reconnect replayed an event already seen",
+  );
+  assert.ok(seen2.includes("reasoning"), "reconnect missed the new event");
+});
+
+// One id for a whole flushed batch made every event in it resume from the
+// batch's end, so a client that dropped after the first event of a backlog
+// reconnected past the second without ever seeing it.
+// A real timeout: on the broken code the second read never resolves, and a
+// Date.now() check between reads cannot interrupt a read that is pending.
+test("/events resumes after the last event the client actually received", { timeout: 15_000 }, async () => {
+  const dir = tmp();
+  seed(dir, "agent_message");
+  seed(dir, "reasoning");
+  const { server, url } = await start({ runDirPath: dir, port: 0 });
+
+  const decoder = new TextDecoder();
+  const first = await fetch(`${url}/events`);
+  const reader1 = first.body.getReader();
+  let seen1 = "";
+  const deadline = Date.now() + 5000;
+  while (!seen1.includes("reasoning") && Date.now() < deadline) {
+    const { value, done } = await reader1.read();
+    if (done) break;
+    seen1 += decoder.decode(value, { stream: true });
+  }
+  await reader1.cancel();
+
+  // The id a client holds after dispatching only the first event.
+  const blocks = seen1.split("\n\n").filter((b) => b.includes("data:"));
+  assert.equal(blocks.length, 2, "backlog should arrive as two events");
+  const firstId = blocks[0].match(/^id: (\S+)$/m)?.[1];
+  assert.ok(firstId, "the first event carried no id");
+
+  const second = await fetch(`${url}/events`, {
+    headers: { "Last-Event-ID": firstId },
+  });
+  const reader2 = second.body.getReader();
+  let seen2 = "";
+  const deadline2 = Date.now() + 5000;
+  while (!seen2.includes("reasoning") && Date.now() < deadline2) {
+    const { value, done } = await reader2.read();
+    if (done) break;
+    seen2 += decoder.decode(value, { stream: true });
+  }
+  await reader2.cancel();
+  server.close();
+
+  assert.ok(!seen2.includes("agent_message"), "reconnect replayed the first event");
+  assert.equal(
+    seen2.split("reasoning").length - 1,
+    1,
+    "the unseen second event must arrive exactly once",
+  );
+});

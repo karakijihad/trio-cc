@@ -1,0 +1,888 @@
+// CLI coverage that runs in the default suite: every case here reaches
+// bin/trio.mjs without touching the network or the Codex binary, so a
+// regression in argument parsing, command routing or exit codes fails
+// `npm test` rather than waiting for a TRIO_E2E run.
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawnSync, spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { installFakeCodex, fakeCodexHome, fakeEnv } from "../helpers/fake-codex.mjs";
+
+const CLI = fileURLToPath(new URL("../../bin/trio.mjs", import.meta.url));
+
+// A fake Codex on PATH, shared by every test in this file (node:test runs
+// each file in its own process, so this cannot leak into another file's
+// suite). Without it, any command reaching gatherState — `on`, `doctor`,
+// `lens` when it validates a model — probed whatever Codex the machine
+// running the tests happened to have installed, and the result depended on
+// it.
+const fakePathDir = mkdtempSync(join(tmpdir(), "trio-cli-bin-"));
+const fakeHomeDir = mkdtempSync(join(tmpdir(), "trio-cli-home-"));
+installFakeCodex(fakePathDir);
+fakeCodexHome(fakeHomeDir);
+
+const project = () => mkdtempSync(join(tmpdir(), "trio-cli-"));
+const trio = (root, args) =>
+  spawnSync("node", [CLI, ...args], {
+    env: fakeEnv({ pathDir: fakePathDir, codexHome: fakeHomeDir, project: root }),
+    encoding: "utf8",
+  });
+
+// The tree-killer is asynchronous on win32 (it shells out to taskkill), so
+// the process is gone shortly after cancel returns, not the instant it does.
+const waitForExit = async (pid, ms = 5000) => {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return false;
+};
+
+// A run id has to look like one Trio minted, and cancel now requires the run
+// directory it claims to belong to — a marker naming neither is exactly the
+// tampered state it must not act on.
+const RUN_ID = "2026-08-01T09-15-00";
+
+const claimRun = (root, pid, runId = RUN_ID) => {
+  mkdirSync(join(root, ".trio", "runs", runId), { recursive: true });
+  writeFileSync(
+    join(root, ".trio", "runs", runId, "run.json"),
+    JSON.stringify({ runId, target: root }),
+  );
+  writeFileSync(
+    join(root, ".trio", "active"),
+    JSON.stringify({ run: runId, pass: 1, pid }),
+  );
+};
+
+// Stands in for a Trio worker: it owns a Codex-like child of its own and
+// tears it down on SIGTERM, exactly as bin/trio.mjs now does via
+// stopAllLenses. A worker with no children proves nothing here — the old
+// single-PID implementation would pass that too.
+// ESM, because it is written out as trio.mjs — see the spawn below for why
+// the name matters.
+const WORKER = `
+import { spawn } from "node:child_process";
+const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+  stdio: "ignore",
+});
+process.stdout.write(child.pid + "\\n");
+const stop = () => {
+  try { child.kill(); } catch {}
+  process.exit(1);
+};
+process.on("SIGTERM", stop);
+process.on("SIGINT", stop);
+setInterval(() => {}, 1000);
+`;
+
+const firstLine = (stream, ms = 5000) =>
+  new Promise((resolve, reject) => {
+    let buf = "";
+    const timer = setTimeout(() => reject(new Error("worker said nothing")), ms);
+    stream.setEncoding("utf8");
+    stream.on("data", (chunk) => {
+      buf += chunk;
+      const nl = buf.indexOf("\n");
+      if (nl === -1) return;
+      clearTimeout(timer);
+      resolve(buf.slice(0, nl).trim());
+    });
+  });
+
+// The grandchild is the point: a worker with no children proves nothing, and
+// the test this replaced had none.
+//
+// Honest limits. On win32 this passes even with killTreeCommand stubbed to
+// null — verified by mutation — because Windows tears the grandchild down
+// with its parent anyway, so nothing black-box can discriminate here. It does
+// discriminate on POSIX, where a bare SIGTERM to the worker leaves the child
+// running and only the worker's own handler reaches it. The mechanism that
+// handler depends on is tested directly in codex-lane.test.mjs
+// ("stopAllLenses tears down every lens still running"), which is
+// platform-independent; this test covers the wiring end to end.
+test("cancel stops the worker's children, not just the worker", async () => {
+  const root = project();
+  // Spawned from a file named trio.mjs, not `node -e`: cancel identifies its
+  // target by command line, and a stand-in that no honest identification
+  // would accept is not standing in for anything.
+  const workerPath = join(mkdtempSync(join(tmpdir(), "trio-worker-")), "trio.mjs");
+  writeFileSync(workerPath, WORKER);
+  const worker = spawn(process.execPath, [workerPath], {
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  let childPid = null;
+  try {
+    childPid = Number(await firstLine(worker.stdout));
+    assert.ok(childPid > 0, "worker never reported a child");
+    claimRun(root, worker.pid);
+
+    const r = trio(root, ["cancel"]);
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, new RegExp(`stopped pid ${worker.pid}`));
+    assert.equal(await waitForExit(worker.pid), true, "worker outlived cancel");
+    assert.equal(await waitForExit(childPid), true, "child outlived cancel");
+  } finally {
+    for (const pid of [worker.pid, childPid])
+      if (pid) {
+        try {
+          process.kill(pid);
+        } catch {
+          /* already gone, which is the point */
+        }
+      }
+  }
+});
+
+test("cancel does not claim to have stopped a process already gone", () => {
+  const root = project();
+  // spawnSync has waited for this one, so its pid is dead by definition.
+  claimRun(root, spawnSync(process.execPath, ["-e", ""]).pid);
+  const r = trio(root, ["cancel"]);
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /Run cancelled\./);
+  assert.doesNotMatch(r.stdout, /stopped pid/);
+});
+
+// The traversal the audit found: runId went straight into path.join, and
+// render then wrote live.html at whatever that resolved to.
+test("a runId that escapes .trio/runs is refused, not joined", () => {
+  const root = project();
+  const escape = join("..", "..", "escaped-run");
+  for (const cmd of [
+    ["render", escape],
+    ["serve", escape],
+    ["promote", escape],
+  ]) {
+    const r = trio(root, cmd);
+    assert.equal(r.status, 2, cmd.join(" "));
+    assert.match(r.stdout + r.stderr, /Not a run id/);
+  }
+  assert.equal(existsSync(join(root, "..", "..", "escaped-run")), false);
+});
+
+test("render with no run says so instead of throwing", () => {
+  const r = trio(project(), ["render"]);
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /No run to render/);
+  assert.doesNotMatch(r.stdout + r.stderr, /ENOENT|at Object|Error:/);
+});
+
+test("render names a run id that does not exist", () => {
+  const r = trio(project(), ["render", "2026-01-01T00-00-00"]);
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /No such run/);
+});
+
+// A marker naming a run that was never created is tampered or stale; either
+// way its pid must not be signalled.
+test("cancel will not signal a pid whose run directory is absent", () => {
+  const root = project();
+  mkdirSync(join(root, ".trio"), { recursive: true });
+  writeFileSync(
+    join(root, ".trio", "active"),
+    JSON.stringify({ run: "2026-08-01T09-15-00", pass: 1, pid: process.pid }),
+  );
+  const r = trio(root, ["cancel"]);
+  assert.equal(r.status, 0);
+  assert.doesNotMatch(r.stdout, /stopped pid/);
+});
+
+// The whole exploit, end to end. `.trio/active` is an ordinary file in the
+// project, so a hostile repo can pre-seed one naming a live pid, and a
+// matching run.json is just as easy to plant. On win32 the identification
+// used to be `tasklist`, which reports the image name alone — so every
+// node.exe on the machine passed, and cancel killed its whole tree.
+test("cancel will not kill an unrelated node process a forged marker names", async () => {
+  const root = project();
+  const bystander = spawn(
+    process.execPath,
+    ["-e", "setInterval(() => {}, 1000)"],
+    { stdio: "ignore" },
+  );
+  try {
+    const runId = "2026-08-01T09-15-00";
+    // Everything the attacker controls, planted: a valid-format run id, the
+    // run directory that gates the signal, and the victim's pid.
+    mkdirSync(join(root, ".trio", "runs", runId), { recursive: true });
+    writeFileSync(
+      join(root, ".trio", "runs", runId, "run.json"),
+      JSON.stringify({ runId, target: root }),
+    );
+    mkdirSync(join(root, ".trio"), { recursive: true });
+    writeFileSync(
+      join(root, ".trio", "active"),
+      JSON.stringify({ run: runId, pass: 1, pid: bystander.pid }),
+    );
+
+    const r = trio(root, ["cancel"]);
+    assert.equal(r.status, 0);
+    assert.doesNotMatch(r.stdout, /stopped pid/);
+    // Cancellation still happens — it is the signal that is withheld, not the
+    // record — but the bystander is untouched.
+    assert.equal(
+      await waitForExit(bystander.pid, 1500),
+      false,
+      "cancel killed a process that was never Trio's",
+    );
+  } finally {
+    try {
+      bystander.kill();
+    } catch {
+      /* already gone */
+    }
+  }
+});
+
+// The old parser stepped in twos from index 0, so the "on" token shifted
+// everything after it and the model was dropped — with a success message.
+test("lens rejects malformed arguments instead of reporting success", () => {
+  const cases = [
+    [["lens", "auditor", "model"], /model needs a value/],
+    [["lens", "auditor", "effort"], /effort needs a value/],
+    [["lens", "auditor", "frobnicate", "x"], /unexpected argument: frobnicate/],
+    [["lens", "auditor", "model", "a", "model", "b"], /model given twice/],
+    [["lens", "auditor", "on", "wat"], /unexpected argument: wat/],
+  ];
+  for (const [args, expected] of cases) {
+    const r = trio(project(), args);
+    assert.equal(r.status, 2, args.join(" "));
+    assert.match(r.stdout + r.stderr, expected, args.join(" "));
+  }
+});
+
+// `lens auditor on model X` used to drop the model and still exit 0. Against
+// the real Codex CLI, whether the capability check then accepted X depended
+// on the machine running the test. The fake catalogue on PATH here only ever
+// knows "fake-model" (see fake-codex.mjs), so the outcome is deterministic:
+// the capability check refuses it, and refuses it by name — proving the
+// model reached the check rather than being silently dropped.
+test("lens does not silently drop a value after on/off", () => {
+  const root = project();
+  const modelOf = () =>
+    JSON.parse(trio(root, ["config", "get"]).stdout).codex.lenses.find(
+      (l) => l.name === "auditor",
+    ).model;
+  const before = modelOf();
+  const r = trio(root, ["lens", "auditor", "on", "model", "not-a-real-model"]);
+
+  assert.equal(r.status, 2);
+  assert.match(r.stdout + r.stderr, /not-a-real-model/);
+  assert.equal(modelOf(), before, "a rejected change must not persist");
+});
+
+test("lens consult is addressable, but has no on/off", () => {
+  const root = project();
+  const q = trio(root, ["lens", "consult"]);
+  assert.equal(q.status, 0);
+  assert.match(q.stdout, /^consult {2}codex default {2}high/);
+  for (const flip of ["on", "off"]) {
+    const r = trio(root, ["lens", "consult", flip]);
+    assert.equal(r.status, 2);
+    assert.match(r.stdout, /no on\/off/);
+  }
+  assert.match(trio(root, ["lens", "nope"]).stdout, /known: .*consult/);
+});
+
+// `"codex.lenses": null` is valid JSON and survives config.mjs's merge as
+// null (see config.mjs's own comment on `merge`). Every command below used to
+// reach `config.codex.lenses.forEach` or `.map` on it and throw a raw
+// TypeError instead of a message an operator could act on.
+const withNullLenses = (root) => {
+  mkdirSync(join(root, ".trio"), { recursive: true });
+  writeFileSync(
+    join(root, ".trio", "config.json"),
+    JSON.stringify({ codex: { lenses: null } }),
+  );
+};
+
+test("the panel reports a malformed lens list instead of crashing", () => {
+  const root = project();
+  withNullLenses(root);
+  const r = trio(root, []);
+  assert.doesNotMatch(r.stderr, /TypeError|forEach is not a function/);
+  assert.match(r.stdout, /codex\.lenses/);
+});
+
+test("on reports a malformed lens list instead of crashing", () => {
+  const root = project();
+  withNullLenses(root);
+  const r = trio(root, ["on"]);
+  assert.doesNotMatch(r.stderr, /TypeError|forEach is not a function/);
+  assert.match(r.stdout, /codex\.lenses/);
+  // `on` still does its own job — config get/set has to keep working so the
+  // file can be repaired.
+  assert.equal(JSON.parse(trio(root, ["config", "get"]).stdout).enabled, true);
+});
+
+test("doctor reports a malformed lens list instead of crashing", () => {
+  const root = project();
+  withNullLenses(root);
+  const r = trio(root, ["doctor"]);
+  assert.doesNotMatch(r.stderr, /TypeError|forEach is not a function/);
+  assert.match(r.stdout, /codex\.lenses/);
+});
+
+test("models refuses a malformed lens list instead of crashing", () => {
+  const root = project();
+  withNullLenses(root);
+  const r = trio(root, ["models"]);
+  assert.doesNotMatch(r.stderr, /TypeError|map is not a function/);
+  assert.equal(r.status, 2);
+  assert.match(r.stdout, /codex\.lenses/);
+});
+
+// config get/set are the way out of a malformed file, so they must keep
+// working over one — this is the whole point of refusing rather than
+// crashing everywhere else.
+test("config get and set still work over a malformed lens list", () => {
+  const root = project();
+  withNullLenses(root);
+  const got = trio(root, ["config", "get"]);
+  assert.equal(got.status, 0);
+  assert.equal(JSON.parse(got.stdout).codex.lenses, null);
+  const set = trio(root, ["config", "set", "maxIterations", "3"]);
+  assert.equal(set.status, 0);
+});
+
+// .trio/config.json can carry keys this version of Trio no longer reads —
+// left behind by an older release, or a hand edit — and that must never be a
+// reason to refuse. It should only ever warn.
+test("an unknown config key warns without refusing anything", () => {
+  const root = project();
+  mkdirSync(join(root, ".trio"), { recursive: true });
+  writeFileSync(
+    join(root, ".trio", "config.json"),
+    JSON.stringify({ artifacts: { raw: ".trio/runs" }, auto: "ask" }),
+  );
+  const got = trio(root, ["config", "get"]);
+  assert.equal(got.status, 0);
+  assert.match(got.stderr, /artifacts\.raw/);
+  assert.match(got.stderr, /auto/);
+
+  const panel = trio(root, []);
+  assert.equal(panel.status, 0);
+  assert.match(panel.stdout, /artifacts\.raw/);
+});
+
+test("an unknown command exits non-zero with usage", () => {
+  const r = trio(project(), ["frobnicate"]);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stdout + r.stderr, /usage|unknown/i);
+});
+
+test("config get prints the whole config as JSON", () => {
+  const r = trio(project(), ["config", "get"]);
+  assert.equal(r.status, 0);
+  const cfg = JSON.parse(r.stdout);
+  assert.equal(cfg.enabled, true);
+  assert.equal(cfg.maxIterations, 2);
+});
+
+test("config set rejects an invalid value and names the valid ones", () => {
+  const r = trio(project(), ["config", "set", "view.mode", "hologram"]);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stdout + r.stderr, /pane/);
+});
+
+test("config set persists a valid value", () => {
+  const root = project();
+  assert.equal(trio(root, ["config", "set", "maxIterations", "4"]).status, 0);
+  assert.equal(JSON.parse(trio(root, ["config", "get"]).stdout).maxIterations, 4);
+});
+
+test("on and off flip the enabled flag", () => {
+  const root = project();
+  trio(root, ["on"]);
+  assert.equal(JSON.parse(trio(root, ["config", "get"]).stdout).enabled, true);
+  trio(root, ["off"]);
+  assert.equal(JSON.parse(trio(root, ["config", "get"]).stdout).enabled, false);
+});
+
+// The bug this guards: /trio:on used to announce that .trio/ had been added
+// to .gitignore whether or not there was a checkout to add it to.
+test("on gitignores .trio/ inside a checkout", () => {
+  const root = project();
+  mkdirSync(join(root, ".git"));
+  trio(root, ["on"]);
+  assert.match(readFileSync(join(root, ".gitignore"), "utf8"), /^\.trio\/$/m);
+});
+
+test("on writes no .gitignore where there is no checkout", () => {
+  const root = project();
+  trio(root, ["on"]);
+  assert.equal(existsSync(join(root, ".gitignore")), false);
+});
+
+test("help prints usage and exits clean", () => {
+  for (const arg of ["help", "--help", "-h"]) {
+    const r = trio(project(), [arg]);
+    assert.equal(r.status, 0, arg);
+    assert.match(r.stdout, /trio run /);
+  }
+});
+
+// The regression this exists for: an unrecognised flag used to fall through
+// to a full five-lens run on the operator's OpenAI credit.
+test("run refuses an unrecognised flag instead of starting", () => {
+  const r = trio(project(), ["run", "--frobnicate"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stdout + r.stderr, /unknown flag: --frobnicate/);
+});
+
+test("run --help prints usage rather than running", () => {
+  const r = trio(project(), ["run", "--help"]);
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /trio run /);
+});
+
+test("run keeps accepting the flags it knows", () => {
+  const r = trio(project(), ["run", "--lenses", "auditor", "--max", "nope"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stdout + r.stderr, /--max takes a positive whole number/);
+});
+
+test("consult treats a leading dash as a typo, not a question", () => {
+  const r = trio(project(), ["consult", "--help"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stdout + r.stderr, /usage: trio consult/);
+});
+
+test("run rejects a non-numeric --max before probing anything", () => {
+  const root = project();
+  const r = trio(root, ["run", "--max", "nope"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stdout, /positive whole number/);
+  assert.equal(existsSync(join(root, ".trio", "runs")), false);
+});
+
+test("run rejects --max 0 and a negative --max", () => {
+  const root = project();
+  for (const bad of ["0", "-1", "1.5"]) {
+    const r = trio(root, ["run", "--max", bad]);
+    assert.equal(r.status, 2, `--max ${bad} was accepted`);
+  }
+  assert.equal(existsSync(join(root, ".trio", "runs")), false);
+});
+
+test("run rejects a stored maxIterations that is not a positive integer", () => {
+  const root = project();
+  mkdirSync(join(root, ".trio"), { recursive: true });
+  writeFileSync(
+    join(root, ".trio", "config.json"),
+    JSON.stringify({ enabled: true, maxIterations: 0 }),
+  );
+  const r = trio(root, ["run"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stdout, /maxIterations/);
+});
+
+// Trio ships enabled, so the opt-out has to be written before this means
+// anything. That it holds *without reaching Codex* is proved in
+// cli-run.test.mjs, where a fake Codex can record its own invocation.
+test("run refuses to start while Trio is off", () => {
+  const root = project();
+  trio(root, ["off"]);
+  const r = trio(root, ["run"]);
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /off/i);
+  assert.equal(existsSync(join(root, ".trio", "runs")), false);
+});
+
+test("consult honours the opt-out too", () => {
+  const root = project();
+  trio(root, ["off"]);
+  const r = trio(root, ["consult", "is this safe?"]);
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /off/i);
+});
+
+test("run rejects a flag that was given no value", () => {
+  for (const args of [
+    ["run", "--target"],
+    ["run", "--lenses"],
+    ["run", "--max"],
+  ]) {
+    const r = trio(project(), args);
+    assert.equal(r.status, 2, args.join(" "));
+    assert.match(r.stdout + r.stderr, /needs a value/);
+  }
+});
+
+// `--lenses ""` parsed to an empty list, which reads as "no selection given"
+// and quietly ran every lens — the opposite of what was asked for.
+test("run rejects an empty flag value rather than running everything", () => {
+  const r = trio(project(), ["run", "--lenses", ""]);
+  assert.equal(r.status, 2);
+  assert.match(r.stdout + r.stderr, /--lenses needs a value/);
+});
+
+// A value can be present and still name nothing. Rejecting whitespace alone
+// left `--lenses ,` running every lens.
+test("run rejects a lens list that names nothing", () => {
+  for (const arg of [",", ",,,", " , "]) {
+    const r = trio(project(), ["run", "--lenses", arg]);
+    assert.equal(r.status, 2, JSON.stringify(arg));
+    assert.match(r.stdout + r.stderr, /--lenses needs (a value|at least one)/);
+  }
+});
+
+test("off refuses to abandon a run that is still in flight", () => {
+  const root = project();
+  mkdirSync(join(root, ".trio", "runs", "r1"), { recursive: true });
+  writeFileSync(
+    join(root, ".trio", "active"),
+    JSON.stringify({ run: "r1", pass: 1, pid: 424242 }),
+  );
+  const r = trio(root, ["off"]);
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /run is in progress: r1/);
+  assert.match(r.stdout, /trio:cancel/);
+  // The lock has to survive, or cancel can no longer find the run.
+  assert.equal(existsSync(join(root, ".trio", "active")), true);
+});
+
+test("off still works once the run has a verdict", () => {
+  const root = project();
+  mkdirSync(join(root, ".trio", "runs", "r1"), { recursive: true });
+  writeFileSync(
+    join(root, ".trio", "runs", "r1", "verdict.json"),
+    JSON.stringify({ verdict: "clean", passes: 1, runId: "r1" }),
+  );
+  writeFileSync(
+    join(root, ".trio", "active"),
+    JSON.stringify({ run: "r1", pass: 1 }),
+  );
+  const r = trio(root, ["off"]);
+  assert.equal(r.status, 0);
+  assert.equal(JSON.parse(trio(root, ["config", "get"]).stdout).enabled, false);
+});
+
+// A dashed value is a badly chosen value, not a missing one — it has to reach
+// the check that can say why.
+test("a negative --max still gets the message that explains it", () => {
+  const r = trio(project(), ["run", "--max", "-1"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stdout + r.stderr, /positive whole number/);
+});
+
+// The unknown-flag walk steps over the token after a known flag, so without
+// this guard `--target --lenses auditor` audits a path named "--lenses".
+test("run does not let one flag be swallowed as another's value", () => {
+  const r = trio(project(), ["run", "--target", "--lenses", "auditor"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stdout + r.stderr, /--target needs a value/);
+});
+
+test("continue with no active run says so and exits non-zero", () => {
+  const r = trio(project(), ["continue"]);
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /no_active_run/);
+});
+
+test("cancel with no active run is a no-op, not an error", () => {
+  const r = trio(project(), ["cancel"]);
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /no active run/i);
+});
+
+test("cancel clears an active marker and records the cancelled verdict", () => {
+  const root = project();
+  const runId = "2026-01-01T00-00-00";
+  mkdirSync(join(root, ".trio", "runs", runId), { recursive: true });
+  writeFileSync(
+    join(root, ".trio", "active"),
+    JSON.stringify({ run: runId, pass: 1 }),
+  );
+  const r = trio(root, ["cancel"]);
+  assert.equal(r.status, 0);
+  assert.equal(existsSync(join(root, ".trio", "active")), false);
+  const verdict = JSON.parse(
+    readFileSync(join(root, ".trio", "runs", runId, "verdict.json"), "utf8"),
+  );
+  assert.equal(verdict.verdict, "cancelled");
+});
+
+// codexCommand() throws on win32 when it cannot resolve the Codex entry
+// point (it used to fall back to a shell). These two commands invoke Codex
+// outside the driver's protected path, so they have to survive that throw
+// with a message rather than a stack trace. Running with an empty PATH is the
+// portable way to make Codex unfindable.
+const noCodex = (root, args) =>
+  // process.execPath, not "node": the empty PATH has to hide Codex without
+  // also hiding the interpreter running the CLI.
+  spawnSync(process.execPath, [CLI, ...args], {
+    env: {
+      ...process.env,
+      PATH: "",
+      Path: "",
+      CLAUDE_PROJECT_DIR: root,
+      CODEX_HOME: join(root, "no-codex-home"),
+    },
+    encoding: "utf8",
+  });
+
+test("doctor reports a broken Codex install instead of crashing", () => {
+  const r = noCodex(project(), ["doctor"]);
+  assert.doesNotMatch(r.stderr, /at .*trio\.mjs/, r.stderr);
+  assert.doesNotMatch(r.stderr, /ERR_/, r.stderr);
+  assert.match(r.stdout, /TRIO/);
+});
+
+test("consult reports a broken Codex install instead of crashing", () => {
+  const r = noCodex(project(), ["consult", "is this sound?"]);
+  assert.doesNotMatch(r.stderr, /at .*consult\.mjs/, r.stderr);
+  assert.doesNotMatch(r.stderr, /ERR_/, r.stderr);
+  assert.notEqual(r.status, 0);
+});
+
+test("consult with no question prints usage and exits 2", () => {
+  const root = project();
+  const r = trio(root, ["consult"]);
+  // Usage is checked before the preflight probe, so this is deterministic
+  // whether or not a Codex install exists on the machine running the suite.
+  assert.equal(r.status, 2);
+  assert.match(
+    r.stdout,
+    /usage: trio consult \[--model NAME\] \[--effort LEVEL\] \[--\] <question>/,
+  );
+  assert.equal(existsSync(join(root, ".trio", "runs")), false);
+});
+
+// An unrecognised --model is a typo worth catching before Codex is spawned at
+// all, not just before the question is asked — a wrong slug still probes the
+// catalogue, but the run this refuses would otherwise burn a second exec.
+test("consult refuses an unresolvable --model before Codex answers anything", () => {
+  const root = project();
+  const touched = join(root, "codex-was-invoked.log");
+  const r = spawnSync(
+    "node",
+    [CLI, "consult", "--model", "nonexistent", "is", "this", "ok?"],
+    {
+      env: fakeEnv({
+        pathDir: fakePathDir,
+        codexHome: fakeHomeDir,
+        project: root,
+        extra: { FAKE_CODEX_TOUCH: touched },
+      }),
+      encoding: "utf8",
+    },
+  );
+  assert.equal(r.status, 2);
+  assert.match(r.stdout, /unknown model: nonexistent/);
+  // The probe itself execs `codex --version`, `login status` and
+  // `exec --help` — none of those is a real question reaching Codex, which
+  // is what this guard exists to prevent from happening on a typo.
+  const execs = existsSync(touched)
+    ? readFileSync(touched, "utf8")
+        .split("\n")
+        .filter((l) => l.startsWith("exec") && !l.includes("--help"))
+    : [];
+  assert.deepEqual(execs, []);
+});
+
+// A model named on the command line is resolved against the live catalogue
+// before it ever reaches Codex — this proves the resolved slug is what's
+// spawned, not the substring the operator typed.
+test("consult resolves a partial --model and passes the resolved slug to Codex", () => {
+  const root = project();
+  const touched = join(root, "codex-was-invoked.log");
+  const r = spawnSync(
+    "node",
+    [CLI, "consult", "--model", "fake", "is", "this", "ok?"],
+    {
+      env: fakeEnv({
+        pathDir: fakePathDir,
+        codexHome: fakeHomeDir,
+        project: root,
+        extra: { FAKE_CODEX_TOUCH: touched },
+      }),
+      encoding: "utf8",
+    },
+  );
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(JSON.parse(r.stdout).model, "fake-model");
+  const exec = readFileSync(touched, "utf8")
+    .split("\n")
+    .filter((l) => l.startsWith("exec") && !l.includes("--help"))
+    .at(-1);
+  assert.match(exec, /--model fake-model/);
+});
+
+// The override is named on the command line and nowhere else: it must not
+// leak into the file the next, un-overridden consult reads.
+test("an inline --model/--effort override never touches .trio/config.json", () => {
+  const root = project();
+  trio(root, ["on"]);
+  const configPath = join(root, ".trio", "config.json");
+  const before = readFileSync(configPath, "utf8");
+  const r = trio(root, [
+    "consult",
+    "--model",
+    "fake-model",
+    "--effort",
+    "low",
+    "is",
+    "this",
+    "ok?",
+  ]);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(readFileSync(configPath, "utf8"), before);
+});
+
+// A leading dash is still a mistyped flag, not part of the question — this
+// is the direction the narrower guard (below) must not have given up.
+test("consult still refuses a leading dash as a mistyped flag", () => {
+  const r = trio(project(), ["consult", "-h", "is", "this", "ok?"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stdout, /unrecognised flag: -h/);
+});
+
+// A short-dash token elsewhere in the question is a value, not a flag: only a
+// long flag anywhere, or any dash in the leading position, is refused. This
+// is the case that almost shipped as a refusal: "-1" is part of the
+// question, and the unknown-model error below is proof it got there.
+test("consult lets a short dash inside the question through to the model check", () => {
+  const r = trio(project(), [
+    "consult",
+    "--model",
+    "nope",
+    "-1",
+    "is",
+    "a",
+    "valid",
+    "index?",
+  ]);
+  assert.equal(r.status, 2);
+  assert.doesNotMatch(r.stdout, /unrecognised flag/);
+  assert.match(r.stdout, /unknown model: nope/);
+});
+
+// The defect a solo audit found: `--model` mid-question swallowed the next
+// word as a model name and dropped it from the question, silently. A bare
+// `--` ends flag parsing, so everything after it — dashes and all — reaches
+// Codex exactly as typed, with no override applied.
+test("a question after -- keeps every word, --model-looking ones included", () => {
+  const root = project();
+  const briefLog = join(root, "brief.log");
+  const r = spawnSync(
+    "node",
+    [
+      CLI,
+      "consult",
+      "--",
+      "explain",
+      "what",
+      "--model",
+      "does",
+      "in",
+      "trio",
+    ],
+    {
+      env: fakeEnv({
+        pathDir: fakePathDir,
+        codexHome: fakeHomeDir,
+        project: root,
+        extra: { FAKE_CODEX_BRIEF_LOG: briefLog },
+      }),
+      encoding: "utf8",
+    },
+  );
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const brief = readFileSync(briefLog, "utf8");
+  assert.match(brief, /explain what --model does in trio/);
+  // No override was named, so the pair Codex ran on is whatever is configured
+  // — never a model called "does".
+  assert.notEqual(JSON.parse(r.stdout).model, "does");
+});
+
+// `--model astra --model nope` used to take the first silently. It is now a
+// refusal, caught before Codex is even probed — not just before the question
+// is asked.
+test("a repeated flag is refused before Codex is spawned at all", () => {
+  const root = project();
+  const touched = join(root, "codex-was-invoked.log");
+  const r = spawnSync(
+    "node",
+    [CLI, "consult", "--model", "astra", "--model", "nope", "is", "this", "ok?"],
+    {
+      env: fakeEnv({
+        pathDir: fakePathDir,
+        codexHome: fakeHomeDir,
+        project: root,
+        extra: { FAKE_CODEX_TOUCH: touched },
+      }),
+      encoding: "utf8",
+    },
+  );
+  assert.equal(r.status, 2);
+  assert.match(r.stdout, /--model given twice/);
+  assert.equal(existsSync(touched), false, "Codex must not be invoked at all");
+});
+
+// A fresh cached probe, so `models` reads this catalogue instead of the fake
+// Codex's — the cached path never spawns anything.
+const withCaps = (root) => {
+  mkdirSync(join(root, ".trio"), { recursive: true });
+  writeFileSync(
+    join(root, ".trio", "capabilities.json"),
+    JSON.stringify({
+      cliVersion: "1.0.0",
+      cacheClientVersion: "1.0.0",
+      defaultModel: "m1",
+      models: [{ slug: "m1", displayName: "M1", defaultEffort: "medium", efforts: ["medium", "high"] }],
+      flags: [],
+      authMode: "chatgpt",
+      probedAt: new Date().toISOString(),
+      preflight: { state: "ready", message: "", fix: "" },
+    }),
+  );
+};
+
+test("models --apply --json writes the proposals and answers in JSON", () => {
+  const root = project();
+  withCaps(root);
+  const r = trio(root, ["models", "--apply", "--json"]);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const out = JSON.parse(r.stdout);
+  assert.deepEqual(
+    out.applied.map((p) => [p.name, p.to]),
+    ["auditor", "security", "tester", "simplifier", "consistency", "consult"].map((n) => [n, "m1"]),
+  );
+  const cfg = JSON.parse(readFileSync(join(root, ".trio", "config.json"), "utf8"));
+  assert.equal(cfg.codex.consult.model, "m1");
+  const again = JSON.parse(trio(root, ["models", "--apply", "--json"]).stdout);
+  assert.deepEqual(again.applied, []);
+});
+
+test("models refuses an unknown argument before touching the config", () => {
+  const root = project();
+  withCaps(root);
+  const r = trio(root, ["models", "--apply", "--typo"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stdout, /unknown argument: --typo/);
+  assert.equal(existsSync(join(root, ".trio", "config.json")), false);
+});
+
+test("render points at the archive when the run was archived", () => {
+  const root = project();
+  const dir = join(root, ".trio", "archive", "2026-W01", "2026-01-01T00-00-00");
+  mkdirSync(dir, { recursive: true });
+  const r = trio(root, ["render", "2026-01-01T00-00-00"]);
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /No such run: 2026-01-01T00-00-00\. It was archived to .*2026-W01/);
+});
